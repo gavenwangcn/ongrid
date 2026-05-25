@@ -152,6 +152,9 @@ type Request struct {
 	Provider         string
 	Model            string
 	WebSearchEnabled bool
+	// Locale is the UI language ("en-US"/"zh-CN") the reply should use;
+	// threaded into graph.Input so the assembler adds a language directive.
+	Locale           string
 	// Emit is the streaming sink. nil = no streaming (blocking call).
 	Emit Emit
 }
@@ -596,6 +599,7 @@ func (rt *Runtime) Handle(ctx context.Context, req *Request) (*Reply, error) {
 		MentionsRendered: mentionsRendered,
 		AgentReminder:    agentReminder,
 		DynamicHints:     dynamicHints,
+		Locale:           req.Locale,
 	}, compose.WithCallbacks(handlers...))
 	if invokeErr != nil {
 		// Soft-fail graph-level errors: write an apology assistant

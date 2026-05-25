@@ -174,6 +174,9 @@ type RunOptions struct {
 	Model            string
 	Mentions         []Mention
 	WebSearchEnabled bool
+	// Locale is the UI language the reply should be in ("en-US"/"zh-CN").
+	// Threaded to the graph kernel's prompt assembler. Empty = no directive.
+	Locale string
 }
 
 // ToolWebSearch is the registered name of the manager-scoped Tavily /

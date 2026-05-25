@@ -203,8 +203,18 @@ func assembleMessages(in *Input) ([]*schema.Message, error) {
 		return nil, errors.New("graph: assembler: nil input")
 	}
 	out := make([]*schema.Message, 0, len(in.History)+3)
-	if in.SystemPrompt != "" {
-		out = append(out, schema.SystemMessage(in.SystemPrompt))
+	// Append the response-language directive to the system prompt (one
+	// system message — strongest signal). The personas are Chinese, so
+	// without this the model answers in Chinese even in English mode.
+	sp := in.SystemPrompt
+	if dir := languageDirective(in.Locale); dir != "" {
+		if sp != "" {
+			sp += "\n\n"
+		}
+		sp += dir
+	}
+	if sp != "" {
+		out = append(out, schema.SystemMessage(sp))
 	}
 	out = append(out, in.History...)
 
@@ -243,6 +253,20 @@ func assembleMessages(in *Input) ([]*schema.Message, error) {
 // hardcoded baseline guarantees at least three bullets, so this only
 // happens if a future caller drops the baseline; we keep the empty
 // branch so the assembler can skip the inline prepend cleanly).
+// languageDirective maps a UI locale to an explicit "answer in this
+// language" instruction. Empty locale → "" (no directive, back-compat).
+// It covers tool-call narration explicitly because that's what drifts
+// back to Chinese first when the persona is Chinese.
+func languageDirective(locale string) string {
+	switch locale {
+	case "en-US":
+		return "Respond in English: all of your prose, explanations, and the narration around every tool call must be in English — even when tool outputs, logs, or knowledge-base snippets are in another language."
+	case "zh-CN":
+		return "用中文回复：你的所有叙述、解释，以及每次工具调用前后的说明都必须用中文——即便工具输出、日志或知识库片段是其他语言。"
+	}
+	return ""
+}
+
 func buildSystemReminder(in *Input) string {
 	if in == nil {
 		return ""
@@ -251,6 +275,11 @@ func buildSystemReminder(in *Input) string {
 		"- 同一工具失败两次后请换思路，不要重复调用",
 		"- device_id / alert_id 必须是数字 ID（@-mention 已经为你解析）",
 		"- 工具结果是事实，不要在没有数据时编造",
+	}
+	// Re-assert the response language every turn (system prompt scrolls
+	// out of attention in long sessions). Prepended so it leads the block.
+	if dir := languageDirective(in.Locale); dir != "" {
+		lines = append([]string{"- " + dir}, lines...)
 	}
 	if !in.WebSearchEnabled {
 		lines = append(lines, "- web_search 已被关闭，本轮不要调用")

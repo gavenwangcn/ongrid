@@ -329,6 +329,7 @@ func (s *Service) runGraph(ctx context.Context, sess *model.Session, content str
 		Provider:         opts.Provider,
 		Model:            opts.Model,
 		WebSearchEnabled: opts.WebSearchEnabled,
+		Locale:           opts.Locale,
 		Emit:             graphEmit,
 	}
 	reply, err := s.runtime.Handle(ctx, req)

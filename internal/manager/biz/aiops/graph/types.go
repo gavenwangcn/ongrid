@@ -97,6 +97,14 @@ type Input struct {
 	// source of truth and never inspects history to derive its own
 	// hints.
 	DynamicHints []string
+
+	// Locale is the UI language the answer should be written in
+	// ("en-US" / "zh-CN"). The personas are Chinese, so without this the
+	// model defaults to Chinese even when the SPA is in English mode. The
+	// assembler turns it into an explicit "respond in <language>"
+	// directive (system prompt + per-turn reminder). Empty = no directive
+	// (back-compat; e.g. the IM bridge, which doesn't carry a UI locale).
+	Locale string
 }
 
 // Output is the terminal result of a graph run. Mirrors the parts of

@@ -19,7 +19,7 @@ import { useI18n } from '@/i18n/locale';
 type LocationState = { initialPrompt?: string } | null;
 
 export default function ChatThreadPage() {
-  const { tr } = useI18n();
+  const { tr, locale } = useI18n();
   const { isViewer } = usePermissions();
   const { sessionId = '' } = useParams<{ sessionId: string }>();
   const location = useLocation();
@@ -262,6 +262,7 @@ export default function ChatThreadPage() {
           provider: selectedModel?.provider,
           model: selectedModel?.model,
           webSearchEnabled,
+          locale,
         },
       );
     } catch (err) {

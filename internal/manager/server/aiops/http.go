@@ -189,6 +189,9 @@ type postMessageReq struct {
 	Model            string         `json:"model,omitempty"`
 	Mentions         []mentionInput `json:"mentions,omitempty"`
 	WebSearchEnabled bool           `json:"web_search_enabled,omitempty"`
+	// Locale is the SPA's UI language ("en-US"/"zh-CN") so the agent
+	// answers in that language. Optional (IM/other callers omit it).
+	Locale string `json:"locale,omitempty"`
 }
 
 // mentionInput is the wire shape the SPA sends for each @-mention chip.
@@ -348,6 +351,7 @@ func (h *Handler) postMessage(w http.ResponseWriter, r *http.Request) {
 		Model:            req.Model,
 		Mentions:         toAgentMentions(req.Mentions),
 		WebSearchEnabled: req.WebSearchEnabled,
+		Locale:           req.Locale,
 	}
 	reply, err := h.svc.PostMessageWithOpts(r.Context(), caller, id, req.Content, opts)
 	if err != nil {
@@ -394,6 +398,7 @@ func (h *Handler) postMessageStream(w http.ResponseWriter, r *http.Request) {
 		Model:            req.Model,
 		Mentions:         toAgentMentions(req.Mentions),
 		WebSearchEnabled: req.WebSearchEnabled,
+		Locale:           req.Locale,
 	}
 
 	flusher, ok := w.(http.Flusher)

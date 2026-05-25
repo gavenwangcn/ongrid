@@ -302,6 +302,38 @@ func TestAssembleMessages_AgentReminderAndDynamicHints(t *testing.T) {
 	}
 }
 
+func TestAssembleMessages_LocaleDirective(t *testing.T) {
+	t.Parallel()
+	// en-US: both the system message and the per-turn reminder must carry
+	// an explicit English directive (personas are Chinese).
+	en, err := assembleMessages(&Input{SystemPrompt: "agent rules", UserText: "status?", Locale: "en-US"})
+	if err != nil {
+		t.Fatalf("assembleMessages: %v", err)
+	}
+	if !strings.Contains(en[0].Content, "agent rules") || !strings.Contains(en[0].Content, "Respond in English") {
+		t.Errorf("en system message should append the English directive: %q", en[0].Content)
+	}
+	if !strings.Contains(en[1].Content, "Respond in English") {
+		t.Errorf("en reminder should carry the English directive: %q", en[1].Content)
+	}
+
+	// zh-CN: Chinese directive instead.
+	zh, _ := assembleMessages(&Input{SystemPrompt: "agent rules", UserText: "状态？", Locale: "zh-CN"})
+	if !strings.Contains(zh[0].Content, "用中文回复") {
+		t.Errorf("zh system message should append the Chinese directive: %q", zh[0].Content)
+	}
+
+	// empty locale: no directive at all (back-compat for non-SPA callers
+	// like the IM bridge — system prompt is left exactly as-is).
+	none, _ := assembleMessages(&Input{SystemPrompt: "agent rules", UserText: "x"})
+	if none[0].Content != "agent rules" {
+		t.Errorf("empty locale must not alter the system prompt: %q", none[0].Content)
+	}
+	if strings.Contains(none[1].Content, "Respond in English") || strings.Contains(none[1].Content, "用中文回复") {
+		t.Errorf("empty locale reminder must carry no language directive: %q", none[1].Content)
+	}
+}
+
 func TestBuildSystemReminder_EmptyHintsTrimmed(t *testing.T) {
 	t.Parallel()
 	got := buildSystemReminder(&Input{

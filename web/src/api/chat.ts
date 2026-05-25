@@ -128,6 +128,9 @@ export type SendOptions = {
   // on internal data so a chat about CPU usage doesn't gratuitously
   // burn Tavily quota.
   webSearchEnabled?: boolean;
+  // UI language ('en-US' | 'zh-CN') so the agent answers in it. The
+  // personas are Chinese, so without this English-mode users get Chinese.
+  locale?: string;
 };
 
 export function postMessage(sessionId: string | number, content: string, opts: SendOptions = {}) {
@@ -136,6 +139,7 @@ export function postMessage(sessionId: string | number, content: string, opts: S
   if (opts.model) body.model = opts.model;
   if (opts.mentions && opts.mentions.length > 0) body.mentions = opts.mentions;
   if (opts.webSearchEnabled) body.web_search_enabled = true;
+  if (opts.locale) body.locale = opts.locale;
   return request<PostMessageResponse>(
     'POST',
     `/chat/sessions/${encodeURIComponent(String(sessionId))}/messages`,
@@ -239,6 +243,7 @@ export async function streamMessage(
   if (opts.model) body.model = opts.model;
   if (opts.mentions && opts.mentions.length > 0) body.mentions = opts.mentions;
   if (opts.webSearchEnabled) body.web_search_enabled = true;
+  if (opts.locale) body.locale = opts.locale;
 
   const res = await fetch(url, {
     method: 'POST',

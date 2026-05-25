@@ -25,7 +25,7 @@ type Msg = { id: string; role: 'user' | 'assistant'; content: string; pending?: 
 // model picker), a "在 /chat 中打开" link jumps them to ChatThread for
 // the same session.
 export function AgentSidePanel({ open, onClose }: Props) {
-  const { tr } = useI18n();
+  const { tr, locale } = useI18n();
   const navigate = useNavigate();
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -104,7 +104,7 @@ export function AgentSidePanel({ open, onClose }: Props) {
         invalidateChatSessions();
       }
 
-      const reply = await postMessage(sid, text);
+      const reply = await postMessage(sid, text, { locale });
       const content = reply.assistant_message?.content ?? '';
       setMessages((prev) =>
         prev.map((m) => (m.id === asstId ? { ...m, content, pending: false } : m)),
