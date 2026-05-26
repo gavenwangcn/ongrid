@@ -1,28 +1,14 @@
-<h1 align="center"><img src="web/public/ongrid-logo.svg" alt="" width="44" style="vertical-align: middle;" /> ongrid</h1>
+# <img src="web/public/ongrid-logo.svg" alt="" width="44" style="vertical-align: middle;" /> ongrid
 
-<p align="center">
-  <a href="./README.md">English</a> ·
-  <a href="./README_ZH.md">简体中文</a> ·
-  <a href="./README_JA.md">日本語</a> ·
-  <a href="./README_KO.md">한국어</a> ·
-  <a href="./README_ES.md">Español</a> ·
-  <a href="./README_FR.md">Français</a> ·
-  <a href="./README_DE.md">Deutsch</a> ·
-  <a href="./README_PT.md">Português</a> ·
-  <b>Русский</b>
-</p>
+[English](./README.md) | [简体中文](./README_ZH.md) | [日本語](./README_JA.md) | [한국어](./README_KO.md) | [Español](./README_ES.md) | [Français](./README_FR.md) | [Deutsch](./README_DE.md) | [Português](./README_PT.md) | Русский
 
-<p align="center">
-  <a href="https://goreportcard.com/report/github.com/ongridio/ongrid"><img src="https://goreportcard.com/badge/github.com/ongridio/ongrid" alt="Go Report Card"></a>
-  <a href="https://opensource.org/licenses/Apache-2.0"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License"></a>
-  <img src="https://img.shields.io/badge/Tech-Go%20%7C%20TypeScript%20%7C%20React-blue" alt="Tech">
-</p>
+[![Go Report Card](https://goreportcard.com/badge/github.com/ongridio/ongrid)](https://goreportcard.com/report/github.com/ongridio/ongrid)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Tech](https://img.shields.io/badge/Tech-Go%20%7C%20TypeScript%20%7C%20React-blue)](#технологии)
 
 > **Установите лёгкий агент на каждый хост и устраняйте неполадки на естественном языке —— оповещения, логи, метрики, трейсы, топология и исходный код анализируются вместе облачным AIOps-агентом.**
 
-<p align="center">
-  <a href="#обзор">Обзор</a> • <a href="#быстрый-старт">Быстрый старт</a> • <a href="#архитектура">Архитектура</a> • <a href="#технологии">Технологии</a> • <a href="#участие">Участие</a>
-</p>
+[Обзор](#обзор) • [Быстрый старт](#быстрый-старт) • [Архитектура](#архитектура) • [Технологии](#технологии) • [Участие](#участие)
 
 ---
 

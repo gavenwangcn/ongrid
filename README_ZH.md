@@ -1,28 +1,14 @@
-<h1 align="center"><img src="web/public/ongrid-logo.svg" alt="" width="44" style="vertical-align: middle;" /> ongrid</h1>
+# <img src="web/public/ongrid-logo.svg" alt="" width="44" style="vertical-align: middle;" /> ongrid
 
-<p align="center">
-  <a href="./README.md">English</a> ·
-  <b>简体中文</b> ·
-  <a href="./README_JA.md">日本語</a> ·
-  <a href="./README_KO.md">한국어</a> ·
-  <a href="./README_ES.md">Español</a> ·
-  <a href="./README_FR.md">Français</a> ·
-  <a href="./README_DE.md">Deutsch</a> ·
-  <a href="./README_PT.md">Português</a> ·
-  <a href="./README_RU.md">Русский</a>
-</p>
+[English](./README.md) | 简体中文 | [日本語](./README_JA.md) | [한국어](./README_KO.md) | [Español](./README_ES.md) | [Français](./README_FR.md) | [Deutsch](./README_DE.md) | [Português](./README_PT.md) | [Русский](./README_RU.md)
 
-<p align="center">
-  <a href="https://goreportcard.com/report/github.com/ongridio/ongrid"><img src="https://goreportcard.com/badge/github.com/ongridio/ongrid" alt="Go Report Card"></a>
-  <a href="https://opensource.org/licenses/Apache-2.0"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License"></a>
-  <img src="https://img.shields.io/badge/Tech-Go%20%7C%20TypeScript%20%7C%20React-blue" alt="Tech">
-</p>
+[![Go Report Card](https://goreportcard.com/badge/github.com/ongridio/ongrid)](https://goreportcard.com/report/github.com/ongridio/ongrid)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Tech](https://img.shields.io/badge/Tech-Go%20%7C%20TypeScript%20%7C%20React-blue)](#技术栈)
 
 > **给每台主机装上一个轻量 agent，然后用自然语言排障 —— 告警、日志、指标、链路、拓扑、源码，交给云端的 AIOps Agent 一起分析。**
 
-<p align="center">
-  <a href="#项目简介">项目简介</a> • <a href="#快速开始">快速开始</a> • <a href="#架构">架构</a> • <a href="#技术栈">技术栈</a> • <a href="#贡献">贡献</a>
-</p>
+[项目简介](#项目简介) • [快速开始](#快速开始) • [架构](#架构) • [技术栈](#技术栈) • [贡献](#贡献)
 
 ---
 

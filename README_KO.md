@@ -1,28 +1,14 @@
-<h1 align="center"><img src="web/public/ongrid-logo.svg" alt="" width="44" style="vertical-align: middle;" /> ongrid</h1>
+# <img src="web/public/ongrid-logo.svg" alt="" width="44" style="vertical-align: middle;" /> ongrid
 
-<p align="center">
-  <a href="./README.md">English</a> ·
-  <a href="./README_ZH.md">简体中文</a> ·
-  <a href="./README_JA.md">日本語</a> ·
-  <b>한국어</b> ·
-  <a href="./README_ES.md">Español</a> ·
-  <a href="./README_FR.md">Français</a> ·
-  <a href="./README_DE.md">Deutsch</a> ·
-  <a href="./README_PT.md">Português</a> ·
-  <a href="./README_RU.md">Русский</a>
-</p>
+[English](./README.md) | [简体中文](./README_ZH.md) | [日本語](./README_JA.md) | 한국어 | [Español](./README_ES.md) | [Français](./README_FR.md) | [Deutsch](./README_DE.md) | [Português](./README_PT.md) | [Русский](./README_RU.md)
 
-<p align="center">
-  <a href="https://goreportcard.com/report/github.com/ongridio/ongrid"><img src="https://goreportcard.com/badge/github.com/ongridio/ongrid" alt="Go Report Card"></a>
-  <a href="https://opensource.org/licenses/Apache-2.0"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License"></a>
-  <img src="https://img.shields.io/badge/Tech-Go%20%7C%20TypeScript%20%7C%20React-blue" alt="Tech">
-</p>
+[![Go Report Card](https://goreportcard.com/badge/github.com/ongridio/ongrid)](https://goreportcard.com/report/github.com/ongridio/ongrid)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Tech](https://img.shields.io/badge/Tech-Go%20%7C%20TypeScript%20%7C%20React-blue)](#기술-스택)
 
 > **모든 호스트에 경량 에이전트를 설치하고 자연어로 트러블슈팅 —— 알림·로그·메트릭·트레이스·토폴로지·소스 코드를 클라우드 AIOps 에이전트가 함께 분석합니다.**
 
-<p align="center">
-  <a href="#개요">개요</a> • <a href="#빠른-시작">빠른 시작</a> • <a href="#아키텍처">아키텍처</a> • <a href="#기술-스택">기술 스택</a> • <a href="#기여">기여</a>
-</p>
+[개요](#개요) • [빠른 시작](#빠른-시작) • [아키텍처](#아키텍처) • [기술 스택](#기술-스택) • [기여](#기여)
 
 ---
 
