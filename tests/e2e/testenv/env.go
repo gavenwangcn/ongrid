@@ -152,6 +152,11 @@ func Start(t *testing.T, opts ...Option) *Env {
 		"ONGRID_ZHIPU_BASE_URL":    env.llm.URL() + "/v1",
 		"ONGRID_ZHIPU_MODEL":       "glm-fake",
 		"ONGRID_ALERT_EVAL_INTERVAL": "30s",
+		// Graph kernel is the live runtime (memory: chat quality
+		// 2026-05-25). The legacy kernel doesn't build chatruntime, so
+		// investigator / agent paths look "not wired". Default the
+		// harness to the same kernel production runs on.
+		"ONGRID_AGENT_KERNEL": "graph",
 		// No frontier broker in the harness — disable the geminio dial
 		// so manager comes up without waiting on a non-existent broker.
 		// Edge-tunnel-only features (webssh, edge reverse calls) error
@@ -208,6 +213,17 @@ func (e *Env) Stop() {
 }
 
 // ─── fakes accessors ───────────────────────────────────────────────────
+
+// ManagerLogs returns the captured stdout+stderr of the manager process
+// so a test that hits an unexpected failure can dump them inline (use
+// `t.Logf("manager logs:\n%s", env.ManagerLogs())` from within the test).
+// Safe to call after startup; returns "" if no buffer was set up.
+func (e *Env) ManagerLogs() string {
+	if e.logBuf == nil {
+		return ""
+	}
+	return e.logBuf.String()
+}
 
 func (e *Env) FakeLLM() *FakeLLM           { return e.llm }
 func (e *Env) FakeSlack() *FakeSlack       { return e.slack }

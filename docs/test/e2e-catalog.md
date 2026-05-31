@@ -37,7 +37,7 @@
 |---|---|---|---|---|---|
 | B1 | 登录 → JWT → 受保护接口 | `POST /v1/auth/login` | 返回 access+refresh, Bearer 调 `/v1/self` 200 | **P0** | ✅ `tests/e2e/auth_login_test.go` |
 | B2 | JWT 过期 + refresh | access 过期后 `POST /v1/auth/refresh` | 新 access 可用 | P1 | ✅ `tests/e2e/auth_refresh_test.go` |
-| B3 | 三角色 RBAC | admin/user/viewer 各登 | admin 通 / user 白名单 / viewer 403 | **P0** | |
+| B3 | 三角色 RBAC | admin/user/viewer 各登 | admin 通 / user 白名单 / viewer 403 | **P0** | ✅ `tests/e2e/auth_rbac_test.go` |
 | B4 | 用户 CRUD + 改密 + 改角色 | `/v1/users` 系列 | DB 行对得上、casbin 权限同步 | P1 | |
 | B5 | 组织 + 成员 CRUD | `/v1/orgs` 系列 | 增删成员 | P2 | |
 
@@ -85,7 +85,7 @@
 
 | # | 用例 | 触发 | 关键断言点 | 优 | 实现 |
 |---|---|---|---|---|---|
-| F1 | 自动 RCA on incident fire | E1 之后 ~10s | `investigation_reports` pending → running → ready | **P0** | |
+| F1 | 自动 RCA on incident fire | E1 之后 ~10s | `investigation_reports` pending → running → ready | **P0** | ✅ `tests/e2e/rca_pipeline_test.go` |
 | F2 | RCA 拿出 root_cause + tool_calls | F1 终态 | root_cause 非空、tool_call_count > 0、evidence | **P0** | |
 | F3 | 手动 ForceEnqueue | `POST /v1/alerts/incidents/{id}/investigation` Accept-Language: en | 旧 report 删、新 report 创建、root_cause 英文 | **P0** | |
 | F4 | Accept-Language locale 跟随 | 同上分 en/zh | 报告 root_cause 跟 Accept-Language 走 | **P0** | |
@@ -102,7 +102,7 @@
 | G1 | Channel CRUD + reveal | `/v1/notification-channels` + reveal | DB 行对、secret 加密 at-rest | **P0** | |
 | G2 | 测试通道按钮 | `POST /v1/notification-channels/{id}/test` | 真发一条到目标 | **P0** | |
 | G3 | Slack attachments 富格式 | G2 测 slack | text=`[CRITICAL]…`、attachment color/fields/footer 全对 | **P0** | ✅ `tests/e2e/notify_slack_test.go` |
-| G4 | Feishu/DingTalk 签名 | G2 测 feishu/dingtalk | timestamp+sign 字段在 payload/URL | P1 | |
+| G4 | Feishu/DingTalk 签名 | G2 测 feishu/dingtalk | timestamp+sign 字段在 payload/URL | P1 | ✅ `tests/e2e/notify_signed_test.go` |
 | G5 | Telegram chatID 在 secret | G2 测 telegram | sendMessage 带 chat_id | P1 | |
 | G6 | WeCom 凭证在 URL | G2 测 wecom | URL 含 key,不发 secret 头 | P2 | |
 | G7 | delivery retry worker | mock channel 返 500 | 5 次指数退避后 status=failed | P1 | |

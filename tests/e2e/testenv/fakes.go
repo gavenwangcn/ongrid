@@ -147,8 +147,14 @@ type FakeSlack struct {
 
 type SlackCapture struct {
 	Path    string
-	Headers http.Header
-	Body    map[string]any // decoded JSON body
+	// RawQuery is the URL-encoded query string of the request, captured
+	// without modification so signing-via-URL providers (DingTalk:
+	// ?timestamp=…&sign=…) can be asserted on. Empty for Slack/Feishu
+	// proper (those sign in the JSON body), which is the existing G3
+	// behaviour — additive only.
+	RawQuery string
+	Headers  http.Header
+	Body     map[string]any // decoded JSON body
 }
 
 func NewFakeSlack() *FakeSlack {
@@ -184,9 +190,10 @@ func (f *FakeSlack) handle(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	f.mu.Lock()
 	f.captures = append(f.captures, SlackCapture{
-		Path:    r.URL.Path,
-		Headers: cloneHeader(r.Header),
-		Body:    body,
+		Path:     r.URL.Path,
+		RawQuery: r.URL.RawQuery,
+		Headers:  cloneHeader(r.Header),
+		Body:     body,
 	})
 	f.mu.Unlock()
 	w.WriteHeader(http.StatusOK)
