@@ -6,89 +6,56 @@
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/ongridio/ongrid)](https://goreportcard.com/report/github.com/ongridio/ongrid)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Tech](https://img.shields.io/badge/Tech-Go%20%7C%20TypeScript%20%7C%20React-blue)](#stack-tecnológica)
+[![Tech](https://img.shields.io/badge/Tech-Go%20%7C%20TypeScript%20%7C%20React-blue)](#)
 
 [English](./README.md) | [简体中文](./README_ZH.md) | [日本語](./README_JA.md) | [한국어](./README_KO.md) | [Español](./README_ES.md) | [Français](./README_FR.md) | [Deutsch](./README_DE.md) | Português | [Русский](./README_RU.md)
 
-[Visão geral](#visão-geral) • [Início rápido](#início-rápido) • [Arquitetura](#arquitetura) • [Stack tecnológica](#stack-tecnológica) • [Contribuir](#contribuir)
+[Instalação](#instalação) • [Stack](#compatível-com-seu-stack) • [Licença](#licença)
 
 ---
 
-## Visão geral
+<p align="center">
+  <video src="docs/assets/demo.mp4" autoplay loop muted playsinline width="100%"></video>
+</p>
 
-Ongrid é um agente de IA para operações, open source e auto-hospedável. Um agente leve `ongrid-edge` em cada host envia métricas, logs e traces para a nuvem por um único túnel **de saída** multiplexado —— sem portas de entrada no host. A nuvem é um agente de operações orientado por LLM: você pergunta em linguagem natural e ele mesmo executa PromQL / LogQL / TraceQL, percorre a topologia de serviços, busca na base de conhecimento, lê o código-fonte e chama ferramentas de host somente leitura para dar uma resposta fundamentada.
+## Instalação
 
-O que resolve:
-
-- **Barreira alta de diagnóstico** —— descreva o sintoma ("por que a carga está disparando?", "quem está perdendo pacotes?"); o agente decide qual métrica, quais logs e qual consulta olhar.
-- **Alertas desconectados da causa raiz** —— em um alerta, ele percorre a topologia para o raio de impacto, correlaciona logs/traces e localiza a **posição no código-fonte** por trás do "porquê".
-- **Sinais dispersos** —— métricas (Prometheus), logs (Loki), traces (Tempo), base de conhecimento (busca vetorial) e repositórios de código são unificados e analisados em uma única sessão.
-- **Sem expor a intranet** —— o edge disca para fora; zero portas de entrada nos hosts; o plano de dados de telemetria é separado do plano de controle.
-- **Auto-hospedável** —— um único `docker compose` sobe a stack completa; aponte o modelo para qualquer endpoint compatível com OpenAI.
-
-## Início rápido
-
-**Instalar a partir de uma release** —— repo privado, baixe com `gh`:
+Baixe o tarball da última release e execute o instalador (Ubuntu 22.04+, Debian 12+, RHEL/Rocky 9):
 
 ```bash
-gh release download v0.7.159 --repo ongridio/ongrid -p 'ongrid-v0.7.159-linux-amd64.tar.xz*'
-tar xf ongrid-v0.7.159-linux-amd64.tar.xz && cd ongrid-v0.7.159-linux-amd64
+gh release download v0.7.167 --repo ongridio/ongrid -p 'ongrid-v0.7.167-linux-amd64.tar.xz*'
+tar xf ongrid-v0.7.167-linux-amd64.tar.xz && cd ongrid-v0.7.167-linux-amd64
 sudo ./install.sh
 ```
 
-**Ou executar a partir do código** (desenvolvimento local):
+### Ou executar a partir do código
+
+Desenvolvimento local: configure a conta admin e uma API key de modelo, depois suba todo o stack.
 
 ```bash
-# 1. configurar: defina a conta de admin + uma API key de modelo
 cp deploy/.env.example deploy/.env
-
-# 2. subir a stack completa (mysql / ongrid / frontier / nginx / prometheus / grafana)
-make compose-up      # make compose-down para parar
+make compose-up    # make compose-down to stop
 ```
 
-Abra `https://<host>` e entre com a conta de admin semeada a partir de `.env`. Para um pacote de release de produção (TLS, systemd, upgrade/desinstalação) veja [`deploy/install/`](deploy/install/README.md).
+## Compatível com seu stack
 
-**Instalar o edge em um host** —— crie o edge no console, copie o comando de instalação de uma linha para a plataforma de destino e execute-o. O edge disca para fora e não escuta em nenhuma porta de entrada.
+Drop-in para os stacks de observabilidade, canais e modelos que sua equipe já usa.
 
-> Compilar do código: `make build` (a nuvem usa `CGO_ENABLED=1` por causa do embedder ONNX local) e `cd web && npm ci && npm run build`. Rode `make help` para todos os targets.
-
-## Arquitetura
-
-```
-  hosts ─┐
-         │  ongrid-edge (one per host)
-         │  · collects metrics / logs / traces
-         │  · exposes read-only host inspection tools
-         ▼
-   ┌──────── outbound multiplexed tunnel ────────┐
-   ▼                                              ▼
-ongrid (cloud)
-  ├─ manager     edge mgmt + telemetry ingest + AIOps agent
-  │   └─ coordinator agent ─dispatch─► specialist sub-agents + tools
-  │        PromQL · LogQL · TraceQL · topology · RAG · source reading · host tools
-  ├─ telemetry   Prometheus · Loki · Tempo · Grafana
-  ├─ knowledge   vector search (built-in playbooks + org docs) · offline ONNX embedder
-  └─ web UI      chat + dashboards
-```
-
-- **edge (`ongrid-edge`)** —— um por host, binário único em Go puro; coleta telemetria e expõe ferramentas de inspeção somente leitura pelo túnel. Apenas saída, zero portas de entrada.
-- **cloud (`ongrid`)** —— manager + coordenador LLM que distribui para subagentes e ferramentas especializados (PromQL / LogQL / TraceQL / topologia / busca de conhecimento / leitura de código) e sintetiza a resposta.
-- **web** —— SPA em React: diagnóstico conversacional + dashboards.
-
-## Stack tecnológica
-
-| Camada | Escolha |
-|---|---|
-| Nuvem | Go · framework de agentes [eino](https://github.com/cloudwego/eino) · GORM · túnel [geminio](https://github.com/singchia/geminio) · embedder ONNX local |
-| Edge | Go —— binário único em Go puro, multiplataforma (Linux / macOS / Windows, x86_64 & ARM64) |
-| Frontend | TypeScript · React (English / 简体中文) |
-| Telemetria / armazenamento | Prometheus · Loki · Tempo · Grafana · qdrant · MySQL / SQLite |
-| Modelo | qualquer endpoint compatível com OpenAI —— OpenAI · Anthropic · Gemini · DeepSeek · Zhipu · Kimi · Ollama / vLLM / OpenRouter · … |
-
-## Contribuir
-
-Issues e PRs são bem-vindos. Antes de enviar, garanta que `make build`, `make test` e `make arch-lint` (que valida os limites de contexto delimitado) passem.
+<table>
+<tr>
+  <td><b>Observabilidade</b></td>
+  <td><img src="https://api.iconify.design/logos:prometheus.svg" alt="Prometheus" title="Prometheus" height="28" />&nbsp;&nbsp;<img src="https://api.iconify.design/logos:grafana.svg" alt="Grafana" title="Grafana" height="28" />&nbsp;&nbsp;<img src="docs/assets/integrations/loki.svg" alt="Loki" title="Loki" height="28" />&nbsp;&nbsp;<img src="docs/assets/integrations/tempo.svg" alt="Tempo" title="Tempo" height="28" />&nbsp;&nbsp;<img src="docs/assets/integrations/opentelemetry.svg" alt="OpenTelemetry" title="OpenTelemetry" height="28" />&nbsp;&nbsp;<img src="https://api.iconify.design/logos:qdrant-icon.svg" alt="Qdrant" title="Qdrant" height="28" /></td>
+</tr>
+<tr>
+  <td><b>Canais</b></td>
+  <td><img src="https://api.iconify.design/logos:slack-icon.svg" alt="Slack" title="Slack" height="28" />&nbsp;&nbsp;<img src="https://api.iconify.design/logos:telegram.svg" alt="Telegram" title="Telegram" height="28" />&nbsp;&nbsp;<img src="docs/assets/integrations/larksuite.svg" alt="Larksuite" title="Larksuite" height="28" />&nbsp;&nbsp;<img src="docs/assets/integrations/dingtalk.svg" alt="DingTalk" title="DingTalk" height="28" />&nbsp;&nbsp;<img src="https://cdn.simpleicons.org/wechat" alt="WeCom" title="WeCom" height="28" />&nbsp;&nbsp;<img src="https://api.iconify.design/logos:webhooks.svg" alt="Webhook" title="Webhook" height="28" /></td>
+</tr>
+<tr>
+  <td><b>Modelos</b></td>
+  <td><img src="https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@latest/icons/claude-color.svg" alt="Anthropic" title="Anthropic" height="28" />&nbsp;&nbsp;<img src="docs/assets/integrations/openai.svg" alt="OpenAI" title="OpenAI" height="28" />&nbsp;&nbsp;<img src="https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@latest/icons/gemini-color.svg" alt="Gemini" title="Gemini" height="28" />&nbsp;&nbsp;<img src="https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@latest/icons/deepseek-color.svg" alt="DeepSeek" title="DeepSeek" height="28" />&nbsp;&nbsp;<img src="docs/assets/integrations/zhipu.svg" alt="Zhipu" title="Zhipu" height="28" />&nbsp;&nbsp;<img src="https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@latest/icons/kimi-color.svg" alt="Kimi" title="Kimi" height="28" /></td>
+</tr>
+</table>
 
 ## Licença
 
-[Apache-2.0](LICENSE).
+Apache 2.0 — veja [LICENSE](LICENSE).
