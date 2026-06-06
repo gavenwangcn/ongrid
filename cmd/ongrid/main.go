@@ -115,6 +115,7 @@ import (
 
 	managerbizaudit "github.com/ongridio/ongrid/internal/manager/biz/audit"
 	manageraudtdata "github.com/ongridio/ongrid/internal/manager/data/audit/store"
+	managerreportdata "github.com/ongridio/ongrid/internal/manager/data/report/store"
 	managerserveraiops "github.com/ongridio/ongrid/internal/manager/server/aiops"
 	managerserveralert "github.com/ongridio/ongrid/internal/manager/server/alert"
 	managerserveraudit "github.com/ongridio/ongrid/internal/manager/server/audit"
@@ -222,6 +223,7 @@ func main() {
 		managermonitordata.Migrate,
 		managerwebshelldata.Migrate,
 		manageraudtdata.Migrate,
+		managerreportdata.Migrate,
 	); err != nil {
 		log.Error("run migrations", slog.Any("err", err))
 		os.Exit(1)
