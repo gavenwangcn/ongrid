@@ -169,13 +169,14 @@ export default function ReportsPage() {
                     className="cursor-pointer transition-colors hover:bg-zinc-900/40"
                     onClick={() => navigate(`/reports/${r.id}`)}
                   >
-                    {/* Period leads the row (chronological scan) but stays
-                        modest grey so it doesn't drown out the summary. */}
-                    <td className="truncate px-5 py-3 text-zinc-300">{periodLabel(r.title)}</td>
-                    {/* REPORT cell — the summary/headline is the personalized
-                        name (descriptive, distinct per report); falls back to
-                        a generating/failed placeholder before content lands. */}
-                    <td className="truncate px-4 py-3 font-medium text-zinc-100">
+                    {/* Period leads the row (chronological scan), muted grey
+                        like other tables' metadata columns. */}
+                    <td className="truncate px-5 py-3 text-xs text-zinc-400">{periodLabel(r.title)}</td>
+                    {/* REPORT cell — the summary is the personalized name;
+                        text-xs + body-grey to match the skills table's
+                        description column, not bright/large. Falls back to a
+                        placeholder before content lands. */}
+                    <td className="truncate px-4 py-3 text-xs text-zinc-300">
                       {r.summary
                         ? r.summary
                         : r.status === 'failed'
