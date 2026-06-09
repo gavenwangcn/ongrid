@@ -20,13 +20,18 @@ jobs:
 
     env:
       FRONTIER_VERSION: v1.2.4
-      FRONTIER_SRC: ${{ runner.temp }}/frontier
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Set release paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "FRONTIER_SRC=${RUNNER_TEMP}/frontier" >> "$GITHUB_ENV"
 
       - name: Resolve tag
         id: tag
