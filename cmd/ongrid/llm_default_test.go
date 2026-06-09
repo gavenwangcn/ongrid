@@ -1,0 +1,30 @@
+package main
+
+import (
+	"testing"
+
+	"github.com/ongridio/ongrid/internal/pkg/llm"
+)
+
+func TestPickProviderDefaultFallsBackToConfiguredProvider(t *testing.T) {
+	providers := []llm.ProviderConfig{
+		{ID: llm.ProviderDeepSeek, APIKey: "sk-test", Model: "deepseek-v4-flash"},
+	}
+
+	gotProvider, gotModel := pickProviderDefault(providers, "")
+	if gotProvider != llm.ProviderDeepSeek || gotModel != "deepseek-v4-flash" {
+		t.Fatalf("pickProviderDefault() = (%q, %q), want (deepseek, deepseek-v4-flash)", gotProvider, gotModel)
+	}
+}
+
+func TestPickProviderDefaultIgnoresUnavailablePreferred(t *testing.T) {
+	providers := []llm.ProviderConfig{
+		{ID: llm.ProviderOpenAI, APIKey: "", Model: "gpt-5.4"},
+		{ID: llm.ProviderDeepSeek, APIKey: "sk-test", Model: "deepseek-v4-flash"},
+	}
+
+	gotProvider, gotModel := pickProviderDefault(providers, llm.ProviderOpenAI)
+	if gotProvider != llm.ProviderDeepSeek || gotModel != "deepseek-v4-flash" {
+		t.Fatalf("pickProviderDefault() = (%q, %q), want (deepseek, deepseek-v4-flash)", gotProvider, gotModel)
+	}
+}

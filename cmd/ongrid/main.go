@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -2201,6 +2202,33 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
+// pickProviderDefault mirrors llm.MultiClient's catalog default:
+// use the configured default when it names an available provider, otherwise
+// pick the first configured provider by stable provider id. Background graph
+// workers, including reports, rely on this to match /v1/aiops/models.
+func pickProviderDefault(providers []llm.ProviderConfig, preferred string) (string, string) {
+	preferred = strings.TrimSpace(preferred)
+	available := make([]llm.ProviderConfig, 0, len(providers))
+	for _, p := range providers {
+		if strings.TrimSpace(p.ID) == "" || strings.TrimSpace(p.APIKey) == "" {
+			continue
+		}
+		available = append(available, p)
+	}
+	if preferred != "" {
+		for _, p := range available {
+			if p.ID == preferred {
+				return p.ID, p.Model
+			}
+		}
+	}
+	sort.Slice(available, func(i, j int) bool { return available[i].ID < available[j].ID })
+	if len(available) > 0 {
+		return available[0].ID, available[0].Model
+	}
+	return preferred, ""
+}
+
 // dedupeModels returns vals with empty strings dropped and duplicates
 // removed, preserving first-seen order. The OpenAI model catalog is built
 // as [configuredModel, "gpt-4o", "gpt-4-turbo"]; out-of-box the configured
@@ -2569,8 +2597,8 @@ func buildAIOpsRuntime(
 			for _, pc := range provCfgs {
 				addInner(pc.ID, pc.Model)
 			}
-			if resolvedDefault != "" {
-				defProv = resolvedDefault
+			if id, _ := pickProviderDefault(provCfgs, resolvedDefault); id != "" {
+				defProv = id
 			}
 		} else {
 			log.Warn("chatruntime: resolve providers for inner models", slog.Any("err", rerr))
@@ -2633,15 +2661,10 @@ func buildAIOpsRuntime(
 	if resolver != nil {
 		defaultResolver = func(rctx context.Context) (string, string) {
 			provCfgs, resolvedDefault, rerr := resolver.ResolveProviders(rctx)
-			if rerr != nil || resolvedDefault == "" {
+			if rerr != nil {
 				return "", ""
 			}
-			for _, pc := range provCfgs {
-				if pc.ID == resolvedDefault {
-					return resolvedDefault, pc.Model
-				}
-			}
-			return resolvedDefault, ""
+			return pickProviderDefault(provCfgs, resolvedDefault)
 		}
 	}
 	chatModel, err := llm.NewRoutingChatModel(llm.RoutingChatModelConfig{
