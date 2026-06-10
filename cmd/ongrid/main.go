@@ -1410,7 +1410,7 @@ func main() {
 	// investigatorChain so each new-fire fans out to both. Either side
 	// can be nil — the chain skips nil.
 	var legacyInv managerbizalert.Investigator
-	if cfg.OpenAI.APIKey != "" {
+	if hasConfiguredLLMProvider(llmRouter) {
 		legacy := aiopsinvestigator.New(
 			llmClient,
 			toolsReg,
@@ -1423,7 +1423,7 @@ func main() {
 		log.Info("alert: legacy AI initial-diagnosis investigator wired",
 			slog.String("model_source", "llm_default"))
 	} else {
-		log.Info("alert: legacy AI investigator disabled (no LLM)")
+		log.Info("alert: legacy AI investigator disabled (no LLM provider)")
 	}
 
 	var (
@@ -2179,6 +2179,14 @@ func reportLLMReady(resolver *managerbizsetting.LLMSettingsResolver) func(contex
 		}
 		return fmt.Errorf("%w: LLM provider not configured", errs.ErrNotWiredYet)
 	}
+}
+
+type llmProviderCatalog interface {
+	Providers() []llm.ProviderInfo
+}
+
+func hasConfiguredLLMProvider(catalog llmProviderCatalog) bool {
+	return catalog != nil && len(catalog.Providers()) > 0
 }
 
 // pickProviderDefault mirrors llm.MultiClient's catalog default:
