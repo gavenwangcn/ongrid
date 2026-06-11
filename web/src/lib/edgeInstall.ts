@@ -10,22 +10,34 @@ export type EdgeInstallOrigin = {
 };
 
 /**
- * Resolve the manager origin embedded in the Devices install one-liner.
+ * Pick http vs https for the Devices install one-liner.
  *
  * Priority:
- *  1. VITE_EDGE_INSTALL_SCHEME build-time override (deploy/.env)
- *  2. Current browser page protocol (http: → http, https: → https)
+ *  1. forced build-time override (VITE_EDGE_INSTALL_SCHEME)
+ *  2. browser page protocol
+ *  3. http
+ */
+export function resolveEdgeInstallScheme(
+  forced?: string,
+  pageProtocol?: string,
+): EdgeInstallScheme {
+  if (forced === 'http' || forced === 'https') {
+    return forced;
+  }
+  if (pageProtocol === 'https:') {
+    return 'https';
+  }
+  return 'http';
+}
+
+/**
+ * Resolve the manager origin embedded in the Devices install one-liner.
  */
 export function edgeInstallOrigin(host: string): EdgeInstallOrigin {
   const forced = import.meta.env.VITE_EDGE_INSTALL_SCHEME as string | undefined;
-  let scheme: EdgeInstallScheme;
-  if (forced === 'http' || forced === 'https') {
-    scheme = forced;
-  } else if (typeof window !== 'undefined' && window.location.protocol === 'https:') {
-    scheme = 'https';
-  } else {
-    scheme = 'http';
-  }
+  const pageProtocol =
+    typeof window !== 'undefined' ? window.location.protocol : undefined;
+  const scheme = resolveEdgeInstallScheme(forced, pageProtocol);
   return {
     origin: `${scheme}://${host}`,
     scheme,
