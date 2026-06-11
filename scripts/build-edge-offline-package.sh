@@ -245,8 +245,8 @@ stage_offline_package() {
   install -m 755 "$src/process_exporter"      "$pkg_dir/process_exporter-${os}-${arch}"
 
   # remote upgrade bundle (manager can also host this under /edge/)
-  cp "$src/edge-bundle-${arch}-${VERSION}.tar.gz" "$pkg_dir/"
-  cp "$src/edge-bundle-${arch}-${VERSION}.tar.gz.sha256" "$pkg_dir/"
+  cp "$src/edge-bundle-${target}-${VERSION}.tar.gz" "$pkg_dir/"
+  cp "$src/edge-bundle-${target}-${VERSION}.tar.gz.sha256" "$pkg_dir/"
 
   echo "$VERSION" > "$pkg_dir/VERSION"
 
@@ -276,7 +276,7 @@ Arch:    $target
 Remote upgrade (ADR-024):
   apply-pending-upgrade.sh is installed to /usr/local/lib/ongrid-edge/
   by install-edge.sh. The manager serves edge-bundle-*.tar.gz from /edge/;
-  copy edge-bundle-${arch}-${VERSION}.tar.gz* to the manager's bin/ or
+  copy edge-bundle-${target}-${VERSION}.tar.gz* to the manager's bin/ or
   deploy/edge/ if you use UI-driven whole-bundle upgrades.
 
 Online install alternative (edge can reach manager HTTP):
@@ -312,8 +312,8 @@ stage_manager_flat() {
   install -m 755 "$src/node_exporter"    "$dst/node_exporter-${os}-${arch}"
   install -m 755 "$src/process_exporter" "$dst/process_exporter-${os}-${arch}"
 
-  cp "$src/edge-bundle-${arch}-${VERSION}.tar.gz" "$dst/"
-  cp "$src/edge-bundle-${arch}-${VERSION}.tar.gz.sha256" "$dst/"
+  cp "$src/edge-bundle-${target}-${VERSION}.tar.gz" "$dst/"
+  cp "$src/edge-bundle-${target}-${VERSION}.tar.gz.sha256" "$dst/"
 
   log "manager staging: $dst (copy flat files to ~/ongrid/bin/ for dev compose)"
 }
