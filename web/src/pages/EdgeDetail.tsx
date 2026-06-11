@@ -1205,15 +1205,13 @@ function PluginSubCard({
             : ''}
         </div>
       )}
-      {health?.targets && health.targets.length > 0 && (
-        <SourceHealthList targets={health.targets} />
-      )}
       {editing && (
         <div className="border-t border-zinc-800 px-3 py-3">
           <PluginSpecEditor
             name={row.plugin_name}
             spec={row.spec ?? {}}
             enabled={row.enabled}
+            targetHealth={health?.targets ?? []}
             onSave={onSave}
           />
         </div>
@@ -1222,58 +1220,85 @@ function PluginSubCard({
   );
 }
 
-function SourceHealthList({ targets }: { targets: PluginTargetHealth[] }) {
+function sourceHealthStateClass(state: string) {
+  return state === 'running'
+    ? 'bg-emerald-500/10 text-emerald-300 ring-emerald-500/30'
+    : state === 'failed' || state === 'crashed'
+      ? 'bg-rose-500/10 text-rose-300 ring-rose-500/30'
+      : state === 'disabled' || state === 'stopped'
+        ? 'bg-zinc-700/40 text-zinc-400 ring-zinc-600'
+        : 'bg-amber-500/10 text-amber-300 ring-amber-500/30';
+}
+
+function SourceConfigRow({
+  title,
+  subtitle,
+  kind,
+  health,
+  open,
+  onToggle,
+}: {
+  title: string;
+  subtitle?: string;
+  kind?: string;
+  health?: PluginTargetHealth;
+  open: boolean;
+  onToggle(): void;
+}) {
   const { tr } = useI18n();
-  const stateClass = (state: string) =>
-    state === 'running'
-      ? 'bg-emerald-500/10 text-emerald-300 ring-emerald-500/30'
-      : state === 'failed' || state === 'crashed'
-        ? 'bg-rose-500/10 text-rose-300 ring-rose-500/30'
-        : state === 'disabled' || state === 'stopped'
-          ? 'bg-zinc-700/40 text-zinc-400 ring-zinc-600'
-          : 'bg-amber-500/10 text-amber-300 ring-amber-500/30';
   return (
-    <div className="border-t border-zinc-800 divide-y divide-zinc-800/80">
-      {targets.map((target) => (
-        <div key={target.id} className="flex items-start justify-between gap-3 px-3 py-2">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="font-mono text-[11px] text-zinc-200">
-                {target.name || target.id}
+    <button
+      type="button"
+      onClick={onToggle}
+      className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left hover:bg-zinc-900/40"
+    >
+      <div className="flex min-w-0 items-center gap-2">
+        {open ? <ChevronDown size={12} className="shrink-0 text-zinc-500" /> : <ChevronRight size={12} className="shrink-0 text-zinc-500" />}
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="font-mono text-[11px] text-zinc-200">{title}</span>
+            {kind && (
+              <span className="rounded px-1.5 py-0.5 text-[10px] text-zinc-400 ring-1 ring-inset ring-zinc-700">
+                {kind}
               </span>
-              {target.name && target.name !== target.id && (
-                <span className="font-mono text-[10px] text-zinc-500">{target.id}</span>
-              )}
-              {target.kind && (
-                <span className="rounded px-1.5 py-0.5 text-[10px] text-zinc-400 ring-1 ring-inset ring-zinc-700">
-                  {target.kind}
-                </span>
-              )}
+            )}
+            {health && (
               <span
                 className={cn(
                   'rounded px-1.5 py-0.5 text-[10px] font-medium ring-1 ring-inset',
-                  stateClass(target.state),
+                  sourceHealthStateClass(health.state),
                 )}
               >
-                {target.state}
+                {health.state}
               </span>
+            )}
+          </div>
+          {subtitle && <div className="mt-0.5 truncate text-[11px] text-zinc-500">{subtitle}</div>}
+          {health?.last_error && (
+            <div className="mt-0.5 truncate text-[11px] text-rose-400" title={health.last_error}>
+              {health.last_error}
             </div>
-            {target.last_error && (
-              <div className="mt-0.5 truncate text-[11px] text-rose-400" title={target.last_error}>
-                {target.last_error}
-              </div>
-            )}
-          </div>
-          <div className="shrink-0 text-right text-[10px] text-zinc-500">
-            <div>{tr('样本', 'Samples')}: {target.samples ?? 0}</div>
-            {target.last_success_at && (
-              <div>{tr('成功', 'OK')}: {relativeTime(target.last_success_at)}</div>
-            )}
-          </div>
+          )}
         </div>
-      ))}
-    </div>
+      </div>
+      {health && (
+        <div className="shrink-0 text-right text-[10px] text-zinc-500">
+          <div>{tr('样本', 'Samples')}: {health.samples ?? 0}</div>
+          {health.last_success_at && (
+            <div>{tr('成功', 'OK')}: {relativeTime(health.last_success_at)}</div>
+          )}
+        </div>
+      )}
+    </button>
   );
+}
+
+function healthByID(targets: PluginTargetHealth[] | undefined): Record<string, PluginTargetHealth> {
+  const out: Record<string, PluginTargetHealth> = {};
+  for (const target of targets ?? []) {
+    if (target.id) out[target.id] = target;
+  }
+  return out;
 }
 
 // PluginSpecEditor switches between a structured form for known plugins
@@ -1283,11 +1308,13 @@ function PluginSpecEditor({
   name,
   spec,
   enabled,
+  targetHealth = [],
   onSave,
 }: {
   name: string;
   spec: Record<string, unknown>;
   enabled: boolean;
+  targetHealth?: PluginTargetHealth[];
   onSave(body: { enabled: boolean; spec?: Record<string, unknown> }): Promise<void>;
 }) {
   const { tr } = useI18n();
@@ -1375,10 +1402,10 @@ function PluginSpecEditor({
         <TracesSpecForm draft={draft} onChange={setDraft} />
       )}
       {mode === 'form' && name === 'custommetrics' && (
-        <CustomMetricsSpecForm draft={draft} onChange={setDraft} />
+        <CustomMetricsSpecForm draft={draft} targetHealth={targetHealth} onChange={setDraft} />
       )}
       {mode === 'form' && name === 'databasemetrics' && (
-        <DatabaseMetricsSpecForm draft={draft} onChange={setDraft} />
+        <DatabaseMetricsSpecForm draft={draft} targetHealth={targetHealth} onChange={setDraft} />
       )}
       {mode === 'json' && (
         <div>
@@ -1576,19 +1603,28 @@ function StringMapField({
 
 function CustomMetricsSpecForm({
   draft,
+  targetHealth,
   onChange,
 }: {
   draft: Record<string, unknown>;
+  targetHealth: PluginTargetHealth[];
   onChange(next: Record<string, unknown>): void;
 }) {
   const { tr } = useI18n();
   const targets = asObjectArray(draft.targets);
+  const [openIndex, setOpenIndex] = useState<number | null>(null);
+  const healthMap = healthByID(targetHealth);
   const setTargets = (next: Record<string, unknown>[]) =>
     onChange({ ...draft, targets: next });
   const updateTarget = (idx: number, next: Record<string, unknown>) =>
     setTargets(targets.map((t, i) => (i === idx ? next : t)));
+  const removeTarget = (idx: number) => {
+    setTargets(targets.filter((_, i) => i !== idx));
+    setOpenIndex(null);
+  };
   const addTarget = () => {
     const id = `custom-${targets.length + 1}`;
+    const nextIndex = targets.length;
     setTargets([
       ...targets,
       {
@@ -1604,7 +1640,13 @@ function CustomMetricsSpecForm({
         label_drop: [],
       },
     ]);
+    setOpenIndex(nextIndex);
   };
+  useEffect(() => {
+    if (openIndex !== null && openIndex >= targets.length) {
+      setOpenIndex(null);
+    }
+  }, [openIndex, targets.length]);
 
   return (
     <div className="space-y-3">
@@ -1615,7 +1657,7 @@ function CustomMetricsSpecForm({
           onClick={addTarget}
           className="inline-flex items-center gap-1 rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-[11px] text-zinc-200 hover:bg-zinc-800"
         >
-          <Plus size={11} /> {tr('添加自定义采集源', 'Add custom source')}
+          <Plus size={11} /> {tr('添加新配置', 'Add config')}
         </button>
       </div>
       {targets.length === 0 && (
@@ -1623,16 +1665,37 @@ function CustomMetricsSpecForm({
           {tr('添加已有 Prometheus /metrics URL，edge 只负责抓取并上报，不启动 exporter。', 'Add existing Prometheus /metrics URLs. The edge only scrapes and pushes; it does not start exporters.')}
         </div>
       )}
-      <div className="space-y-3">
-        {targets.map((target, idx) => (
-          <CustomTargetEditor
-            key={idx}
-            target={target}
-            onChange={(next) => updateTarget(idx, next)}
-            onRemove={() => setTargets(targets.filter((_, i) => i !== idx))}
-          />
-        ))}
-      </div>
+      {targets.length > 0 && (
+        <div className="overflow-hidden rounded-md border border-zinc-800 bg-zinc-950/40 divide-y divide-zinc-800/60">
+          {targets.map((target, idx) => {
+            const id = typeof target.id === 'string' ? target.id : `target-${idx + 1}`;
+            const name = typeof target.name === 'string' && target.name ? target.name : id;
+            const targetURL = typeof target.target_url === 'string' ? target.target_url : '';
+            const open = openIndex === idx;
+            return (
+              <div key={`${id}-${idx}`}>
+                <SourceConfigRow
+                  title={name}
+                  subtitle={targetURL}
+                  kind="custom"
+                  health={healthMap[id]}
+                  open={open}
+                  onToggle={() => setOpenIndex(open ? null : idx)}
+                />
+                {open && (
+                  <div className="border-t border-zinc-800 px-3 py-3">
+                    <CustomTargetEditor
+                      target={target}
+                      onChange={(next) => updateTarget(idx, next)}
+                      onRemove={() => removeTarget(idx)}
+                    />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -1738,19 +1801,28 @@ const DB_LISTEN_DEFAULT: Record<string, string> = {
 
 function DatabaseMetricsSpecForm({
   draft,
+  targetHealth,
   onChange,
 }: {
   draft: Record<string, unknown>;
+  targetHealth: PluginTargetHealth[];
   onChange(next: Record<string, unknown>): void;
 }) {
   const { tr } = useI18n();
   const sources = asObjectArray(draft.sources);
+  const [openIndex, setOpenIndex] = useState<number | null>(null);
+  const healthMap = healthByID(targetHealth);
   const setSources = (next: Record<string, unknown>[]) =>
     onChange({ ...draft, sources: next });
   const updateSource = (idx: number, next: Record<string, unknown>) =>
     setSources(sources.map((s, i) => (i === idx ? next : s)));
+  const removeSource = (idx: number) => {
+    setSources(sources.filter((_, i) => i !== idx));
+    setOpenIndex(null);
+  };
   const addSource = () => {
     const id = `mysql-${sources.length + 1}`;
+    const nextIndex = sources.length;
     setSources([
       ...sources,
       {
@@ -1768,7 +1840,13 @@ function DatabaseMetricsSpecForm({
         label_drop: ['query', 'statement', 'collection'],
       },
     ]);
+    setOpenIndex(nextIndex);
   };
+  useEffect(() => {
+    if (openIndex !== null && openIndex >= sources.length) {
+      setOpenIndex(null);
+    }
+  }, [openIndex, sources.length]);
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
@@ -1783,7 +1861,7 @@ function DatabaseMetricsSpecForm({
           onClick={addSource}
           className="inline-flex items-center gap-1 rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-[11px] text-zinc-200 hover:bg-zinc-800"
         >
-          <Plus size={11} /> {tr('添加数据库采集源', 'Add database source')}
+          <Plus size={11} /> {tr('添加新配置', 'Add config')}
         </button>
       </div>
       {sources.length === 0 && (
@@ -1791,16 +1869,38 @@ function DatabaseMetricsSpecForm({
           {tr('用于需要 Ongrid 在 edge 上托管 exporter 的数据库。已有 /metrics 接口的数据库 exporter 请放到 custommetrics。', 'Use this when Ongrid should manage the exporter on the edge. Existing database /metrics exporters belong in custommetrics.')}
         </div>
       )}
-      <div className="space-y-3">
-        {sources.map((source, idx) => (
-          <DatabaseSourceEditor
-            key={idx}
-            source={source}
-            onChange={(next) => updateSource(idx, next)}
-            onRemove={() => setSources(sources.filter((_, i) => i !== idx))}
-          />
-        ))}
-      </div>
+      {sources.length > 0 && (
+        <div className="overflow-hidden rounded-md border border-zinc-800 bg-zinc-950/40 divide-y divide-zinc-800/60">
+          {sources.map((source, idx) => {
+            const id = typeof source.id === 'string' ? source.id : `source-${idx + 1}`;
+            const name = typeof source.name === 'string' && source.name ? source.name : id;
+            const dbType = typeof source.db_type === 'string' ? source.db_type : 'mysql';
+            const listenAddress = typeof source.listen_address === 'string' ? source.listen_address : '';
+            const open = openIndex === idx;
+            return (
+              <div key={`${id}-${idx}`}>
+                <SourceConfigRow
+                  title={name}
+                  subtitle={listenAddress}
+                  kind={dbType}
+                  health={healthMap[id]}
+                  open={open}
+                  onToggle={() => setOpenIndex(open ? null : idx)}
+                />
+                {open && (
+                  <div className="border-t border-zinc-800 px-3 py-3">
+                    <DatabaseSourceEditor
+                      source={source}
+                      onChange={(next) => updateSource(idx, next)}
+                      onRemove={() => removeSource(idx)}
+                    />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
