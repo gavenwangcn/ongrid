@@ -1091,7 +1091,7 @@ func main() {
 		llmClient,
 		toolsReg,
 		aiopsRepo,
-		aiopsagent.Config{Model: cfg.OpenAI.Model, Temperature: 0.1, MaxIterations: 30},
+		aiopsagent.Config{Model: cfg.OpenAI.Model, Sampling: llmSamplingFromCfg(cfg), MaxIterations: 30},
 		log,
 	)
 	aiopsUsage := managerbizaiops.NewUsageUsecase(aiopsRepo, log)
@@ -2153,6 +2153,20 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
+func llmSamplingFromCfg(cfg *config.Config) llm.SamplingParams {
+	if cfg == nil {
+		return llm.SamplingParams{}
+	}
+	s := cfg.LLM.Sampling
+	return llm.SamplingParams{
+		Temperature:      s.Temperature,
+		TopP:             s.TopP,
+		MaxTokens:        s.MaxTokens,
+		FrequencyPenalty: s.FrequencyPenalty,
+		PresencePenalty:  s.PresencePenalty,
+	}
+}
+
 func knownLLMProviderIDs() []string {
 	return []string{
 		llm.ProviderOpenAI,
@@ -2819,7 +2833,7 @@ specialist 名单（subagent_type 参数）：
 		HistoryLimit:     50,
 		GraphCfg: aiopsgraph.Config{
 			Model:         cfg.OpenAI.Model,
-			Temperature:   0.1,
+			Sampling:      llmSamplingFromCfg(cfg),
 			MaxIterations: 30,
 			ToolTimeout:   15 * time.Second,
 		},

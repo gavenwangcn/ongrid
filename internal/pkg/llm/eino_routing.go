@@ -415,9 +415,7 @@ func (c *clientChatModel) buildChatReq(input []*schema.Message, common *model.Op
 		Messages: msgs,
 		Tools:    llmTools,
 		UserID:   c.userID,
-	}
-	if common.Temperature != nil {
-		req.Temperature = *common.Temperature
+		Sampling: fromEinoOptions(common),
 	}
 	if common.Model != nil && *common.Model != "" {
 		req.Model = *common.Model

@@ -289,8 +289,28 @@ func TestChatSuccessRecordsBudget(t *testing.T) {
 	}
 }
 
-// TestTemperatureDefault — if req.Temperature is 0, we send 0.1 upstream.
-func TestTemperatureDefault(t *testing.T) {
+// TestSamplingOmittedWhenUnset — unset sampling params are not forwarded.
+func TestSamplingOmittedWhenUnset(t *testing.T) {
+	var rawBody []byte
+	_, cfg := fakeServer(t, func(w http.ResponseWriter, r *http.Request) {
+		rawBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(sampleChatResponse("ok", nil))
+	})
+	client := newTestClient(t, cfg, nil)
+	_, err := client.Chat(context.Background(), ChatReq{
+		Messages: []Message{{Role: "user", Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if strings.Contains(string(rawBody), `"temperature"`) {
+		t.Errorf("expected temperature omitted, body=%s", rawBody)
+	}
+}
+
+// TestSamplingForwardedWhenSet — explicit sampling params are forwarded.
+func TestSamplingForwardedWhenSet(t *testing.T) {
 	var gotTemp float32
 	_, cfg := fakeServer(t, func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
@@ -305,12 +325,13 @@ func TestTemperatureDefault(t *testing.T) {
 	client := newTestClient(t, cfg, nil)
 	_, err := client.Chat(context.Background(), ChatReq{
 		Messages: []Message{{Role: "user", Content: "hi"}},
+		Sampling: SamplingParams{Temperature: PtrFloat32(0.5)},
 	})
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
-	if gotTemp < 0.09 || gotTemp > 0.11 {
-		t.Errorf("temperature = %v, want ~0.1", gotTemp)
+	if gotTemp < 0.49 || gotTemp > 0.51 {
+		t.Errorf("temperature = %v, want ~0.5", gotTemp)
 	}
 }
 

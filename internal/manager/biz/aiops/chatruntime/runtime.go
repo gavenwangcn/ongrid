@@ -603,7 +603,7 @@ func (rt *Runtime) Handle(ctx context.Context, req *Request) (*Reply, error) {
 	//     model. When both are empty no option is added (default path
 	//     unchanged).
 	invokeOpts := []compose.Option{compose.WithCallbacks(handlers...)}
-	if mopts := chatModelOpts(req); len(mopts) > 0 {
+	if mopts := appendChatModelOpts(chatModelOpts(req), graphCfg.Sampling.EinoOptions()); len(mopts) > 0 {
 		invokeOpts = append(invokeOpts, compose.WithChatModelOption(mopts...))
 	}
 	// Thread the UI locale onto ctx so AgentTool can pick it up and
@@ -959,6 +959,16 @@ func chatModelOpts(req *Request) []model.Option {
 		opts = append(opts, model.WithModel(m))
 	}
 	return opts
+}
+
+func appendChatModelOpts(base, extra []model.Option) []model.Option {
+	if len(base) == 0 && len(extra) == 0 {
+		return nil
+	}
+	out := make([]model.Option, 0, len(base)+len(extra))
+	out = append(out, base...)
+	out = append(out, extra...)
+	return out
 }
 
 // calcDynamicHints produces the per-turn hint bullets that get injected

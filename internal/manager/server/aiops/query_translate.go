@@ -152,7 +152,9 @@ func (h *Handler) queryTranslate(w http.ResponseWriter, r *http.Request) {
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userPrompt},
 		},
-		Temperature: 0.1, // deterministic-ish; we want a precise query
+		Sampling: llm.SamplingParams{
+			Temperature: llm.PtrFloat32(0.1), // deterministic-ish; we want a precise query
+		},
 	})
 	if err != nil {
 		http.Error(w, "llm: "+err.Error(), http.StatusBadGateway)

@@ -288,6 +288,22 @@ type LLMProviderConfig struct {
 	Models  []string // closed-set of models exposed via /v1/aiops/models
 }
 
+// LLMSamplingConfig holds optional LLM generation parameters shared by
+// the agent / graph chat paths. Unset fields (nil pointers) are omitted
+// from upstream API calls so each provider's own defaults apply.
+type LLMSamplingConfig struct {
+	// env: ONGRID_LLM_TEMPERATURE
+	Temperature *float32
+	// env: ONGRID_LLM_TOP_P
+	TopP *float32
+	// env: ONGRID_LLM_MAX_TOKENS
+	MaxTokens *int
+	// env: ONGRID_LLM_FREQUENCY_PENALTY
+	FrequencyPenalty *float32
+	// env: ONGRID_LLM_PRESENCE_PENALTY
+	PresencePenalty *float32
+}
+
 // LLMConfig groups the multi-provider router config. OpenAI lives in
 // its own top-level field for legacy reasons (see OpenAIConfig); the
 // non-OpenAI providers cluster here.
@@ -308,6 +324,9 @@ type LLMConfig struct {
 	// stays as a safety-net global cap.
 	// env: ONGRID_LLM_DAILY_TOKEN_LIMIT; default 0 (unlimited).
 	DailyTokenLimit int
+	// Sampling tunes temperature / top_p / etc. for agent + graph chat.
+	// Empty = omit every parameter and defer to the provider defaults.
+	Sampling LLMSamplingConfig
 }
 
 // AdminConfig holds bootstrap admin credentials. Used only by the cloud
@@ -408,6 +427,11 @@ func Load() (*Config, error) {
 	c.LLM.Kimi.Models = splitProviderModels(getEnv("ONGRID_KIMI_MODELS", "kimi-k2.6,kimi-k2.5,moonshot-v1-128k"))
 	c.LLM.Default = getEnv("ONGRID_LLM_DEFAULT_PROVIDER", "")
 	c.LLM.DailyTokenLimit = getEnvInt("ONGRID_LLM_DAILY_TOKEN_LIMIT", 0)
+	c.LLM.Sampling.Temperature = getEnvOptionalFloat32("ONGRID_LLM_TEMPERATURE")
+	c.LLM.Sampling.TopP = getEnvOptionalFloat32("ONGRID_LLM_TOP_P")
+	c.LLM.Sampling.MaxTokens = getEnvOptionalInt("ONGRID_LLM_MAX_TOKENS")
+	c.LLM.Sampling.FrequencyPenalty = getEnvOptionalFloat32("ONGRID_LLM_FREQUENCY_PENALTY")
+	c.LLM.Sampling.PresencePenalty = getEnvOptionalFloat32("ONGRID_LLM_PRESENCE_PENALTY")
 
 	c.Admin.Email = getEnv("ONGRID_ADMIN_EMAIL", "")
 	c.Admin.Password = getEnv("ONGRID_ADMIN_PASSWORD", "")
@@ -563,6 +587,29 @@ func getEnvFloat(key string, def float64) float64 {
 		return f
 	}
 	return def
+}
+
+func getEnvOptionalFloat32(key string) *float32 {
+	v, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(v) == "" {
+		return nil
+	}
+	if f, err := strconv.ParseFloat(v, 32); err == nil {
+		out := float32(f)
+		return &out
+	}
+	return nil
+}
+
+func getEnvOptionalInt(key string) *int {
+	v, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(v) == "" {
+		return nil
+	}
+	if n, err := strconv.Atoi(v); err == nil {
+		return &n
+	}
+	return nil
 }
 
 func getEnvDuration(key string, def time.Duration) time.Duration {

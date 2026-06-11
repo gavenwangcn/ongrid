@@ -252,7 +252,7 @@ func (i *Investigator) runOne(incident *model.Incident) {
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: string(bundleJSON)},
 		},
-		Temperature: 0.2,
+		Sampling: llm.SamplingParams{Temperature: llm.PtrFloat32(0.2)},
 	})
 	if err != nil {
 		// ErrNoAPIKey is the known-benign case (LLM disabled mid-flight

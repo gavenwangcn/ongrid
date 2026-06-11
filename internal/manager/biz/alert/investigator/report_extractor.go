@@ -65,9 +65,9 @@ func (uc *Usecase) extractStructured(ctx context.Context, incident alertmodel.In
 	defer cancel()
 
 	resp, err := uc.summarizer.Chat(cctx, llm.ChatReq{
-		Model:       uc.cfg.SummarizerModel,
-		Provider:    uc.cfg.SummarizerProvider,
-		Temperature: 0,
+		Model:    uc.cfg.SummarizerModel,
+		Provider: uc.cfg.SummarizerProvider,
+		Sampling: llm.SamplingParams{Temperature: llm.PtrFloat32(0)},
 		Messages: []llm.Message{
 			{Role: "system", Content: extractorSystemPrompt},
 			{Role: "user", Content: prompt},

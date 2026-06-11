@@ -39,8 +39,9 @@ var ErrMaxIterationsReached = errors.New("agent: max iterations reached")
 type Config struct {
 	// Model is the OpenAI model slug; default "gpt-4o".
 	Model string
-	// Temperature is the sampling temperature; default 0.1.
-	Temperature float32
+	// Sampling holds optional LLM generation parameters (temperature,
+	// top_p, …). Unset fields are omitted from upstream API calls.
+	Sampling llm.SamplingParams
 	// MaxIterations caps the outer tool-calling loop; default 30.
 	MaxIterations int
 	// SystemPrompt is optionally prepended to every run.
@@ -223,9 +224,6 @@ func New(llmClient llm.Client, toolsReg *tools.Registry, sessions biz.SessionRep
 	if cfg.Model == "" {
 		cfg.Model = "gpt-5.4"
 	}
-	if cfg.Temperature == 0 {
-		cfg.Temperature = 0.1
-	}
 	if cfg.MaxIterations <= 0 {
 		cfg.MaxIterations = 30
 	}
@@ -350,12 +348,12 @@ func (a *Agent) runInternal(ctx context.Context, sessionID string, userID uint64
 
 	for i := 0; i < a.cfg.MaxIterations; i++ {
 		resp, err := a.llm.Chat(ctx, llm.ChatReq{
-			Model:       effectiveModel,
-			Provider:    effectiveProvider,
-			Messages:    llmMsgs,
-			Tools:       exposedSchemas,
-			Temperature: a.cfg.Temperature,
-			UserID:      userID,
+			Model:    effectiveModel,
+			Provider: effectiveProvider,
+			Messages: llmMsgs,
+			Tools:    exposedSchemas,
+			Sampling: a.cfg.Sampling,
+			UserID:   userID,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("agent: llm.Chat: %w", err)

@@ -618,7 +618,7 @@ func (rt *Runtime) runWorker(ctx context.Context, agentDef *Agent, sessID, userT
 	// no option, preserving back-compat with auto-spawn paths
 	// (investigator) that don't carry a coordinator choice.
 	invokeOpts := []compose.Option{compose.WithCallbacks(handlers...)}
-	if mopts := workerChatModelOpts(ctx); len(mopts) > 0 {
+	if mopts := appendChatModelOpts(workerChatModelOpts(ctx), cfg.Sampling.EinoOptions()); len(mopts) > 0 {
 		invokeOpts = append(invokeOpts, compose.WithChatModelOption(mopts...))
 	}
 	// Autoheal any tool batch still open when the worker exits — same

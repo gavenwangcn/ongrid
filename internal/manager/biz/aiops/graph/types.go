@@ -144,9 +144,9 @@ type Config struct {
 	// model's defaultProvider.
 	Provider string
 
-	// Temperature controls sampling randomness. 0 retains the legacy
-	// agent default of 0.1.
-	Temperature float32
+	// Sampling holds optional LLM generation parameters (temperature,
+	// top_p, …). Unset fields are omitted from upstream API calls.
+	Sampling llm.SamplingParams
 
 	// MaxIterations caps the outer ReAct loop. 0 -> 30 (agent.go default).
 	MaxIterations int

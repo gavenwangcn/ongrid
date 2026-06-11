@@ -476,8 +476,8 @@ func TestClientChatModel_GenerateTranslatesUsage(t *testing.T) {
 	if stub.lastReq.UserID != 42 {
 		t.Errorf("req.UserID = %d, want 42", stub.lastReq.UserID)
 	}
-	if stub.lastReq.Temperature != 0.5 {
-		t.Errorf("req.Temperature = %v, want 0.5", stub.lastReq.Temperature)
+	if stub.lastReq.Sampling.Temperature == nil || *stub.lastReq.Sampling.Temperature != 0.5 {
+		t.Errorf("req.Sampling.Temperature = %v, want 0.5", stub.lastReq.Sampling.Temperature)
 	}
 	if len(stub.lastReq.Messages) != 1 || stub.lastReq.Messages[0].Content != "hello world" {
 		t.Errorf("req messages = %+v", stub.lastReq.Messages)

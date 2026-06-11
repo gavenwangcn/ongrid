@@ -104,7 +104,7 @@ type ChatReq struct {
 	Provider    string
 	Messages    []Message
 	Tools       []ToolSchema
-	Temperature float32
+	Sampling    SamplingParams
 	UserID      uint64 // optional; used for budget scoping + logging only
 }
 
@@ -449,11 +449,6 @@ func (c *openaiClient) Chat(ctx context.Context, req ChatReq) (*ChatResp, error)
 
 // toOpenAIReq translates the public ChatReq to the SDK request shape.
 func (c *openaiClient) toOpenAIReq(req ChatReq, model string) (openai.ChatCompletionRequest, error) {
-	temp := req.Temperature
-	if temp == 0 {
-		temp = 0.1
-	}
-
 	msgs := make([]openai.ChatCompletionMessage, 0, len(req.Messages))
 	for i, m := range req.Messages {
 		sm, err := toOpenAIMessage(m)
@@ -489,12 +484,13 @@ func (c *openaiClient) toOpenAIReq(req ChatReq, model string) (openai.ChatComple
 		}
 	}
 
-	return openai.ChatCompletionRequest{
-		Model:       model,
-		Messages:    msgs,
-		Tools:       tools,
-		Temperature: temp,
-	}, nil
+	sdkReq := openai.ChatCompletionRequest{
+		Model:    model,
+		Messages: msgs,
+		Tools:    tools,
+	}
+	req.Sampling.applyToOpenAIReq(&sdkReq)
+	return sdkReq, nil
 }
 
 func toOpenAIMessage(m Message) (openai.ChatCompletionMessage, error) {
