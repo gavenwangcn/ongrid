@@ -1,0 +1,360 @@
+# ongrid 生产环境 docker compose — 仅拉取预构建镜像，无 build 段。
+# 现代 compose：无顶层 version 键。以下命令均在 deploy/product/ 目录执行。
+# 若环境为旧版 CLI，将 `docker compose` 替换为 `docker-compose` 即可。
+#
+# ---------- 生产机：全栈 ----------
+#
+# 启动全部服务：
+#   docker compose -f docker-compose-deploy.yml --env-file .env up -d
+#
+# 停止并移除容器：
+#   docker compose -f docker-compose-deploy.yml --env-file .env down
+#
+# 查看状态：
+#   docker compose -f docker-compose-deploy.yml --env-file .env ps
+#
+# 查看日志（全部 / 单服务）：
+#   docker compose -f docker-compose-deploy.yml --env-file .env logs -f --tail=200
+#   docker compose -f docker-compose-deploy.yml --env-file .env logs -f ongrid
+#
+# 拉取全部镜像后启动：
+#   docker compose -f docker-compose-deploy.yml --env-file .env pull
+#   docker compose -f docker-compose-deploy.yml --env-file .env up -d
+#
+# ---------- 生产机：仅应用镜像（源码构建后 tag/push）----------
+# 应用服务：ongrid（manager）、nginx（ongrid-web 前端）
+# 基础服务（mysql/prometheus/grafana 等）无需重建，发版时只动下面两条链路。
+#
+# 发版升级（拉取新镜像并重建，推荐）：
+#   docker compose -f docker-compose-deploy.yml --env-file .env pull ongrid nginx
+#   docker compose -f docker-compose-deploy.yml --env-file .env up -d --no-deps ongrid
+#   docker compose -f docker-compose-deploy.yml --env-file .env up -d --no-deps nginx
+#
+# 仅拉取应用镜像（不重启）：
+#   docker compose -f docker-compose-deploy.yml --env-file .env pull ongrid nginx
+#
+# 仅重启应用服务（不换镜像，改 .env 后常用）：
+#   docker compose -f docker-compose-deploy.yml --env-file .env restart ongrid nginx
+#
+# 健康检查：
+#   curl -fsS http://127.0.0.1:30088/healthz
+#
+# ---------- 构建机（仓库根目录，build + tag + push）----------
+#
+#   docker compose -f deploy/docker-compose.yml build ongrid nginx
+#   docker tag ongrid:<ver> <registry>/ongrid:<ver>
+#   docker tag ongrid-web:<ver> <registry>/ongrid-web:<ver>
+#   docker push <registry>/ongrid:<ver>
+#   docker push <registry>/ongrid-web:<ver>
+#
+# 依赖文件打包（构建机）：
+#   ./scripts/build-product-deploy-bundle.sh
+# 生产机解压：
+#   sudo tar -xzvf ongrid-product-deploy-<ver>-linux-amd64.tar.gz -C /opt/ongrid
+#   cd /opt/ongrid/deploy/product && cp .env.example .env
+#   编辑 .env：ONGRID_DEPLOY_ROOT、镜像地址、密码等
+#   ./bootstrap-data-dirs.sh
+#
+# 与 deploy/install/docker-compose.yml 的差异：
+#   - HTTP-only nginx（无 TLS），对外端口默认 30088（非 80）
+#   - Prometheus 额外映射对外端口默认 30091（运维直连 PromQL）
+#   - Grafana 不单独暴露端口，经 nginx /grafana/ 同源代理（「在 Grafana 中打开」）
+#   - 配置路径由 .env 中 ONGRID_DEPLOY_ROOT 指定（打包解压后的 deploy/ 根目录）
+#   - 包内还含 product/knowledge/builtin_vault、product/runtime/skills|agents
+
+services:
+  mysql:
+    image: ${MYSQL_IMAGE:-mysql:8.0}
+    container_name: ongrid-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required in .env}
+      MYSQL_DATABASE: ongrid
+      MYSQL_USER: ongrid
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required in .env}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - ${ONGRID_DATA_DIR:-/var/lib/ongrid}/mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -u root -p$${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+
+  ongrid:
+    image: ${ONGRID_IMAGE:?ONGRID_IMAGE is required — set full registry path in .env}
+    container_name: ongrid
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      ONGRID_HTTP_ADDR: ${ONGRID_HTTP_ADDR:-:8080}
+      ONGRID_METRICS_ADDR: ${ONGRID_METRICS_ADDR:-:9100}
+      ONGRID_FRONTIER_ADDR: ${ONGRID_FRONTIER_ADDR:-frontier:40011}
+      ONGRID_FRONTIER_SERVICE_NAME: ${ONGRID_FRONTIER_SERVICE_NAME:-ongrid-manager}
+      ONGRID_DB_DIALECT: mysql
+      ONGRID_DB_DSN: ongrid:${MYSQL_PASSWORD}@tcp(mysql:3306)/ongrid?parseTime=true&charset=utf8mb4&loc=Local
+      ONGRID_JWT_SECRET: ${ONGRID_JWT_SECRET:?ONGRID_JWT_SECRET is required in .env}
+      ONGRID_JWT_ACCESS_TTL: ${ONGRID_JWT_ACCESS_TTL:-15m}
+      ONGRID_JWT_REFRESH_TTL: ${ONGRID_JWT_REFRESH_TTL:-720h}
+      ONGRID_ADMIN_EMAIL: ${ONGRID_ADMIN_EMAIL:-}
+      ONGRID_ADMIN_PASSWORD: ${ONGRID_ADMIN_PASSWORD:-}
+      ONGRID_OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ONGRID_OPENAI_MODEL: ${OPENAI_MODEL:-}
+      ONGRID_OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      ONGRID_ZHIPU_API_KEY: ${ONGRID_ZHIPU_API_KEY:-}
+      ONGRID_ZHIPU_MODEL: ${ONGRID_ZHIPU_MODEL:-}
+      ONGRID_ZHIPU_BASE_URL: ${ONGRID_ZHIPU_BASE_URL:-}
+      ONGRID_ANTHROPIC_API_KEY: ${ONGRID_ANTHROPIC_API_KEY:-}
+      ONGRID_ANTHROPIC_MODEL: ${ONGRID_ANTHROPIC_MODEL:-}
+      ONGRID_ANTHROPIC_BASE_URL: ${ONGRID_ANTHROPIC_BASE_URL:-}
+      ONGRID_GEMINI_API_KEY: ${ONGRID_GEMINI_API_KEY:-}
+      ONGRID_GEMINI_MODEL: ${ONGRID_GEMINI_MODEL:-}
+      ONGRID_DEEPSEEK_API_KEY: ${ONGRID_DEEPSEEK_API_KEY:-}
+      ONGRID_DEEPSEEK_MODEL: ${ONGRID_DEEPSEEK_MODEL:-}
+      ONGRID_KIMI_API_KEY: ${ONGRID_KIMI_API_KEY:-}
+      ONGRID_KIMI_MODEL: ${ONGRID_KIMI_MODEL:-}
+      ONGRID_LLM_DEFAULT_PROVIDER: ${ONGRID_LLM_DEFAULT_PROVIDER:-}
+      ONGRID_LLM_TEMPERATURE: ${ONGRID_LLM_TEMPERATURE:-}
+      ONGRID_LLM_TOP_P: ${ONGRID_LLM_TOP_P:-}
+      ONGRID_LLM_MAX_TOKENS: ${ONGRID_LLM_MAX_TOKENS:-}
+      ONGRID_LLM_FREQUENCY_PENALTY: ${ONGRID_LLM_FREQUENCY_PENALTY:-}
+      ONGRID_LLM_PRESENCE_PENALTY: ${ONGRID_LLM_PRESENCE_PENALTY:-}
+      ONGRID_LLM_DAILY_TOKEN_LIMIT: ${ONGRID_LLM_DAILY_TOKEN_LIMIT:-}
+      ONGRID_INVESTIGATOR_ENABLED: ${ONGRID_INVESTIGATOR_ENABLED:-true}
+      ONGRID_INVESTIGATOR_MIN_SEVERITY: ${ONGRID_INVESTIGATOR_MIN_SEVERITY:-warning}
+      ONGRID_AGENT_KERNEL: ${ONGRID_AGENT_KERNEL:-graph}
+      ONGRID_TOOLBAG_DEFERRAL_THRESHOLD: ${ONGRID_TOOLBAG_DEFERRAL_THRESHOLD:-30}
+      ONGRID_QDRANT_URL: ${ONGRID_QDRANT_URL:-http://qdrant:6333}
+      ONGRID_EMBEDDING_PROVIDER: ${ONGRID_EMBEDDING_PROVIDER:-local}
+      ONGRID_EMBEDDING_MODEL: ${ONGRID_EMBEDDING_MODEL:-bge-small-zh-v1.5}
+      ONGRID_EMBEDDING_DIM: ${ONGRID_EMBEDDING_DIM:-512}
+      ONGRID_EMBEDDING_BASE_URL: ${ONGRID_EMBEDDING_BASE_URL:-}
+      ONGRID_EMBEDDING_API_KEY: ${ONGRID_EMBEDDING_API_KEY:-}
+      ONGRID_EMBEDDING_CACHE_DIR: ${ONGRID_EMBEDDING_CACHE_DIR:-/var/lib/ongrid/embeddings}
+      ONNX_PATH: /usr/lib/libonnxruntime.so
+      ONGRID_OTEL_ENDPOINT: ${ONGRID_OTEL_ENDPOINT:-tempo:4318}
+      ONGRID_PROM_ENABLED: ${ONGRID_PROM_ENABLED:-true}
+      ONGRID_PROM_URL: ${ONGRID_PROM_URL:-http://prometheus:9090/prometheus}
+      ONGRID_PROM_REMOTE_WRITE_URL: ${ONGRID_PROM_REMOTE_WRITE_URL:-}
+      ONGRID_PROM_QUERY_URL: ${ONGRID_PROM_QUERY_URL:-http://prometheus:9090/prometheus}
+      ONGRID_PROM_TLS_INSECURE: ${ONGRID_PROM_TLS_INSECURE:-false}
+      ONGRID_PROM_TLS_CA_FILE: ${ONGRID_PROM_TLS_CA_FILE:-}
+      ONGRID_PUBLIC_URL: ${ONGRID_PUBLIC_URL:-}
+      ONGRID_GRAFANA_INTERNAL_URL: ${ONGRID_GRAFANA_INTERNAL_URL:-http://grafana:3000/grafana}
+      ONGRID_GRAFANA_BOOTSTRAP_USER: ${GRAFANA_ADMIN_USER:-admin}
+      ONGRID_GRAFANA_BOOTSTRAP_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-}
+      ONGRID_GRAFANA_TLS_INSECURE: ${ONGRID_GRAFANA_TLS_INSECURE:-false}
+      ONGRID_ALERT_ENABLED: ${ONGRID_ALERT_ENABLED:-true}
+      ONGRID_ALERT_COOLDOWN: ${ONGRID_ALERT_COOLDOWN:-10m}
+      ONGRID_ALERT_EVAL_INTERVAL: ${ONGRID_ALERT_EVAL_INTERVAL:-}
+      ONGRID_ALERT_CPU_PERCENT: ${ONGRID_ALERT_CPU_PERCENT:-90}
+      ONGRID_ALERT_MEM_PERCENT: ${ONGRID_ALERT_MEM_PERCENT:-90}
+      ONGRID_ALERT_DISK_USED_PERCENT: ${ONGRID_ALERT_DISK_USED_PERCENT:-90}
+      ONGRID_ALERT_LOAD1: ${ONGRID_ALERT_LOAD1:-0}
+      ONGRID_NOTIFY_ENABLED: ${ONGRID_NOTIFY_ENABLED:-false}
+      ONGRID_NOTIFY_DEFAULT_CHANNELS: ${ONGRID_NOTIFY_DEFAULT_CHANNELS:-log}
+      ONGRID_NOTIFY_TIMEOUT: ${ONGRID_NOTIFY_TIMEOUT:-10s}
+      ONGRID_NOTIFY_LOG_ENABLED: ${ONGRID_NOTIFY_LOG_ENABLED:-true}
+      ONGRID_NOTIFY_LOG_NAME: ${ONGRID_NOTIFY_LOG_NAME:-log}
+      ONGRID_NOTIFY_WEBHOOK_ENABLED: ${ONGRID_NOTIFY_WEBHOOK_ENABLED:-false}
+      ONGRID_NOTIFY_WEBHOOK_NAME: ${ONGRID_NOTIFY_WEBHOOK_NAME:-webhook}
+      ONGRID_NOTIFY_WEBHOOK_URL: ${ONGRID_NOTIFY_WEBHOOK_URL:-}
+      ONGRID_NOTIFY_WEBHOOK_SECRET: ${ONGRID_NOTIFY_WEBHOOK_SECRET:-}
+      ONGRID_NOTIFY_SLACK_ENABLED: ${ONGRID_NOTIFY_SLACK_ENABLED:-false}
+      ONGRID_NOTIFY_SLACK_NAME: ${ONGRID_NOTIFY_SLACK_NAME:-slack}
+      ONGRID_NOTIFY_SLACK_WEBHOOK_URL: ${ONGRID_NOTIFY_SLACK_WEBHOOK_URL:-}
+      ONGRID_NOTIFY_FEISHU_ENABLED: ${ONGRID_NOTIFY_FEISHU_ENABLED:-false}
+      ONGRID_NOTIFY_FEISHU_NAME: ${ONGRID_NOTIFY_FEISHU_NAME:-feishu}
+      ONGRID_NOTIFY_FEISHU_WEBHOOK_URL: ${ONGRID_NOTIFY_FEISHU_WEBHOOK_URL:-}
+      ONGRID_NOTIFY_FEISHU_SECRET: ${ONGRID_NOTIFY_FEISHU_SECRET:-}
+      ONGRID_NOTIFY_DINGTALK_ENABLED: ${ONGRID_NOTIFY_DINGTALK_ENABLED:-false}
+      ONGRID_NOTIFY_DINGTALK_NAME: ${ONGRID_NOTIFY_DINGTALK_NAME:-dingtalk}
+      ONGRID_NOTIFY_DINGTALK_WEBHOOK_URL: ${ONGRID_NOTIFY_DINGTALK_WEBHOOK_URL:-}
+      ONGRID_NOTIFY_DINGTALK_SECRET: ${ONGRID_NOTIFY_DINGTALK_SECRET:-}
+      ONGRID_BUILTIN_SKILLS_ROOT: ${ONGRID_BUILTIN_SKILLS_ROOT:-/skills}
+      ONGRID_BUILTIN_AGENTS_ROOT: ${ONGRID_BUILTIN_AGENTS_ROOT:-/agents}
+      ONGRID_SKILLS_ROOT: ${ONGRID_SKILLS_ROOT:-/var/lib/ongrid/skills}
+      ONGRID_KNOWLEDGE_REPO_DIR: ${ONGRID_KNOWLEDGE_REPO_DIR:-/var/lib/ongrid/repos}
+    ports:
+      - "${ONGRID_METRICS_PORT:-9100}:9100"
+    volumes:
+      - ${ONGRID_LOG_DIR:-/var/log/ongrid}:/var/log/ongrid
+      - ./edge:/usr/share/ongrid/edge-bundles:ro
+      - ${ONGRID_DATA_DIR:-/var/lib/ongrid}/embeddings:/var/lib/ongrid/embeddings
+      - ${ONGRID_DATA_DIR:-/var/lib/ongrid}/repos:/var/lib/ongrid/repos
+      - ${ONGRID_DATA_DIR:-/var/lib/ongrid}/skills:/var/lib/ongrid/skills
+      - ${ONGRID_DEPLOY_ROOT:?ONGRID_DEPLOY_ROOT is required}/product/runtime/skills:/skills:ro
+      - ${ONGRID_DEPLOY_ROOT}/product/runtime/agents:/agents:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+
+  nginx:
+    image: ${ONGRID_WEB_IMAGE:?ONGRID_WEB_IMAGE is required — set full registry path in .env}
+    container_name: ongrid-nginx
+    restart: unless-stopped
+    depends_on:
+      ongrid:
+        condition: service_started
+    volumes:
+      # HTTP-only nginx — 无 TLS，监听容器内 80
+      - ${ONGRID_DEPLOY_ROOT:?ONGRID_DEPLOY_ROOT is required}/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      # Edge 在线安装脚本与二进制（由 build-product-deploy-bundle.sh 打入 product/edge/）
+      - ./edge:/usr/share/nginx/html/edge:ro
+    ports:
+      - "${ONGRID_HTTP_PORT:-30088}:80"
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+
+  frontier:
+    image: ${FRONTIER_IMAGE:-singchia/frontier:1.2.5}
+    container_name: ongrid-frontier
+    restart: unless-stopped
+    volumes:
+      - ${ONGRID_DEPLOY_ROOT}/install/frontier.yaml:/usr/conf/frontier.yaml:ro
+    ports:
+      - "${ONGRID_TUNNEL_PORT:-40012}:40012"
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+
+  prometheus:
+    image: ${PROMETHEUS_IMAGE:-prom/prometheus:v2.54.0}
+    container_name: ongrid-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=90d
+      - --storage.tsdb.retention.size=20GB
+      - --web.enable-remote-write-receiver
+      - --web.enable-lifecycle
+      - --web.external-url=/prometheus/
+      - --web.route-prefix=/prometheus/
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      # 对外运维端口（默认 30091）。UI 内嵌仍走 nginx /prometheus/ 同源路径。
+      - "${PROM_EXTERNAL_PORT:-30091}:9090"
+    volumes:
+      - ${ONGRID_DATA_DIR:-/var/lib/ongrid}/prometheus:/prometheus
+      - ${ONGRID_DEPLOY_ROOT}/install/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ${ONGRID_DEPLOY_ROOT}/install/prometheus-rules.yml:/etc/prometheus/rules.yml:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+
+  loki:
+    image: ${LOKI_IMAGE:-grafana/loki:3.4.0}
+    container_name: ongrid-loki
+    restart: unless-stopped
+    command:
+      - -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ${ONGRID_DATA_DIR:-/var/lib/ongrid}/loki:/loki
+      - ${ONGRID_DEPLOY_ROOT}/install/loki-config.yaml:/etc/loki/local-config.yaml:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+
+  tempo:
+    image: ${TEMPO_IMAGE:-grafana/tempo:2.5.0}
+    container_name: ongrid-tempo
+    restart: unless-stopped
+    command:
+      - -config.file=/etc/tempo/tempo.yaml
+    volumes:
+      - ${ONGRID_DATA_DIR:-/var/lib/ongrid}/tempo:/var/tempo
+      - ${ONGRID_DEPLOY_ROOT}/install/tempo-config.yaml:/etc/tempo/tempo.yaml:ro
+    depends_on:
+      - prometheus
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+
+  qdrant:
+    image: ${QDRANT_IMAGE:-qdrant/qdrant:v1.11.3}
+    container_name: ongrid-qdrant
+    restart: unless-stopped
+    volumes:
+      - ${ONGRID_DATA_DIR:-/var/lib/ongrid}/qdrant:/qdrant/storage
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+
+  searxng:
+    image: ${SEARXNG_IMAGE:-searxng/searxng:latest}
+    container_name: ongrid-searxng
+    restart: unless-stopped
+    environment:
+      SEARXNG_BASE_URL: http://searxng:8080/
+      INSTANCE_NAME: ongrid-search
+    volumes:
+      - ${ONGRID_DEPLOY_ROOT}/searxng:/etc/searxng:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+
+  grafana:
+    image: ${GRAFANA_IMAGE:-grafana/grafana-oss:11.1.4}
+    container_name: ongrid-grafana
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+      - loki
+      - tempo
+    environment:
+      # 必须含对外端口，否则 Grafana 子路径重定向会丢端口导致「在 Grafana 中打开」失败
+      GF_SERVER_ROOT_URL: ${ONGRID_GRAFANA_ROOT_URL:?ONGRID_GRAFANA_ROOT_URL is required — e.g. http://<host>:30088/grafana/}
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required in .env}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Editor
+      GF_AUTH_DISABLE_LOGIN_FORM: "false"
+      GF_USERS_DEFAULT_THEME: system
+      GF_USERS_DEFAULT_LANGUAGE: en-US
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
+      ONGRID_LOG_URL: ${ONGRID_LOG_URL:-http://loki:3100}
+      ONGRID_TRACE_QUERY_URL: ${ONGRID_TRACE_QUERY_URL:-http://tempo:3200}
+    volumes:
+      - ${ONGRID_DATA_DIR:-/var/lib/ongrid}/grafana:/var/lib/grafana
+      - ${ONGRID_DEPLOY_ROOT}/install/grafana/provisioning:/etc/grafana/provisioning:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
