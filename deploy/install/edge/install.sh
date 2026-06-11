@@ -140,6 +140,43 @@ if [[ "$SERVER_SCHEME" == "https" ]]; then
     CURL_TLS_FLAGS=(-k)
 fi
 
+# Data-plane smoke-test port follows the manager front-door (--server-http-addr
+# + --server-scheme). HTTP internal stacks listen on 80, not 443.
+resolve_dataplane_probe() {
+    local host_port=$1 scheme=$2
+    DP_PROBE_HOST="${host_port%%:*}"
+    DP_PROBE_PORT="${host_port##*:}"
+    if [[ "$DP_PROBE_HOST" == "$DP_PROBE_PORT" ]]; then
+        if [[ "$scheme" == "https" ]]; then
+            DP_PROBE_PORT=443
+        else
+            DP_PROBE_PORT=80
+        fi
+    fi
+}
+
+# Large edge artefacts (promtail ~100MB, otelcol ~290MB) need resume + long
+# timeouts; a mid-stream reset otherwise leaves plugins missing silently.
+curl_fetch_file() {
+    local dest=$1 url=$2
+    local tmp attempt
+    tmp=$(mktemp "${dest}.XXXXXX")
+    for attempt in 1 2 3 4 5; do
+        if curl "${CURL_TLS_FLAGS[@]}" -fL \
+            --connect-timeout 30 --max-time 900 \
+            --retry 2 --retry-all-errors --retry-delay 2 \
+            -C - -o "$tmp" "$url" && [[ -s "$tmp" ]]; then
+            install -m 0755 -o root -g root "$tmp" "$dest"
+            rm -f "$tmp"
+            return 0
+        fi
+        log_warn "download attempt ${attempt}/5 failed for ${url}"
+        sleep 2
+    done
+    rm -f "$tmp"
+    return 1
+}
+
 # --- detect OS / arch --------------------------------------------------------
 
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -166,21 +203,12 @@ if systemctl is-active --quiet ongrid-edge 2>/dev/null; then
 fi
 
 log_info "downloading ${URL}"
-TMP_BIN=$(mktemp /tmp/ongrid-edge.XXXXXX)
-trap 'rm -f "$TMP_BIN"; log_error "install failed at line $LINENO (exit $?)"' ERR
-if ! curl "${CURL_TLS_FLAGS[@]}" -fL --retry 3 --retry-delay 2 -o "$TMP_BIN" "$URL"; then
+if ! curl_fetch_file "${INSTALL_DIR}/ongrid-edge" "$URL"; then
     log_error "download failed: ${URL}"
     log_error "  - check that the manager endpoint is correct and reachable"
     log_error "  - try: curl -sI ${SERVER_BASE}/install.sh"
-    rm -f "$TMP_BIN"; exit 1
+    exit 1
 fi
-if [[ ! -s "$TMP_BIN" ]]; then
-    log_error "downloaded binary is empty: $TMP_BIN"
-    rm -f "$TMP_BIN"; exit 1
-fi
-install -m 0755 -o root -g root "$TMP_BIN" "${INSTALL_DIR}/ongrid-edge"
-rm -f "$TMP_BIN"
-trap 'log_error "install failed at line $LINENO (exit $?)"' ERR
 
 # --- ADR-024 ExecStartPre hook ----------------------------------------------
 #
@@ -194,13 +222,9 @@ APPLY_HOOK="${APPLY_HOOK_DIR}/apply-pending-upgrade.sh"
 APPLY_URL="${SERVER_BASE}/edge/apply-pending-upgrade.sh"
 log_info "installing ${APPLY_HOOK}"
 mkdir -p "$APPLY_HOOK_DIR"
-TMP_HOOK=$(mktemp /tmp/apply-pending-upgrade.XXXXXX)
-if curl "${CURL_TLS_FLAGS[@]}" -fL --retry 3 --retry-delay 2 -o "$TMP_HOOK" "$APPLY_URL"; then
-    install -m 0755 -o root -g root "$TMP_HOOK" "$APPLY_HOOK"
-else
+if ! curl_fetch_file "$APPLY_HOOK" "$APPLY_URL"; then
     log_warn "could not fetch ${APPLY_URL}; ADR-024 whole-bundle upgrade won't apply"
 fi
-rm -f "$TMP_HOOK"
 
 # --- bundled plugin binaries (ADR-015) --------------------------------------
 #
@@ -217,15 +241,11 @@ rm -f "$TMP_HOOK"
 fetch_plugin_bin() {
     local name="$1" dest="${APPLY_HOOK_DIR}/$1"
     local url="${SERVER_BASE}/edge/${name}-${OS}-${ARCH}"
-    local tmp
-    tmp=$(mktemp "/tmp/${name}.XXXXXX")
-    if curl "${CURL_TLS_FLAGS[@]}" -fL --retry 3 --retry-delay 2 -o "$tmp" "$url" && [[ -s "$tmp" ]]; then
-        install -m 0755 -o root -g root "$tmp" "$dest"
+    if curl_fetch_file "$dest" "$url"; then
         log_info "installed plugin binary: ${name}"
     else
         log_warn "could not fetch ${url}; the ${name} plugin will not run until present"
     fi
-    rm -f "$tmp"
 }
 for pbin in promtail node_exporter process_exporter otelcol-contrib; do
     fetch_plugin_bin "$pbin"
@@ -405,11 +425,12 @@ else
     log_error "  fix: usermod -aG systemd-journal ${SERVICE_USER}; ensure persistent journal (/var/log/journal)"
     SELFCHECK_FAIL=1
 fi
-DP_HOST="${SERVER_HTTP_ADDR%%:*}"
-if [[ -n "$DP_HOST" ]] && timeout 5 bash -c "exec 3<>/dev/tcp/${DP_HOST}/443" 2>/dev/null; then
-    log_ok "data-plane host ${DP_HOST}:443 reachable (TCP)"
+resolve_dataplane_probe "$SERVER_HTTP_ADDR" "$SERVER_SCHEME"
+if [[ -n "$DP_PROBE_HOST" ]] && timeout 5 bash -c "exec 3<>/dev/tcp/${DP_PROBE_HOST}/${DP_PROBE_PORT}" 2>/dev/null; then
+    log_ok "data-plane host ${DP_PROBE_HOST}:${DP_PROBE_PORT} reachable (TCP)"
 else
-    log_warn "data-plane host ${DP_HOST}:443 not reachable from here — logs/traces push may fail"
+    log_warn "data-plane host ${DP_PROBE_HOST}:${DP_PROBE_PORT} not reachable from here — logs/traces push may fail"
+    log_warn "  ensure the manager's ONGRID_PUBLIC_URL uses ${SERVER_SCHEME}:// and is reachable from this edge"
 fi
 if [[ $SELFCHECK_FAIL -eq 0 ]]; then
     log_ok "self-check passed"

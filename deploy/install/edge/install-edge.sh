@@ -296,17 +296,22 @@ else
     SELFCHECK_FAIL=1
 fi
 
-# 3) data-plane host reachability. The exact URL comes from the manager's
-# ONGRID_PUBLIC_URL at runtime, but the host is almost always the tunnel
-# host — probe TCP 443 there as a smoke test. WARN (not fail) since the
-# real port/host may differ.
+# 3) data-plane host reachability. Manager pushes logs/traces endpoints derived
+# from ONGRID_PUBLIC_URL; for HTTP internal stacks that is port 80, not 443.
+# Override with ONGRID_DATA_PLANE_SCHEME=https when the manager is TLS-terminated.
 DP_HOST="${ONGRID_CLOUD_ADDR%%:*}"
+DP_SCHEME="${ONGRID_DATA_PLANE_SCHEME:-http}"
+if [[ "$DP_SCHEME" == "https" ]]; then
+    DP_PORT=443
+else
+    DP_PORT=80
+fi
 if [[ -n "$DP_HOST" ]]; then
-    if timeout 5 bash -c "exec 3<>/dev/tcp/${DP_HOST}/443" 2>/dev/null; then
-        log_info "data-plane host ${DP_HOST}:443 reachable (TCP)"
+    if timeout 5 bash -c "exec 3<>/dev/tcp/${DP_HOST}/${DP_PORT}" 2>/dev/null; then
+        log_info "data-plane host ${DP_HOST}:${DP_PORT} reachable (TCP)"
     else
-        log_warn "data-plane host ${DP_HOST}:443 not reachable from here — logs/traces push may fail"
-        log_warn "  ensure the manager's ONGRID_PUBLIC_URL points to an address THIS edge can reach"
+        log_warn "data-plane host ${DP_HOST}:${DP_PORT} not reachable from here — logs/traces push may fail"
+        log_warn "  set manager ONGRID_PUBLIC_URL to ${DP_SCHEME}://<host> this edge can reach"
     fi
 fi
 
