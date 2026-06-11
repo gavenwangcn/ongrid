@@ -5,6 +5,7 @@ import { Plus, RotateCw, Trash2, MoreVertical, Copy, Check, ExternalLink, Termin
 import { StatusPill } from '@/components/StatusPill';
 import { Modal } from '@/components/Modal';
 import { cn } from '@/lib/cn';
+import { edgeInstallOrigin } from '@/lib/edgeInstall';
 import { openMetricDrilldown } from '@/lib/drilldown';
 import { relativeTime } from '@/lib/format';
 import { usePoll } from '@/lib/usePoll';
@@ -1061,20 +1062,23 @@ function InstallCommandRow({ accessKey, secretKey }: { accessKey: string; secret
   const { tr } = useI18n();
   const [copied, setCopied] = useState(false);
   const host = typeof window !== 'undefined' ? window.location.host : 'ongrid.example.com';
+  const { origin, scheme, curlInsecure } = edgeInstallOrigin(host);
   const hostnameOnly = host.split(':')[0] || host;
   const tunnelAddr = `${hostnameOnly}:40012`;
   const cmd =
-    `curl -k -sSL https://${host}/install.sh | bash -s -- ` +
+    `curl ${curlInsecure}-sSL ${origin}/install.sh | bash -s -- ` +
     `--access-key=${accessKey} ` +
     `--secret-key=${secretKey} ` +
     `--server-edge-addr=${tunnelAddr} ` +
-    `--server-http-addr=${host}`;
+    `--server-http-addr=${host} ` +
+    `--server-scheme=${scheme}`;
   const display =
-    `curl -k -sSL https://${host}/install.sh | bash -s -- \\\n` +
+    `curl ${curlInsecure}-sSL ${origin}/install.sh | bash -s -- \\\n` +
     `  --access-key=${accessKey} \\\n` +
     `  --secret-key=${secretKey} \\\n` +
     `  --server-edge-addr=${tunnelAddr} \\\n` +
-    `  --server-http-addr=${host}`;
+    `  --server-http-addr=${host} \\\n` +
+    `  --server-scheme=${scheme}`;
   return (
     <div className="mt-4">
       <div className="mb-1 flex items-center justify-between">
@@ -1110,7 +1114,15 @@ function InstallCommandRow({ accessKey, secretKey }: { accessKey: string; secret
         {display}
       </pre>
       <p className="mt-1.5 text-[11px] text-zinc-500">
-        {tr('自签证书：浏览器警告 + curl ', 'Self-signed cert: browser warning + curl ')}<code className="rounded bg-zinc-800 px-1">-k</code>{tr(' 已忽略校验。目标主机需 root（脚本会自动 sudo 重试）；支持 linux amd64 / arm64。', ' skips verification. The target host needs root (the script auto-retries with sudo); linux amd64 / arm64 are supported.')}
+        {scheme === 'https'
+          ? tr(
+              '自签证书：浏览器警告 + curl -k 已忽略校验。目标主机需 root（脚本会自动 sudo 重试）；支持 linux amd64 / arm64。',
+              'Self-signed cert: browser warning + curl -k skips verification. The target host needs root (the script auto-retries with sudo); linux amd64 / arm64 are supported.',
+            )
+          : tr(
+              'HTTP 内网安装：无需 -k。目标主机需 root（脚本会自动 sudo 重试）；支持 linux amd64 / arm64。',
+              'HTTP install: no -k needed. The target host needs root (the script auto-retries with sudo); linux amd64 / arm64 are supported.',
+            )}
       </p>
     </div>
   );

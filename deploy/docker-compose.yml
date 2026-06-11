@@ -171,6 +171,8 @@ services:
       dockerfile: deploy/Dockerfile.web
       args:
         VERSION: ${VERSION:-dev}
+        # Devices UI install command uses http:// for internal HTTP stacks.
+        VITE_EDGE_INSTALL_SCHEME: ${VITE_EDGE_INSTALL_SCHEME:-http}
     image: ongrid-web:${VERSION:-dev}
     container_name: ongrid-nginx
     restart: unless-stopped

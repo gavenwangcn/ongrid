@@ -7,14 +7,23 @@ Edge agents connect managed hosts to the ongrid control plane. The agent dials *
 Generate an install command from the web UI under **Devices** (`/devices`), then run it on the target host:
 
 ```bash
-curl -k -sSL https://<server>/install.sh | bash -s -- \
+# HTTP (internal / dev compose — default scheme is http)
+curl -sSL http://<server>/install.sh | bash -s -- \
   --access-key=<access-key> \
   --secret-key=<secret-key> \
   --server-edge-addr=<server>:40012 \
   --server-http-addr=<server>
+
+# HTTPS (production with TLS)
+curl -k -sSL https://<server>/install.sh | bash -s -- \
+  --access-key=<access-key> \
+  --secret-key=<secret-key> \
+  --server-edge-addr=<server>:40012 \
+  --server-http-addr=<server> \
+  --server-scheme=https
 ```
 
-The install script detects the host architecture and downloads the matching binary from `https://<server>/edge/ongrid-edge-<os>-<arch>`.
+The install script detects the host architecture and downloads the matching binary from `<scheme>://<server>/edge/ongrid-edge-<os>-<arch>`. Scheme defaults to `http`; pass `--server-scheme=https` when the manager is TLS-terminated.
 
 ## Build and stage the edge binary (source installs only)
 

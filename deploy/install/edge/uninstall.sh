@@ -2,7 +2,7 @@
 # ongrid-edge curl-pipe uninstaller.
 #
 # Usage:
-#   curl -k -sSL https://<server>/uninstall.sh | bash
+#   curl -sSL http://<server>/uninstall.sh | bash
 #
 # Wipes the agent end-to-end: systemd units (agent + bundled exporters),
 # binary, env, logs, bundled plugin binaries, plugin work dir (rendered

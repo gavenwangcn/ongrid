@@ -22,7 +22,7 @@ type Config struct {
 	MetricsAddr string
 	TunnelAddr  string
 
-	// PublicURL is the canonical https URL operators use to reach this
+	// PublicURL is the canonical http(s) URL operators use to reach this
 	// manager from outside the docker network. Used to compose data
 	// plane endpoints handed out to edges:
 	// e.g. logs plugin pushes to PublicURL + "/loki/api/v1/push".

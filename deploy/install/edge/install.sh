@@ -2,15 +2,16 @@
 # ongrid-edge curl-pipe installer.
 #
 # Usage:
-#   curl -k -sSL https://<server>/install.sh | bash -s -- \
+#   curl -sSL http://<server>/install.sh | bash -s -- \
 #       --access-key=KEY \
 #       --secret-key=SECRET \
 #       --server-edge-addr=<host>:40012 \
-#       --server-http-addr=<host>:8443
+#       --server-http-addr=<host>[:port]
 #
 #   --server-http-addr  is the same host:port your browser uses (the nginx
 #                       front-door); the script downloads the right binary
-#                       from https://<http-addr>/edge/ongrid-edge-<os>-<arch>.
+#                       from <scheme>://<http-addr>/edge/ongrid-edge-<os>-<arch>.
+#   --server-scheme     http (default) or https for TLS-terminated installs.
 #   --server-edge-addr  is the geminio tunnel endpoint (host:port).
 #
 # Supported targets: linux/amd64, linux/arm64.
@@ -27,6 +28,7 @@ ACCESS_KEY=""
 SECRET_KEY=""
 SERVER_EDGE_ADDR=""
 SERVER_HTTP_ADDR=""
+SERVER_SCHEME="${ONGRID_EDGE_INSTALL_SCHEME:-http}"
 
 INSTALL_DIR="/usr/local/bin"
 ENV_DIR="/etc/ongrid-edge"
@@ -74,7 +76,8 @@ Required (install):
   --access-key=KEY
   --secret-key=SECRET
   --server-edge-addr=HOST:PORT     edge geminio endpoint, e.g. ongrid.example.com:40012
-  --server-http-addr=HOST[:PORT]   http endpoint, e.g. ongrid.example.com:8443
+  --server-http-addr=HOST[:PORT]   manager front-door, e.g. ongrid.example.com or :8443
+  --server-scheme=http|https       download scheme (default http; env ONGRID_EDGE_INSTALL_SCHEME)
 
 Other:
   --uninstall                      stop + remove ongrid-edge (keeps /var/log)
@@ -82,6 +85,7 @@ Other:
 
 Env:
   ONGRID_INSTALL_WAIT=20           seconds to poll journal for connect-success (default 20)
+  ONGRID_EDGE_INSTALL_SCHEME=http  default scheme when --server-scheme is omitted
   NO_COLOR=1                       disable ANSI colors
 EOF
 }
@@ -92,6 +96,7 @@ for arg in "$@"; do
         --secret-key=*)        SECRET_KEY="${arg#*=}" ;;
         --server-edge-addr=*)  SERVER_EDGE_ADDR="${arg#*=}" ;;
         --server-http-addr=*)  SERVER_HTTP_ADDR="${arg#*=}" ;;
+        --server-scheme=*)     SERVER_SCHEME="${arg#*=}" ;;
         --uninstall)           UNINSTALL=1 ;;
         -h|--help)             usage; exit 0 ;;
         *) log_error "unknown arg: $arg"; usage; exit 2 ;;
@@ -123,6 +128,17 @@ fi
 [[ -n "$SECRET_KEY"       ]] || { log_error "missing --secret-key";       usage; exit 2; }
 [[ -n "$SERVER_EDGE_ADDR" ]] || { log_error "missing --server-edge-addr"; usage; exit 2; }
 [[ -n "$SERVER_HTTP_ADDR" ]] || { log_error "missing --server-http-addr"; usage; exit 2; }
+case "$SERVER_SCHEME" in
+    http|https) ;;
+    *) log_error "unsupported --server-scheme: $SERVER_SCHEME (want http or https)"; exit 2 ;;
+esac
+
+SERVER_BASE="${SERVER_SCHEME}://${SERVER_HTTP_ADDR}"
+# -k only for self-signed HTTPS; plain HTTP installs skip it.
+CURL_TLS_FLAGS=()
+if [[ "$SERVER_SCHEME" == "https" ]]; then
+    CURL_TLS_FLAGS=(-k)
+fi
 
 # --- detect OS / arch --------------------------------------------------------
 
@@ -138,7 +154,7 @@ if [[ "$OS" != "linux" ]]; then
 fi
 
 BINARY="ongrid-edge-${OS}-${ARCH}"
-URL="https://${SERVER_HTTP_ADDR}/edge/${BINARY}"
+URL="${SERVER_BASE}/edge/${BINARY}"
 
 # --- download ----------------------------------------------------------------
 
@@ -152,10 +168,10 @@ fi
 log_info "downloading ${URL}"
 TMP_BIN=$(mktemp /tmp/ongrid-edge.XXXXXX)
 trap 'rm -f "$TMP_BIN"; log_error "install failed at line $LINENO (exit $?)"' ERR
-if ! curl -fLk --retry 3 --retry-delay 2 -o "$TMP_BIN" "$URL"; then
+if ! curl "${CURL_TLS_FLAGS[@]}" -fL --retry 3 --retry-delay 2 -o "$TMP_BIN" "$URL"; then
     log_error "download failed: ${URL}"
-    log_error "  - check that the http endpoint is correct and reachable"
-    log_error "  - try: curl -kI https://${SERVER_HTTP_ADDR}/install.sh"
+    log_error "  - check that the manager endpoint is correct and reachable"
+    log_error "  - try: curl -sI ${SERVER_BASE}/install.sh"
     rm -f "$TMP_BIN"; exit 1
 fi
 if [[ ! -s "$TMP_BIN" ]]; then
@@ -175,11 +191,11 @@ trap 'log_error "install failed at line $LINENO (exit $?)"' ERR
 # upgrades are silently no-ops. Anonymous /edge/ static path serves it.
 APPLY_HOOK_DIR=/usr/local/lib/ongrid-edge
 APPLY_HOOK="${APPLY_HOOK_DIR}/apply-pending-upgrade.sh"
-APPLY_URL="https://${SERVER_HTTP_ADDR}/edge/apply-pending-upgrade.sh"
+APPLY_URL="${SERVER_BASE}/edge/apply-pending-upgrade.sh"
 log_info "installing ${APPLY_HOOK}"
 mkdir -p "$APPLY_HOOK_DIR"
 TMP_HOOK=$(mktemp /tmp/apply-pending-upgrade.XXXXXX)
-if curl -fLk --retry 3 --retry-delay 2 -o "$TMP_HOOK" "$APPLY_URL"; then
+if curl "${CURL_TLS_FLAGS[@]}" -fL --retry 3 --retry-delay 2 -o "$TMP_HOOK" "$APPLY_URL"; then
     install -m 0755 -o root -g root "$TMP_HOOK" "$APPLY_HOOK"
 else
     log_warn "could not fetch ${APPLY_URL}; ADR-024 whole-bundle upgrade won't apply"
@@ -200,10 +216,10 @@ rm -f "$TMP_HOOK"
 # plugin, surfaced loudly in the self-check below.
 fetch_plugin_bin() {
     local name="$1" dest="${APPLY_HOOK_DIR}/$1"
-    local url="https://${SERVER_HTTP_ADDR}/edge/${name}-${OS}-${ARCH}"
+    local url="${SERVER_BASE}/edge/${name}-${OS}-${ARCH}"
     local tmp
     tmp=$(mktemp "/tmp/${name}.XXXXXX")
-    if curl -fLk --retry 3 --retry-delay 2 -o "$tmp" "$url" && [[ -s "$tmp" ]]; then
+    if curl "${CURL_TLS_FLAGS[@]}" -fL --retry 3 --retry-delay 2 -o "$tmp" "$url" && [[ -s "$tmp" ]]; then
         install -m 0755 -o root -g root "$tmp" "$dest"
         log_info "installed plugin binary: ${name}"
     else
@@ -414,7 +430,7 @@ case "$STATUS" in
         fi
         log_ok "tail logs:    journalctl -u ongrid-edge -f"
         log_ok "env file:     ${ENV_FILE}"
-        log_ok "uninstall:    curl -k -sSL https://${SERVER_HTTP_ADDR}/install.sh | bash -s -- --uninstall"
+        log_ok "uninstall:    curl -sSL ${SERVER_BASE}/install.sh | bash -s -- --uninstall"
         ;;
     failed)
         log_ok "installed:    ${VERSION_LINE}"
@@ -431,7 +447,7 @@ case "$STATUS" in
             log_warn "  journalctl -u ongrid-edge -f"
         fi
         log_ok "env file:     ${ENV_FILE}"
-        log_ok "uninstall:    curl -k -sSL https://${SERVER_HTTP_ADDR}/install.sh | bash -s -- --uninstall"
+        log_ok "uninstall:    curl -sSL ${SERVER_BASE}/install.sh | bash -s -- --uninstall"
         exit 1
         ;;
     pending)
@@ -440,6 +456,6 @@ case "$STATUS" in
         log_warn "this can happen on slow networks; tail the journal to confirm:"
         log_warn "  journalctl -u ongrid-edge -f"
         log_ok "env file:     ${ENV_FILE}"
-        log_ok "uninstall:    curl -k -sSL https://${SERVER_HTTP_ADDR}/install.sh | bash -s -- --uninstall"
+        log_ok "uninstall:    curl -sSL ${SERVER_BASE}/install.sh | bash -s -- --uninstall"
         ;;
 esac
