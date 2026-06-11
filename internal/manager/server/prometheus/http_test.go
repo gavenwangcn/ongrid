@@ -79,8 +79,31 @@ func TestLaunchSetsCookieAndReturnsURL(t *testing.T) {
 	if cookies[0].Name != promTicketCookie || cookies[0].Value != "ticket-123" {
 		t.Fatalf("launch() cookie = %+v", cookies[0])
 	}
-	if cookies[0].Path != "/" || !cookies[0].HttpOnly || !cookies[0].Secure {
+	if cookies[0].Path != "/" || !cookies[0].HttpOnly || cookies[0].Secure {
 		t.Fatalf("launch() cookie attrs = %+v", cookies[0])
+	}
+}
+
+func TestLaunchCookieSecureOnHTTPS(t *testing.T) {
+	t.Parallel()
+
+	h := NewHandler(stubService{
+		buildLaunch: func(caller svc.Caller, in svc.LaunchInput) (string, string, time.Duration, error) {
+			return "/prometheus/graph?g0.expr=up", "ticket-123", 30 * time.Minute, nil
+		},
+		verify: func(token string) error { return nil },
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/prometheus/launch", bytes.NewBufferString(`{"expr":"up"}`))
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req = req.WithContext(tenantctx.With(req.Context(), tenantctx.Tenant{UserID: 1, Role: "admin"}))
+	rec := httptest.NewRecorder()
+
+	h.launch(rec, req)
+
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 || !cookies[0].Secure {
+		t.Fatalf("launch() cookie attrs = %+v", cookies)
 	}
 }
 

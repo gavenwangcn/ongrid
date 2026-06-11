@@ -94,15 +94,7 @@ func (h *Handler) launch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     promTicketCookie,
-		Value:    ticket,
-		Path:     "/",
-		MaxAge:   int(ttl.Seconds()),
-		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteLaxMode,
-	})
+	http.SetCookie(w, promTicketCookieForRequest(r, ticket, int(ttl.Seconds())))
 	writeJSON(w, http.StatusOK, launchResp{URL: u})
 }
 
@@ -123,17 +115,36 @@ func (h *Handler) auth(w http.ResponseWriter, r *http.Request) {
 	// each of which refreshes here. Idle > TTL → next request 401s →
 	// SPA pops a fresh launch.
 	if fresh, ttl, ok := h.svc.RefreshTicket(c.Value); ok {
-		w.Header().Set("Set-Cookie", (&http.Cookie{
-			Name:     promTicketCookie,
-			Value:    fresh,
-			Path:     "/",
-			MaxAge:   int(ttl.Seconds()),
-			HttpOnly: true,
-			Secure:   true,
-			SameSite: http.SameSiteLaxMode,
-		}).String())
+		w.Header().Set("Set-Cookie", promTicketCookieForRequest(r, fresh, int(ttl.Seconds())).String())
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// promTicketCookieForRequest builds the nginx auth_request ticket cookie.
+// Secure is set only when the inbound request is HTTPS (direct TLS or
+// X-Forwarded-Proto=https from nginx). Plain-HTTP installs must omit
+// Secure or browsers refuse to store/send the cookie and /grafana/* 401s.
+func promTicketCookieForRequest(r *http.Request, value string, maxAge int) *http.Cookie {
+	return &http.Cookie{
+		Name:     promTicketCookie,
+		Value:    value,
+		Path:     "/",
+		MaxAge:   maxAge,
+		HttpOnly: true,
+		Secure:   requestIsSecure(r),
+		SameSite: http.SameSiteLaxMode,
+	}
+}
+
+func requestIsSecure(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	proto := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")))
+	if proto != "" {
+		return proto == "https"
+	}
+	return false
 }
 
 // queryRangeReq is the wire shape the SPA's prom client sends. Times
