@@ -4,11 +4,15 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 )
 
@@ -152,5 +156,91 @@ func TestVerifyManifest_DetectsTamper(t *testing.T) {
 	}
 	if _, err := verifyManifest(filepath.Join(stage, "MANIFEST.txt"), stage); err == nil {
 		t.Fatal("expected sha mismatch")
+	}
+}
+
+func TestDownloadAndVerify_ResumesFromPartialFile(t *testing.T) {
+	data := bytes.Repeat([]byte("a"), 1000)
+	sum := sha256.Sum256(data)
+	want := hex.EncodeToString(sum[:])
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Range"); got != "bytes=500-" {
+			t.Errorf("Range = %q, want bytes=500-", got)
+		}
+		w.Header().Set("Accept-Ranges", "bytes")
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write(data[500:])
+	}))
+	t.Cleanup(srv.Close)
+
+	out := filepath.Join(t.TempDir(), "bundle.tar.gz")
+	if err := os.WriteFile(out, data[:500], 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := downloadAndVerify(context.Background(), nil, srv.URL, want, out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != int64(len(data)) {
+		t.Fatalf("size = %d, want %d", n, len(data))
+	}
+}
+
+func TestDownloadAndVerify_RetriesAfterHTTPError(t *testing.T) {
+	data := []byte("bundle-bytes")
+	sum := sha256.Sum256(data)
+	want := hex.EncodeToString(sum[:])
+
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			http.Error(w, "temporary", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write(data)
+	}))
+	t.Cleanup(srv.Close)
+
+	out := filepath.Join(t.TempDir(), "bundle.tar.gz")
+	n, err := downloadAndVerify(context.Background(), nil, srv.URL, want, out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("calls = %d, want 2", calls.Load())
+	}
+	if n != int64(len(data)) {
+		t.Fatalf("size = %d, want %d", n, len(data))
+	}
+}
+
+func TestDownloadAndVerify_SkipsWhenFileAlreadyComplete(t *testing.T) {
+	data := []byte("already-here")
+	sum := sha256.Sum256(data)
+	want := hex.EncodeToString(sum[:])
+
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_, _ = w.Write(data)
+	}))
+	t.Cleanup(srv.Close)
+
+	out := filepath.Join(t.TempDir(), "bundle.tar.gz")
+	if err := os.WriteFile(out, data, 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := downloadAndVerify(context.Background(), nil, srv.URL, want, out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 0 {
+		t.Fatalf("expected no HTTP calls, got %d", calls)
+	}
+	if n != int64(len(data)) {
+		t.Fatalf("size = %d, want %d", n, len(data))
 	}
 }

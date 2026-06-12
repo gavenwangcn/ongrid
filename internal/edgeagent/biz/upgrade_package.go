@@ -52,6 +52,14 @@ const bundleDirName = "incoming"
 // without re-tuning every release.
 const maxBundleBytes = 1024 * 1024 * 1024
 
+const (
+	// Mirror deploy/install/edge/install.sh curl_fetch_file: transient
+	// connection resets on the edge→manager HTTP path are common enough
+	// that fetch_package needs the same retry + resume behaviour.
+	bundleDownloadMaxAttempts = 5
+	bundleDownloadRetryDelay  = 2 * time.Second
+)
+
 // handleFetchPackage implements MethodFetchPackage. Downloads the
 // tarball, verifies its outer SHA256, extracts into a staging dir,
 // then re-verifies each file in MANIFEST.txt. Leaves the bundle ready
@@ -92,7 +100,7 @@ func (a *Agent) handleFetchPackage(ctx context.Context, req tunnel.FetchPackageR
 		slog.String("stage", stage),
 	)
 
-	bytesDL, err := downloadAndVerify(ctx, url, expectedSHA, tarball)
+	bytesDL, err := downloadAndVerify(ctx, a.log, url, expectedSHA, tarball)
 	if err != nil {
 		_ = os.Remove(tarball)
 		return tunnel.FetchPackageResponse{}, err
@@ -158,54 +166,196 @@ func (a *Agent) handleApplyPackage(_ context.Context, _ tunnel.ApplyPackageReque
 	return tunnel.ApplyPackageResponse{Accepted: true}, nil
 }
 
-// downloadAndVerify streams url into out, computing sha256 inline, and
-// returns the byte count once verified. Errors leave `out` removed.
-func downloadAndVerify(ctx context.Context, url, expectedSHA, out string) (int64, error) {
+// downloadAndVerify streams url into out with retry and HTTP Range resume,
+// then verifies the outer SHA256. Errors leave `out` removed only after all
+// attempts are exhausted.
+func downloadAndVerify(ctx context.Context, log *slog.Logger, url, expectedSHA, out string) (int64, error) {
 	dlCtx, cancel := context.WithTimeout(ctx, 45*time.Minute)
 	defer cancel()
-	httpReq, err := http.NewRequestWithContext(dlCtx, http.MethodGet, url, nil)
+
+	var lastErr error
+	for attempt := 1; attempt <= bundleDownloadMaxAttempts; attempt++ {
+		n, err := downloadAttempt(dlCtx, url, expectedSHA, out)
+		if err == nil {
+			return n, nil
+		}
+		lastErr = fmt.Errorf("fetch_package: download attempt %d/%d: %w",
+			attempt, bundleDownloadMaxAttempts, err)
+		if log != nil {
+			log.Warn("fetch_package: download attempt failed",
+				slog.Int("attempt", attempt),
+				slog.Int("max_attempts", bundleDownloadMaxAttempts),
+				slog.Any("err", err),
+			)
+		}
+		if dlCtx.Err() != nil {
+			break
+		}
+		if attempt < bundleDownloadMaxAttempts {
+			if err := sleepContext(dlCtx, bundleDownloadRetryDelay); err != nil {
+				lastErr = err
+				break
+			}
+		}
+	}
+	_ = os.Remove(out)
+	if lastErr == nil {
+		lastErr = dlCtx.Err()
+	}
+	return 0, lastErr
+}
+
+func sleepContext(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+// downloadAttempt performs one download pass. A partial `out` file is resumed
+// via Range when the server supports it; a complete file with matching sha
+// short-circuits without network I/O.
+func downloadAttempt(ctx context.Context, url, expectedSHA, out string) (int64, error) {
+	if n, ok, err := verifyExistingBundle(out, expectedSHA); err != nil {
+		return 0, err
+	} else if ok {
+		return n, nil
+	}
+
+	offset, err := partialBundleOffset(out)
+	if err != nil {
+		return 0, err
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return 0, fmt.Errorf("build req: %w", err)
 	}
+	if offset > 0 {
+		httpReq.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
+	}
+
 	httpResp, err := bundleDownloadClient.Do(httpReq)
 	if err != nil {
 		return 0, fmt.Errorf("get: %w", err)
 	}
 	defer httpResp.Body.Close()
-	if httpResp.StatusCode != http.StatusOK {
+
+	switch httpResp.StatusCode {
+	case http.StatusOK:
+		if offset > 0 {
+			// Server ignored Range — discard partial and restart this attempt.
+			_ = os.Remove(out)
+			return downloadAttempt(ctx, url, expectedSHA, out)
+		}
+	case http.StatusPartialContent:
+		if offset == 0 {
+			return 0, fmt.Errorf("get: unexpected 206 without Range request")
+		}
+	default:
 		return 0, fmt.Errorf("get: status %d", httpResp.StatusCode)
 	}
-	f, err := os.OpenFile(out, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o640)
+
+	flags := os.O_CREATE | os.O_WRONLY
+	if offset == 0 {
+		flags |= os.O_TRUNC
+	} else {
+		flags |= os.O_APPEND
+	}
+	f, err := os.OpenFile(out, flags, 0o640)
 	if err != nil {
 		return 0, fmt.Errorf("open: %w", err)
 	}
+
 	hasher := sha256.New()
-	n, err := io.Copy(io.MultiWriter(f, hasher), io.LimitReader(httpResp.Body, maxBundleBytes+1))
+	if offset > 0 {
+		if err := hashFileInto(out, hasher); err != nil {
+			_ = f.Close()
+			_ = os.Remove(out)
+			return 0, fmt.Errorf("hash partial: %w", err)
+		}
+	}
+
+	remaining := maxBundleBytes - offset
+	n, err := io.Copy(io.MultiWriter(f, hasher), io.LimitReader(httpResp.Body, remaining+1))
 	if err != nil {
 		_ = f.Close()
-		_ = os.Remove(out)
 		return 0, fmt.Errorf("stream: %w", err)
 	}
-	if n > maxBundleBytes {
+	total := offset + n
+	if total > maxBundleBytes {
 		_ = f.Close()
 		_ = os.Remove(out)
-		return 0, fmt.Errorf("bundle too large (%d > %d)", n, maxBundleBytes)
+		return 0, fmt.Errorf("bundle too large (%d > %d)", total, maxBundleBytes)
 	}
 	if err := f.Sync(); err != nil {
 		_ = f.Close()
-		_ = os.Remove(out)
 		return 0, fmt.Errorf("sync: %w", err)
 	}
 	if err := f.Close(); err != nil {
-		_ = os.Remove(out)
 		return 0, fmt.Errorf("close: %w", err)
 	}
+
 	got := hex.EncodeToString(hasher.Sum(nil))
 	if got != expectedSHA {
 		_ = os.Remove(out)
 		return 0, fmt.Errorf("sha256 mismatch (got %s, want %s)", got, expectedSHA)
 	}
-	return n, nil
+	return total, nil
+}
+
+func verifyExistingBundle(path, expectedSHA string) (int64, bool, error) {
+	st, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, false, nil
+		}
+		return 0, false, err
+	}
+	if st.Size() == 0 {
+		return 0, false, nil
+	}
+	got, err := fileSHA256(path)
+	if err != nil {
+		return 0, false, err
+	}
+	if got != expectedSHA {
+		return 0, false, nil
+	}
+	return st.Size(), true, nil
+}
+
+func partialBundleOffset(path string) (int64, error) {
+	st, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	if st.Size() == 0 {
+		_ = os.Remove(path)
+		return 0, nil
+	}
+	if st.Size() > maxBundleBytes {
+		_ = os.Remove(path)
+		return 0, nil
+	}
+	return st.Size(), nil
+}
+
+func hashFileInto(path string, h io.Writer) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = io.Copy(h, f)
+	return err
 }
 
 // extractTarGz unpacks src (.tar.gz) into dst. dst is created fresh
