@@ -33,6 +33,10 @@ PROMTAIL_VERSION=3.4.0
 OTELCOL_VERSION=0.118.0
 NODE_EXPORTER_VERSION=1.8.2
 PROCESS_EXPORTER_VERSION=0.8.4
+MYSQLD_EXPORTER_VERSION=0.19.0
+POSTGRES_EXPORTER_VERSION=0.19.1
+REDIS_EXPORTER_VERSION=1.86.0
+MONGODB_EXPORTER_VERSION=0.51.0
 
 FETCH_CURL_FLAGS=(-fL --retry 3 --retry-all-errors --retry-delay 3 \
   --connect-timeout 15 --speed-time 60 --speed-limit 1024 --show-error)
@@ -196,12 +200,62 @@ fetch_process_exporter() {
   rm -f "$tgz"
 }
 
+fetch_tarball_binary() {
+  local target=$1 name=$2 version=$3 url=$4
+  local dest="$STAGE_ROOT/$target/$name"
+  [[ -f "$dest" ]] && return 0
+  local tgz=/tmp/${name}-$$-$target.tar.gz
+  local tmpdir
+  tmpdir=$(mktemp -d)
+  log "fetch $name $target"
+  mkdir -p "$STAGE_ROOT/$target"
+  curl "${FETCH_CURL_FLAGS[@]}" -o "$tgz" "$url"
+  tar -xzf "$tgz" -C "$tmpdir"
+  local found
+  found=$(find "$tmpdir" -type f -name "$name" -print -quit)
+  [[ -n "$found" ]] || die "$name binary missing in archive for $target (v$version)"
+  install -m 755 "$found" "$dest"
+  rm -rf "$tmpdir" "$tgz"
+}
+
+fetch_mysqld_exporter() {
+  local target=$1
+  local os=${target%-*} arch=${target##*-}
+  fetch_tarball_binary "$target" mysqld_exporter "$MYSQLD_EXPORTER_VERSION" \
+    "https://github.com/prometheus/mysqld_exporter/releases/download/v${MYSQLD_EXPORTER_VERSION}/mysqld_exporter-${MYSQLD_EXPORTER_VERSION}.${os}-${arch}.tar.gz"
+}
+
+fetch_postgres_exporter() {
+  local target=$1
+  local os=${target%-*} arch=${target##*-}
+  fetch_tarball_binary "$target" postgres_exporter "$POSTGRES_EXPORTER_VERSION" \
+    "https://github.com/prometheus-community/postgres_exporter/releases/download/v${POSTGRES_EXPORTER_VERSION}/postgres_exporter-${POSTGRES_EXPORTER_VERSION}.${os}-${arch}.tar.gz"
+}
+
+fetch_redis_exporter() {
+  local target=$1
+  local os=${target%-*} arch=${target##*-}
+  fetch_tarball_binary "$target" redis_exporter "$REDIS_EXPORTER_VERSION" \
+    "https://github.com/oliver006/redis_exporter/releases/download/v${REDIS_EXPORTER_VERSION}/redis_exporter-v${REDIS_EXPORTER_VERSION}.${os}-${arch}.tar.gz"
+}
+
+fetch_mongodb_exporter() {
+  local target=$1
+  local os=${target%-*} arch=${target##*-}
+  fetch_tarball_binary "$target" mongodb_exporter "$MONGODB_EXPORTER_VERSION" \
+    "https://github.com/percona/mongodb_exporter/releases/download/v${MONGODB_EXPORTER_VERSION}/mongodb_exporter-${MONGODB_EXPORTER_VERSION}.${os}-${arch}.tar.gz"
+}
+
 fetch_plugins() {
   local target=$1
   fetch_promtail "$target"
   fetch_otelcol "$target"
   fetch_node_exporter "$target"
   fetch_process_exporter "$target"
+  fetch_mysqld_exporter "$target"
+  fetch_postgres_exporter "$target"
+  fetch_redis_exporter "$target"
+  fetch_mongodb_exporter "$target"
 }
 
 # --- ADR-024 upgrade bundle ----------------------------------------------------
@@ -210,7 +264,8 @@ build_upgrade_bundle() {
   local bin_dir="$REPO_ROOT/bin/$target"
   local src="$STAGE_ROOT/$target"
   mkdir -p "$bin_dir"
-  for f in ongrid-edge promtail otelcol-contrib node_exporter process_exporter; do
+  for f in ongrid-edge promtail otelcol-contrib node_exporter process_exporter \
+           mysqld_exporter postgres_exporter redis_exporter mongodb_exporter; do
     install -m 755 "$src/$f" "$bin_dir/$f"
   done
   bash "$REPO_ROOT/dist/build-edge-bundle.sh" "$VERSION" "$target" "$STAGE_ROOT/$target"
@@ -243,6 +298,10 @@ stage_offline_package() {
   install -m 755 "$src/otelcol-contrib"       "$pkg_dir/otelcol-contrib-${os}-${arch}"
   install -m 755 "$src/node_exporter"         "$pkg_dir/node_exporter-${os}-${arch}"
   install -m 755 "$src/process_exporter"      "$pkg_dir/process_exporter-${os}-${arch}"
+  install -m 755 "$src/mysqld_exporter"       "$pkg_dir/mysqld_exporter-${os}-${arch}"
+  install -m 755 "$src/postgres_exporter"     "$pkg_dir/postgres_exporter-${os}-${arch}"
+  install -m 755 "$src/redis_exporter"        "$pkg_dir/redis_exporter-${os}-${arch}"
+  install -m 755 "$src/mongodb_exporter"      "$pkg_dir/mongodb_exporter-${os}-${arch}"
 
   # remote upgrade bundle (manager can also host this under /edge/)
   cp "$src/edge-bundle-${target}-${VERSION}.tar.gz" "$pkg_dir/"
@@ -309,8 +368,12 @@ stage_manager_flat() {
   install -m 755 "$src/ongrid-edge"      "$dst/ongrid-edge-${os}-${arch}"
   install -m 755 "$src/promtail"         "$dst/promtail-${os}-${arch}"
   install -m 755 "$src/otelcol-contrib"  "$dst/otelcol-contrib-${os}-${arch}"
-  install -m 755 "$src/node_exporter"    "$dst/node_exporter-${os}-${arch}"
-  install -m 755 "$src/process_exporter" "$dst/process_exporter-${os}-${arch}"
+  install -m 755 "$src/node_exporter"      "$dst/node_exporter-${os}-${arch}"
+  install -m 755 "$src/process_exporter"   "$dst/process_exporter-${os}-${arch}"
+  install -m 755 "$src/mysqld_exporter"    "$dst/mysqld_exporter-${os}-${arch}"
+  install -m 755 "$src/postgres_exporter"  "$dst/postgres_exporter-${os}-${arch}"
+  install -m 755 "$src/redis_exporter"     "$dst/redis_exporter-${os}-${arch}"
+  install -m 755 "$src/mongodb_exporter"   "$dst/mongodb_exporter-${os}-${arch}"
 
   cp "$src/edge-bundle-${target}-${VERSION}.tar.gz" "$dst/"
   cp "$src/edge-bundle-${target}-${VERSION}.tar.gz.sha256" "$dst/"
