@@ -522,6 +522,66 @@ func TestBuildDatabaseMetricsSecretIncludesDBTypeTLS(t *testing.T) {
 	}
 }
 
+func TestSetDatabaseMetricsRejectsMongoTLSKeyFile(t *testing.T) {
+	repo := newFakePluginConfigRepo()
+	writer := &fakeDatabaseSecretWriter{}
+	uc := NewPluginConfigUC(repo, nil, fakeEndpointResolver{}, nil)
+	uc.SetDatabaseMetricsSecretWriter(writer)
+
+	_, err := uc.Set(context.Background(), 7, model.PluginNameDatabaseMetrics, SetInput{
+		Enabled: true,
+		Spec: map[string]interface{}{
+			"sources": []interface{}{
+				map[string]interface{}{
+					"id":             "mongo-prod",
+					"db_type":        "mongodb",
+					"listen_address": "127.0.0.1:19216",
+					"credentials": map[string]interface{}{
+						"host":          "127.0.0.1",
+						"port":          "27017",
+						"username":      "mongo",
+						"password":      "mongo-secret",
+						"database":      "admin",
+						"auth_source":   "admin",
+						"tls_enabled":   true,
+						"tls_cert_file": "/etc/ongrid-edge/certs/client.pem",
+						"tls_key_file":  "/etc/ongrid-edge/certs/client.key",
+					},
+				},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("Set() error = nil, want mongodb tls_key_file error")
+	}
+	if !strings.Contains(err.Error(), "mongodb tls_key_file is not supported") {
+		t.Fatalf("Set() error = %v", err)
+	}
+	if len(writer.reqs) != 0 {
+		t.Fatalf("secret writes = %d, want 0", len(writer.reqs))
+	}
+}
+
+func TestBuildDatabaseMetricsSecretRejectsMongoTLSKeyFile(t *testing.T) {
+	_, err := buildDatabaseMetricsSecret("mongodb", map[string]interface{}{
+		"host":          "127.0.0.1",
+		"port":          "27017",
+		"username":      "mongo",
+		"password":      "mongo-secret",
+		"database":      "admin",
+		"auth_source":   "admin",
+		"tls_enabled":   true,
+		"tls_cert_file": "/etc/ongrid-edge/certs/client.pem",
+		"tls_key_file":  "/etc/ongrid-edge/certs/client.key",
+	})
+	if err == nil {
+		t.Fatal("buildDatabaseMetricsSecret() error = nil, want mongodb tls_key_file error")
+	}
+	if !strings.Contains(err.Error(), "mongodb tls_key_file is not supported") {
+		t.Fatalf("buildDatabaseMetricsSecret() error = %v", err)
+	}
+}
+
 func boolValueForTest(v interface{}) bool {
 	switch x := v.(type) {
 	case bool:

@@ -173,6 +173,9 @@ func buildEdgeDatabaseMetricsSecret(dbType string, credentials map[string]interf
 			return "", fmt.Errorf("port must be 1..65535")
 		}
 	}
+	if dbType == "mongodb" && strings.TrimSpace(c.TLS.KeyFile) != "" {
+		return "", fmt.Errorf("mongodb tls_key_file is not supported; use tls_cert_file with a combined cert + key PEM")
+	}
 	switch dbType {
 	case "mysql":
 		if c.Port == "" {

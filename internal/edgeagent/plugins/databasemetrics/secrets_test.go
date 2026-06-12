@@ -173,3 +173,23 @@ func TestBuildManagedSecretPreservingPasswordForMySQLSkipVerify(t *testing.T) {
 		t.Fatalf("secret = %q, should not keep ssl-ca while skip_verify=true", got)
 	}
 }
+
+func TestBuildEdgeDatabaseMetricsSecretRejectsMongoTLSKeyFile(t *testing.T) {
+	_, err := buildEdgeDatabaseMetricsSecret("mongodb", map[string]interface{}{
+		"host":          "127.0.0.1",
+		"port":          "27017",
+		"username":      "mongo",
+		"password":      "mongo-secret",
+		"database":      "admin",
+		"auth_source":   "admin",
+		"tls_enabled":   true,
+		"tls_cert_file": "/etc/ongrid-edge/certs/client.pem",
+		"tls_key_file":  "/etc/ongrid-edge/certs/client.key",
+	})
+	if err == nil {
+		t.Fatal("buildEdgeDatabaseMetricsSecret() error = nil, want mongodb tls_key_file error")
+	}
+	if !strings.Contains(err.Error(), "mongodb tls_key_file is not supported") {
+		t.Fatalf("buildEdgeDatabaseMetricsSecret() error = %v", err)
+	}
+}

@@ -2330,7 +2330,7 @@ function buildDatabaseExporterDefault(dbType: DBType): Record<string, unknown> {
 }
 
 function buildCredentialTemplate(dbType: DBType): Record<string, string> {
-  const base = {
+  const base: Record<string, string> = {
     host: '127.0.0.1',
     port: DB_PORT_DEFAULT[dbType],
     username: '',
@@ -2343,7 +2343,11 @@ function buildCredentialTemplate(dbType: DBType): Record<string, string> {
     tls_key_file: '',
   };
   if (dbType === 'postgresql') return { ...base, sslmode: 'disable' };
-  if (dbType === 'mongodb') return { ...base, auth_source: 'admin' };
+  if (dbType === 'mongodb') {
+    const next: Record<string, string> = { ...base, auth_source: 'admin' };
+    delete next['tls_key_file'];
+    return next;
+  }
   return base;
 }
 
@@ -2356,13 +2360,13 @@ function buildCredentialTemplateWithTLS(
   const certFile = typeof tlsConfig.cert_file === 'string' ? tlsConfig.cert_file : '';
   const keyFile = typeof tlsConfig.key_file === 'string' ? tlsConfig.key_file : '';
   const skipVerify = tlsConfig.skip_verify === true;
-  const enabled = tlsConfig.enabled === true || skipVerify || Boolean(caFile || certFile || keyFile);
+  const enabled = tlsConfig.enabled === true || skipVerify || Boolean(caFile || certFile || (dbType !== 'mongodb' && keyFile));
   if (!enabled) return next;
   next.tls_enabled = 'true';
   next.tls_skip_verify = skipVerify ? 'true' : 'false';
   next.tls_ca_file = caFile;
   next.tls_cert_file = certFile;
-  next.tls_key_file = keyFile;
+  if (dbType !== 'mongodb') next.tls_key_file = keyFile;
   if (dbType === 'postgresql' && next.sslmode === 'disable') next.sslmode = 'require';
   return next;
 }
@@ -2682,6 +2686,7 @@ function stripDatabaseMetricCredentials(spec: Record<string, unknown>): Record<s
 function normalizeDatabaseMetricTLSForSave(spec: Record<string, unknown>): Record<string, unknown> {
   const sources = asObjectArray(spec.sources).map((source) => {
     const next = { ...source };
+    const dbType = normalizeDBType(next.db_type);
     const credentials =
       next.credentials && typeof next.credentials === 'object' && !Array.isArray(next.credentials)
         ? { ...(next.credentials as Record<string, unknown>) }
@@ -2702,6 +2707,17 @@ function normalizeDatabaseMetricTLSForSave(spec: Record<string, unknown>): Recor
         tls.ca_file = '';
         tls.cert_file = '';
         tls.key_file = '';
+        next.tls = tls;
+      }
+    }
+    if (dbType === 'mongodb') {
+      if (credentials) {
+        delete credentials.tls_key_file;
+        delete credentials.sslkey;
+        next.credentials = credentials;
+      }
+      if (tls) {
+        delete tls.key_file;
         next.tls = tls;
       }
     }
@@ -3410,6 +3426,7 @@ function DatabaseCredentialsEditor({
         updated.sslmode = 'require';
       }
     }
+    if (dbType === 'mongodb') delete updated.tls_key_file;
     onChange(updated);
   };
   const setPostgresSSLMode = (nextMode: string) => {
@@ -3429,11 +3446,13 @@ function DatabaseCredentialsEditor({
     onChange(updated);
   };
   const skipVerify = boolValue('tls_skip_verify');
+  const tlsKeyFile = dbType === 'mongodb' ? '' : value('tls_key_file');
   const tlsEnabled =
     boolValue('tls_enabled') ||
     skipVerify ||
-    Boolean(value('tls_ca_file') || value('tls_cert_file') || value('tls_key_file'));
+    Boolean(value('tls_ca_file') || value('tls_cert_file') || tlsKeyFile);
   const showTLSFiles = tlsEnabled && !skipVerify;
+  const showTLSKeyFile = dbType !== 'mongodb';
   const passwordHint =
     dbType === 'redis'
       ? tr('Redis 如未设置密码可留空。保存后不会回显。', 'Leave empty if Redis has no password. It is not shown after save.')
@@ -3505,7 +3524,7 @@ function DatabaseCredentialsEditor({
         </div>
         {showTLSFiles && (
           <>
-            <div className="mt-3 grid gap-3 md:grid-cols-3">
+            <div className={cn('mt-3 grid gap-3', showTLSKeyFile ? 'md:grid-cols-3' : 'md:grid-cols-2')}>
               <SpecInput
                 label="tls_ca_file"
                 value={value('tls_ca_file')}
@@ -3518,12 +3537,14 @@ function DatabaseCredentialsEditor({
                 placeholder={dbType === 'mongodb' ? '/etc/ongrid-edge/certs/client.pem' : '/etc/ongrid-edge/certs/client.crt'}
                 onChange={(v) => setCredential('tls_cert_file', v)}
               />
-              <SpecInput
-                label="tls_key_file"
-                value={value('tls_key_file')}
-                placeholder="/etc/ongrid-edge/certs/client.key"
-                onChange={(v) => setCredential('tls_key_file', v)}
-              />
+              {showTLSKeyFile && (
+                <SpecInput
+                  label="tls_key_file"
+                  value={value('tls_key_file')}
+                  placeholder="/etc/ongrid-edge/certs/client.key"
+                  onChange={(v) => setCredential('tls_key_file', v)}
+                />
+              )}
             </div>
             <div className="mt-2 text-[11px] text-zinc-500">
               {dbType === 'mongodb'

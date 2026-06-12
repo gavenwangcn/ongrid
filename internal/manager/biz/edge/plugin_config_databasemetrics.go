@@ -119,7 +119,7 @@ func sanitizeDatabaseMetricsSource(i int, source map[string]interface{}) (map[st
 		"path":       secretPath,
 		"secret_set": true,
 	}
-	if err := validateDatabaseMetricsSourceTLS(source); err != nil {
+	if err := validateDatabaseMetricsSourceTLS(dbType, source); err != nil {
 		return nil, nil, fmt.Errorf("%w: databasemetrics.sources[%d].tls: %v", errs.ErrInvalid, i, err)
 	}
 	exporter, err := sanitizeDatabaseMetricsExporter(i, dbType, source["exporter"])
@@ -143,7 +143,7 @@ func sanitizeDatabaseMetricsSource(i int, source map[string]interface{}) (map[st
 		return nil, nil, fmt.Errorf("%w: databasemetrics.sources[%d].credentials: %v", errs.ErrInvalid, i, err)
 	}
 	out["credentials"] = safeCredentials
-	tlsConfig, err := buildDatabaseMetricsTLSConfig(credentials)
+	tlsConfig, err := buildDatabaseMetricsTLSConfig(dbType, credentials)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: databasemetrics.sources[%d].credentials: %v", errs.ErrInvalid, i, err)
 	}
@@ -225,6 +225,9 @@ func sanitizeDatabaseMetricsCredentials(dbType string, credentials map[string]in
 	if err := c.validate(); err != nil {
 		return nil, err
 	}
+	if err := validateDatabaseMetricsTLSForDBType(dbType, c.TLS); err != nil {
+		return nil, err
+	}
 	if dbType == "redis" && c.Database != "" {
 		if _, err := strconv.Atoi(c.Database); err != nil {
 			return nil, fmt.Errorf("database must be a Redis DB index")
@@ -233,7 +236,7 @@ func sanitizeDatabaseMetricsCredentials(dbType string, credentials map[string]in
 	return out, nil
 }
 
-func validateDatabaseMetricsSourceTLS(source map[string]interface{}) error {
+func validateDatabaseMetricsSourceTLS(dbType string, source map[string]interface{}) error {
 	m, ok := mapValue(source["tls"])
 	if !ok {
 		return nil
@@ -250,7 +253,7 @@ func validateDatabaseMetricsSourceTLS(source map[string]interface{}) error {
 		tls.CertFile = ""
 		tls.KeyFile = ""
 	}
-	return validateDatabaseMetricsTLS(tls)
+	return validateDatabaseMetricsTLSForDBType(dbType, tls)
 }
 
 func connectionSecretSet(source map[string]interface{}) bool {
@@ -676,6 +679,9 @@ func buildDatabaseMetricsSecret(dbType string, credentials map[string]interface{
 	if err := c.validate(); err != nil {
 		return "", err
 	}
+	if err := validateDatabaseMetricsTLSForDBType(dbType, c.TLS); err != nil {
+		return "", err
+	}
 	switch dbType {
 	case "mysql":
 		if c.Port == "" {
@@ -742,7 +748,7 @@ type dbTLSConfig struct {
 	KeyFile    string
 }
 
-func buildDatabaseMetricsTLSConfig(credentials map[string]interface{}) (map[string]interface{}, error) {
+func buildDatabaseMetricsTLSConfig(dbType string, credentials map[string]interface{}) (map[string]interface{}, error) {
 	tls := dbTLSConfig{
 		Enabled:    mapBool(credentials, "tls_enabled"),
 		SkipVerify: mapBool(credentials, "tls_skip_verify"),
@@ -759,7 +765,7 @@ func buildDatabaseMetricsTLSConfig(credentials map[string]interface{}) (map[stri
 		return nil, nil
 	}
 	tls.Enabled = true
-	if err := validateDatabaseMetricsTLS(tls); err != nil {
+	if err := validateDatabaseMetricsTLSForDBType(dbType, tls); err != nil {
 		return nil, err
 	}
 	out := map[string]interface{}{
@@ -822,6 +828,16 @@ func validateDatabaseMetricsTLS(tls dbTLSConfig) error {
 		if !filepath.IsAbs(value) {
 			return fmt.Errorf("%s must be an absolute edge-local path", name)
 		}
+	}
+	return nil
+}
+
+func validateDatabaseMetricsTLSForDBType(dbType string, tls dbTLSConfig) error {
+	if err := validateDatabaseMetricsTLS(tls); err != nil {
+		return err
+	}
+	if dbType == "mongodb" && strings.TrimSpace(tls.KeyFile) != "" {
+		return fmt.Errorf("mongodb tls_key_file is not supported; use tls_cert_file with a combined cert + key PEM")
 	}
 	return nil
 }
