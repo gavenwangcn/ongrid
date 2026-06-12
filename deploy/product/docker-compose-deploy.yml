@@ -39,13 +39,23 @@
 # 健康检查：
 #   curl -fsS http://127.0.0.1:30088/healthz
 #
-# ---------- 构建机（仓库根目录，build + tag + push）----------
+# ---------- 构建机（仓库根目录，build + tag + push 到华为云 SWR）----------
 #
+#   REG=swr.cn-east-3.myhuaweicloud.com/asdwjl  VER=v1.0.0
 #   docker compose -f deploy/docker-compose.yml build ongrid nginx
-#   docker tag ongrid:<ver> <registry>/ongrid:<ver>
-#   docker tag ongrid-web:<ver> <registry>/ongrid-web:<ver>
-#   docker push <registry>/ongrid:<ver>
-#   docker push <registry>/ongrid-web:<ver>
+#   docker tag ongrid:dev              ${REG}/ongrid:${VER}
+#   docker tag ongrid-web:dev          ${REG}/ongrid-web:${VER}
+#   docker tag mysql:8.0               ${REG}/ongrid-mysql:${VER}
+#   docker tag prom/prometheus:v2.54.0 ${REG}/ongrid-prometheus:${VER}
+#   docker tag grafana/loki:3.4.0      ${REG}/ongrid-loki:${VER}
+#   docker tag grafana/tempo:2.5.0     ${REG}/ongrid-tempo:${VER}
+#   docker tag grafana/grafana-oss:11.1.4 ${REG}/ongrid-grafana:${VER}
+#   docker tag qdrant/qdrant:v1.11.3   ${REG}/ongrid-qdrant:${VER}
+#   docker tag searxng/searxng:latest  ${REG}/ongrid-searxng:${VER}
+#   docker tag singchia/frontier:1.2.5 ${REG}/ongrid-frontier:${VER}
+#   docker push ${REG}/ongrid:${VER}   # 其余镜像同理
+#
+# 生产机镜像均在 .env 中配置（默认指向 SWR，无法访问 docker.io 公网）
 #
 # 依赖文件打包（构建机）：
 #   ./scripts/build-product-deploy-bundle.sh
@@ -64,7 +74,7 @@
 
 services:
   mysql:
-    image: ${MYSQL_IMAGE:-mysql:8.0}
+    image: ${MYSQL_IMAGE:-swr.cn-east-3.myhuaweicloud.com/asdwjl/ongrid-mysql:v1.0.0}
     container_name: ongrid-mysql
     restart: unless-stopped
     environment:
@@ -90,7 +100,7 @@ services:
         max-file: "5"
 
   ongrid:
-    image: ${ONGRID_IMAGE:?ONGRID_IMAGE is required — set full registry path in .env}
+    image: ${ONGRID_IMAGE:-swr.cn-east-3.myhuaweicloud.com/asdwjl/ongrid:v1.0.0}
     container_name: ongrid
     restart: unless-stopped
     depends_on:
@@ -206,7 +216,7 @@ services:
         max-file: "5"
 
   nginx:
-    image: ${ONGRID_WEB_IMAGE:?ONGRID_WEB_IMAGE is required — set full registry path in .env}
+    image: ${ONGRID_WEB_IMAGE:-swr.cn-east-3.myhuaweicloud.com/asdwjl/ongrid-web:v1.0.0}
     container_name: ongrid-nginx
     restart: unless-stopped
     depends_on:
@@ -226,7 +236,7 @@ services:
         max-file: "5"
 
   frontier:
-    image: ${FRONTIER_IMAGE:-singchia/frontier:1.2.5}
+    image: ${FRONTIER_IMAGE:-swr.cn-east-3.myhuaweicloud.com/asdwjl/ongrid-frontier:v1.0.0}
     container_name: ongrid-frontier
     restart: unless-stopped
     volumes:
@@ -240,7 +250,7 @@ services:
         max-file: "5"
 
   prometheus:
-    image: ${PROMETHEUS_IMAGE:-prom/prometheus:v2.54.0}
+    image: ${PROMETHEUS_IMAGE:-swr.cn-east-3.myhuaweicloud.com/asdwjl/ongrid-prometheus:v1.0.0}
     container_name: ongrid-prometheus
     restart: unless-stopped
     command:
@@ -268,7 +278,7 @@ services:
         max-file: "5"
 
   loki:
-    image: ${LOKI_IMAGE:-grafana/loki:3.4.0}
+    image: ${LOKI_IMAGE:-swr.cn-east-3.myhuaweicloud.com/asdwjl/ongrid-loki:v1.0.0}
     container_name: ongrid-loki
     restart: unless-stopped
     command:
@@ -283,7 +293,7 @@ services:
         max-file: "5"
 
   tempo:
-    image: ${TEMPO_IMAGE:-grafana/tempo:2.5.0}
+    image: ${TEMPO_IMAGE:-swr.cn-east-3.myhuaweicloud.com/asdwjl/ongrid-tempo:v1.0.0}
     container_name: ongrid-tempo
     restart: unless-stopped
     command:
@@ -300,7 +310,7 @@ services:
         max-file: "5"
 
   qdrant:
-    image: ${QDRANT_IMAGE:-qdrant/qdrant:v1.11.3}
+    image: ${QDRANT_IMAGE:-swr.cn-east-3.myhuaweicloud.com/asdwjl/ongrid-qdrant:v1.0.0}
     container_name: ongrid-qdrant
     restart: unless-stopped
     volumes:
@@ -312,7 +322,7 @@ services:
         max-file: "5"
 
   searxng:
-    image: ${SEARXNG_IMAGE:-searxng/searxng:latest}
+    image: ${SEARXNG_IMAGE:-swr.cn-east-3.myhuaweicloud.com/asdwjl/ongrid-searxng:v1.0.0}
     container_name: ongrid-searxng
     restart: unless-stopped
     environment:
@@ -327,7 +337,7 @@ services:
         max-file: "5"
 
   grafana:
-    image: ${GRAFANA_IMAGE:-grafana/grafana-oss:11.1.4}
+    image: ${GRAFANA_IMAGE:-swr.cn-east-3.myhuaweicloud.com/asdwjl/ongrid-grafana:v1.0.0}
     container_name: ongrid-grafana
     restart: unless-stopped
     depends_on:

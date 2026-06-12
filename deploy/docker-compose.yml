@@ -80,6 +80,10 @@ services:
       # tools get redacted schemas (LLM must call ToolSearch to expand).
       # Default 30 is fine until marketplace grows the bag past it.
       ONGRID_TOOLBAG_DEFERRAL_THRESHOLD: ${ONGRID_TOOLBAG_DEFERRAL_THRESHOLD:-30}
+      # Structured RCA investigator (POST /v1/alerts/incidents/{id}/investigation).
+      # Requires ONGRID_INVESTIGATOR_ENABLED=true AND a configured LLM provider.
+      ONGRID_INVESTIGATOR_ENABLED: ${ONGRID_INVESTIGATOR_ENABLED:-false}
+      ONGRID_INVESTIGATOR_MIN_SEVERITY: ${ONGRID_INVESTIGATOR_MIN_SEVERITY:-warning}
       # ADR-009: cloud-side Prometheus. Manager remote_writes open-set
       # samples here and the aiops query_promql tool reads from it.
       ONGRID_PROM_ENABLED: ${ONGRID_PROM_ENABLED:-true}
