@@ -229,7 +229,8 @@ fi
 # --- bundled plugin binaries (ADR-015) --------------------------------------
 #
 # The agent's plugin supervisor runs promtail (logs), node_exporter
-# (hostmetrics), process_exporter (procmetrics) and otelcol-contrib (traces)
+# (hostmetrics), process_exporter (procmetrics), otelcol-contrib (traces),
+# and database exporters (databasemetrics)
 # as subprocesses, expecting them under ${APPLY_HOOK_DIR}. The old curl-pipe
 # installer fetched ONLY the agent binary, so every edge enrolled via the UI
 # one-liner came up with an empty plugin dir → all plugins "crashed: binary
@@ -247,7 +248,7 @@ fetch_plugin_bin() {
         log_warn "could not fetch ${url}; the ${name} plugin will not run until present"
     fi
 }
-for pbin in promtail node_exporter process_exporter otelcol-contrib; do
+for pbin in promtail node_exporter process_exporter otelcol-contrib mysqld_exporter postgres_exporter redis_exporter mongodb_exporter; do
     fetch_plugin_bin "$pbin"
 done
 
@@ -405,7 +406,7 @@ printf '\n'
 echo
 echo "${C_BOLD}${C_CYAN}--- self-check ---${C_RESET}"
 SELFCHECK_FAIL=0
-for tool in promtail otelcol-contrib node_exporter process_exporter; do
+for tool in promtail otelcol-contrib node_exporter process_exporter mysqld_exporter postgres_exporter redis_exporter mongodb_exporter; do
     if [[ -x "${APPLY_HOOK_DIR}/${tool}" ]]; then
         log_ok "plugin binary present: ${tool}"
     else

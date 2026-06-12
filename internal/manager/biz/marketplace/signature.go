@@ -3,6 +3,7 @@ package marketplace
 import (
 	"crypto/ecdsa"
 	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -231,18 +232,11 @@ func computePackHash(packPath string) ([32]byte, error) {
 	return out, nil
 }
 
-// bytesEqual is a tiny constant-time-ish equality check for the
-// pinned-key DER comparison. ECDSA pubkey DER is short (<100 B) and
-// we don't need real timing-attack resistance here — equal-length
-// prefix equality is enough.
+// bytesEqual is a constant-time equality check for the pinned-key DER
+// comparison. Uses crypto/subtle to prevent timing side-channels.
 func bytesEqual(a, b []byte) bool {
 	if len(a) != len(b) {
 		return false
 	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
+	return subtle.ConstantTimeCompare(a, b) == 1
 }
