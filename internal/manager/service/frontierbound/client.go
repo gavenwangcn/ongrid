@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/ongridio/ongrid/internal/pkg/tunnel"
 	fbsvc "github.com/singchia/frontier/api/dataplane/v1/service"
@@ -21,6 +22,18 @@ type Config struct {
 	// ServiceName identifies this service to the frontier; reported via
 	// fbsvc.OptionServiceName so the broker can route by service.
 	ServiceName string
+}
+
+// fetchPackageRPCTimeout bounds manager→edge fetch_package RPCs. The edge
+// agent allows up to 45 minutes for tarball download+verify; frontier's
+// default 30s forward timeout must be overridden on both sides.
+const fetchPackageRPCTimeout = 45 * time.Minute
+
+func rpcCallTimeout(method string) time.Duration {
+	if method == tunnel.MethodFetchPackage {
+		return fetchPackageRPCTimeout
+	}
+	return 0
 }
 
 // Handler is the manager-shaped reverse-call handler. It is the post-adapter
@@ -132,8 +145,17 @@ func (c *Client) Call(ctx context.Context, edgeID uint64, method string, body []
 	if c.svc == nil {
 		return nil, ErrDisabled
 	}
+	timeout := rpcCallTimeout(method)
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
 	transportID := c.resolveTransportID(edgeID)
 	req := c.svc.NewRequest(body)
+	if timeout > 0 {
+		req.SetTimeout(timeout)
+	}
 	rsp, err := c.svc.Call(ctx, transportID, method, req)
 	if err != nil {
 		return nil, fmt.Errorf("frontierbound: call %q edge=%d transport=%d: %w", method, edgeID, transportID, err)

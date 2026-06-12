@@ -28,16 +28,17 @@ type fakeReq struct {
 	custom   []byte
 	method   string
 	clientID uint64
+	timeout  time.Duration
 }
 
 func (r *fakeReq) ID() uint64                 { return 0 }
 func (r *fakeReq) StreamID() uint64           { return 0 }
 func (r *fakeReq) ClientID() uint64           { return r.clientID }
 func (r *fakeReq) Method() string             { return r.method }
-func (r *fakeReq) Timeout() time.Duration     { return 0 }
+func (r *fakeReq) Timeout() time.Duration     { return r.timeout }
 func (r *fakeReq) Data() []byte               { return r.data }
 func (r *fakeReq) Custom() []byte             { return r.custom }
-func (r *fakeReq) SetTimeout(_ time.Duration) {}
+func (r *fakeReq) SetTimeout(d time.Duration) { r.timeout = d }
 func (r *fakeReq) SetCustom(b []byte)         { r.custom = b }
 func (r *fakeReq) SetClientID(id uint64)      { r.clientID = id }
 func (r *fakeReq) SetStreamID(_ uint64)       {}
@@ -71,10 +72,11 @@ type fakeService struct {
 	mu sync.Mutex
 
 	// last call inputs / configurable response.
-	lastEdgeID uint64
-	lastMethod string
-	lastBody   []byte
-	respData   []byte
+	lastEdgeID    uint64
+	lastMethod    string
+	lastBody      []byte
+	lastTimeout   time.Duration
+	respData      []byte
 	respErr    error
 	callErr    error
 
@@ -101,6 +103,7 @@ func (f *fakeService) Call(_ context.Context, edgeID uint64, method string, req 
 	f.lastEdgeID = edgeID
 	f.lastMethod = method
 	f.lastBody = append([]byte(nil), req.Data()...)
+	f.lastTimeout = req.Timeout()
 	if f.callErr != nil {
 		return nil, f.callErr
 	}
@@ -153,6 +156,20 @@ var _ = options.OpenStream
 // ---------------------------------------------------------------------
 // Tests.
 // ---------------------------------------------------------------------
+
+func TestClient_Call_FetchPackageTimeout(t *testing.T) {
+	fs := newFakeService()
+	fs.respData = []byte(`{"ok":true}`)
+	c := newWithService(fs, slog.Default())
+
+	_, err := c.Call(context.Background(), 1, tunnel.MethodFetchPackage, []byte(`{}`))
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	if fs.lastTimeout != fetchPackageRPCTimeout {
+		t.Errorf("lastTimeout = %v, want %v", fs.lastTimeout, fetchPackageRPCTimeout)
+	}
+}
 
 func TestClient_Call_Success(t *testing.T) {
 	fs := newFakeService()
