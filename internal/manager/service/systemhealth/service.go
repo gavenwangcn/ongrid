@@ -91,6 +91,7 @@ type Dependencies struct {
 	Incidents IncidentCounter
 	Edges     EdgeLister
 	LLM       LLMProviderResolver
+	Dify      URLProbe
 	HTTP      *http.Client
 }
 
@@ -106,6 +107,7 @@ type Config struct {
 	FrontierAddr        string
 	FrontierDisabled    bool
 	LLMConfigured       bool
+	DifyConfigured      bool
 	EmbeddingConfigured bool
 	QdrantURL           string
 	QdrantCollection    string
@@ -142,6 +144,7 @@ func (s *Service) Check(ctx context.Context, caller alertsvc.Caller) (*Report, e
 		s.checkAlerts(ctx, caller),
 		s.checkEdges(ctx),
 		s.checkLLM(ctx),
+		s.checkDify(ctx),
 		s.checkEmbedding(ctx),
 	}
 	summary := summarize(checks)
@@ -373,6 +376,21 @@ func (s *Service) checkLLM(ctx context.Context) Check {
 			return StatusDegraded, "LLM provider is not configured", nil
 		}
 		return StatusOK, "LLM provider key is configured", nil
+	})
+}
+
+func (s *Service) checkDify(ctx context.Context) Check {
+	return s.probe(ctx, "dify", "ai", "CheryGPT", func(ctx context.Context) (Status, string, map[string]any) {
+		if !s.cfg.DifyConfigured {
+			return StatusDegraded, "CheryGPT is not configured", nil
+		}
+		if s.deps.Dify == nil {
+			return StatusDegraded, "CheryGPT probe is not wired", nil
+		}
+		if err := s.deps.Dify.Probe(ctx); err != nil {
+			return StatusFailed, "CheryGPT probe failed: " + err.Error(), nil
+		}
+		return StatusOK, "CheryGPT chat-messages probe succeeded", nil
 	})
 }
 

@@ -85,6 +85,7 @@ type Handler struct {
 	tempo     URLProbe
 	webSearch WebSearchProbe
 	llmRouter LLMRouterInvalidator
+	dify      URLProbe
 }
 
 // NewHandler builds the handler. prom may be nil when ONGRID_PROM_ENABLED=false;
@@ -93,6 +94,10 @@ type Handler struct {
 func NewHandler(grafana GrafanaService, prom PromQuerier, loki URLProbe, tempo URLProbe, webSearch WebSearchProbe) *Handler {
 	return &Handler{grafana: grafana, prom: prom, loki: loki, tempo: tempo, webSearch: webSearch}
 }
+
+// SetDifyProbe wires the CheryGPT / Dify test endpoint. Optional — when
+// nil the /v1/integrations/dify/test route 503s.
+func (h *Handler) SetDifyProbe(p URLProbe) { h.dify = p }
 
 // SetLLMRouter wires the LLM provider catalog invalidator post-construction.
 // Optional — without it the /v1/integrations/llm/invalidate endpoint 503s,
@@ -118,6 +123,7 @@ func (h *Handler) Register(r chi.Router) {
 	r.Post("/v1/integrations/loki/test", h.testLoki)
 	r.Post("/v1/integrations/tempo/test", h.testTempo)
 	r.Post("/v1/integrations/websearch/test", h.testWebSearch)
+	r.Post("/v1/integrations/dify/test", h.testDify)
 	r.Post("/v1/integrations/llm/invalidate", h.invalidateLLM)
 	r.Get("/v1/observability/dashboards/{uid}", h.fetchDashboard)
 }
@@ -263,6 +269,26 @@ func (h *Handler) testWebSearch(w http.ResponseWriter, r *http.Request) {
 		"provider": provider,
 		"sample":   sample,
 	})
+}
+
+// testDify runs a minimal chat-messages probe against the configured
+// CheryGPT / Dify Service API.
+func (h *Handler) testDify(w http.ResponseWriter, r *http.Request) {
+	if !h.requireAdmin(w, r) {
+		return
+	}
+	if h.dify == nil {
+		writeJSON(w, http.StatusServiceUnavailable, errorBody{
+			Error: "dify probe not wired",
+			Code:  "dify-disabled",
+		})
+		return
+	}
+	if err := h.dify.Probe(r.Context()); err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // testTempo runs a /ready probe against the configured Tempo URL. Tempo

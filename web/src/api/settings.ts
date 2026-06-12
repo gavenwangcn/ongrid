@@ -113,3 +113,7 @@ export function testWebSearchConnection(): Promise<WebSearchProbeResult> {
 export function invalidateLLMRouter(): Promise<{ status: string }> {
   return request<{ status: string }>('POST', '/integrations/llm/invalidate');
 }
+
+export function testDifyConnection(): Promise<{ status: string }> {
+  return request<{ status: string }>('POST', '/integrations/dify/test');
+}

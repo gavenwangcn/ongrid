@@ -93,6 +93,7 @@ const CHECK_LABELS: Record<string, { zh: string; en: string }> = {
   alert_engine: { zh: '告警引擎', en: 'Alert engine' },
   edges: { zh: '边缘接入状态', en: 'Edge access state' },
   llm: { zh: 'LLM 模型', en: 'LLM provider' },
+  dify: { zh: 'CheryGPT', en: 'CheryGPT' },
   embedding: { zh: 'Embedding 模型', en: 'Embedding provider' },
 };
 

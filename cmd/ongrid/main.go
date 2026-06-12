@@ -485,8 +485,34 @@ func main() {
 		}()
 	}
 
-	// LLM client. Resolver lets admin edits to system_settings take effect
-	// on the next Chat call (cache TTL = 60s) without a manager restart.
+	// LLM client. OpenAI-compatible providers (OpenAI / Anthropic / Zhipu /
+	// Gemini / DeepSeek / Kimi / custom) take priority whenever any of them
+	// is configured. CheryGPT / Dify (/v1/chat-messages) is used only as a
+	// fallback when none of those providers are available. DB-backed
+	// system_settings.llm.* rows override env and power the settings UI.
+	var llmRouter *llm.MultiClient
+	var llmClient llm.Client
+	var llmSettingsResolver *managerbizsetting.LLMSettingsResolver
+
+	envHasStandardLLM := envHasStandardLLMProvider(cfg)
+	useDifyFallback := !envHasStandardLLM && cfg.Dify.Configured()
+	difyModel := firstNonEmpty(cfg.Dify.Model, "advanced-chat")
+	difyEnvCfg := llm.DifyConfig{
+		APIKey:        cfg.Dify.APIKey,
+		BaseURL:       cfg.Dify.BaseURL,
+		User:          cfg.Dify.User,
+		InputsContent: cfg.Dify.InputsContent,
+		InputsOnline:  cfg.Dify.InputsOnline,
+		Model:         difyModel,
+	}
+	difyExtras := managerbizsetting.DifyEnvDefaults{
+		User:          cfg.Dify.User,
+		InputsContent: cfg.Dify.InputsContent,
+		InputsOnline:  cfg.Dify.InputsOnline,
+	}
+
+	// Resolver lets admin edits to system_settings take effect on the
+	// next Chat call (cache TTL = 60s) without a manager restart.
 	// Empty resolver fields fall back to cfg.OpenAI.
 	llmResolver := newLLMResolver(settingSvc)
 	openaiClient := llm.NewWithResolver(
@@ -496,14 +522,10 @@ func main() {
 		reg,
 	)
 
-	// Multi-provider router (ChatInput model selector). The OpenAI
-	// sub-client uses the resolver-aware path so admin edits keep taking
-	// effect; the other providers (Anthropic / Zhipu / Gemini /
-	// DeepSeek / Kimi) seed from env here and then read live values via
-	// the LLMSettingsResolver wired below, so /settings/llm edits
-	// propagate within ~60s. A provider with empty APIKey is silently
-	// dropped from the catalog so it never appears in the SPA selector.
 	providerCfgs := []llm.ProviderConfig{}
+	defaultProvider := cfg.LLM.Default
+	var fallbackClient llm.Client = openaiClient
+
 	if cfg.OpenAI.APIKey != "" {
 		providerCfgs = append(providerCfgs, llm.ProviderConfig{
 			ID: "openai", Label: "OpenAI",
@@ -558,50 +580,61 @@ func main() {
 			Models:  cfg.LLM.Kimi.Models,
 		})
 	}
-	llmRouter := llm.NewMultiClient(providerCfgs, cfg.LLM.Default, openaiClient)
+	if useDifyFallback {
+		providerCfgs = append(providerCfgs, llm.ProviderConfig{
+			ID:      llm.ProviderDify,
+			Label:   "CheryGPT",
+			APIKey:  cfg.Dify.APIKey,
+			Model:   difyModel,
+			BaseURL: cfg.Dify.BaseURL,
+			Models:  []string{difyModel},
+		})
+		defaultProvider = llm.ProviderDify
+		fallbackClient = llm.NewDifyClient(difyEnvCfg, nil, reg)
+	}
+	llmRouter = llm.NewMultiClient(providerCfgs, defaultProvider, fallbackClient)
 
 	// Seed per-provider LLM settings rows from env on first boot so the
-	// 设置 → 集成 → LLM 模型 page has something to show out of the box.
-	// SetIfAbsent honours prior admin edits across restarts. Models lists
-	// are stored as JSON arrays (matches the on-the-wire contract used
-	// by the integration handler).
-	for _, seed := range []struct {
+	// 设置 → LLM 模型 page has something to show out of the box.
+	llmDefaultProviderSeed := cfg.LLM.Default
+	if useDifyFallback {
+		llmDefaultProviderSeed = llm.ProviderDify
+	}
+	llmSeedRows := []struct {
 		key       string
 		val       string
 		sensitive bool
 	}{
-		// Anthropic
+		{settingmodel.KeyDifyAPIKey, cfg.Dify.APIKey, true},
+		{settingmodel.KeyDifyBaseURL, cfg.Dify.BaseURL, false},
+		{settingmodel.KeyDifyDefaultModel, difyModel, false},
+		{settingmodel.KeyDifyUser, cfg.Dify.User, false},
+		{settingmodel.KeyDifyInputsContent, cfg.Dify.InputsContent, false},
+		{settingmodel.KeyDifyInputsOnline, cfg.Dify.InputsOnline, false},
 		{settingmodel.KeyAnthropicAPIKey, cfg.LLM.Anthropic.APIKey, true},
 		{settingmodel.KeyAnthropicBaseURL, cfg.LLM.Anthropic.BaseURL, false},
 		{settingmodel.KeyAnthropicDefaultModel, cfg.LLM.Anthropic.Model, false},
-		// Zhipu
 		{settingmodel.KeyZhipuAPIKey, cfg.LLM.Zhipu.APIKey, true},
 		{settingmodel.KeyZhipuBaseURL, cfg.LLM.Zhipu.BaseURL, false},
 		{settingmodel.KeyZhipuDefaultModel, cfg.LLM.Zhipu.Model, false},
-		// Gemini
 		{settingmodel.KeyGeminiAPIKey, cfg.LLM.Gemini.APIKey, true},
 		{settingmodel.KeyGeminiBaseURL, cfg.LLM.Gemini.BaseURL, false},
 		{settingmodel.KeyGeminiDefaultModel, cfg.LLM.Gemini.Model, false},
-		// DeepSeek
 		{settingmodel.KeyDeepSeekAPIKey, cfg.LLM.DeepSeek.APIKey, true},
 		{settingmodel.KeyDeepSeekBaseURL, cfg.LLM.DeepSeek.BaseURL, false},
 		{settingmodel.KeyDeepSeekDefaultModel, cfg.LLM.DeepSeek.Model, false},
-		// Kimi (Moonshot)
 		{settingmodel.KeyKimiAPIKey, cfg.LLM.Kimi.APIKey, true},
 		{settingmodel.KeyKimiBaseURL, cfg.LLM.Kimi.BaseURL, false},
 		{settingmodel.KeyKimiDefaultModel, cfg.LLM.Kimi.Model, false},
-		// OpenAI's _default_model expansion (the legacy
-		// openai_api_key / openai_model / openai_base_url rows are
-		// already seeded above).
 		{settingmodel.KeyOpenAIDefaultModel, firstNonEmpty(cfg.OpenAI.Model, "gpt-5.4"), false},
-		// Cluster-wide default provider hint.
-		{settingmodel.KeyLLMDefaultProvider, cfg.LLM.Default, false},
-	} {
+		{settingmodel.KeyLLMDefaultProvider, llmDefaultProviderSeed, false},
+	}
+	for _, seed := range llmSeedRows {
 		if err := settingSvc.SetIfAbsent(rootCtx, settingmodel.CategoryLLM, seed.key, seed.val, seed.sensitive); err != nil {
 			log.Warn("seed llm setting", slog.String("key", seed.key), slog.Any("err", err))
 		}
 	}
-	for _, seed := range []struct {
+	llmModelSeeds := []struct {
 		key  string
 		list []string
 	}{
@@ -611,7 +644,14 @@ func main() {
 		{settingmodel.KeyGeminiModels, cfg.LLM.Gemini.Models},
 		{settingmodel.KeyDeepSeekModels, cfg.LLM.DeepSeek.Models},
 		{settingmodel.KeyKimiModels, cfg.LLM.Kimi.Models},
-	} {
+	}
+	if cfg.Dify.Configured() {
+		llmModelSeeds = append(llmModelSeeds, struct {
+			key  string
+			list []string
+		}{settingmodel.KeyDifyModels, []string{difyModel}})
+	}
+	for _, seed := range llmModelSeeds {
 		if len(seed.list) == 0 {
 			continue
 		}
@@ -625,11 +665,14 @@ func main() {
 		}
 	}
 
-	// Wire the dynamic provider catalog. The resolver reads from the
-	// same system_settings.llm.* rows the integration UI edits, so an
-	// admin save propagates to the chat surface within ~60s without a
-	// manager restart. Empty rows fall back to the env defaults below.
 	llmEnvDefaults := map[string]managerbizsetting.EnvProviderDefaults{
+		settingmodel.LLMProviderDify: {
+			Label:   "CheryGPT",
+			APIKey:  cfg.Dify.APIKey,
+			Model:   difyModel,
+			BaseURL: cfg.Dify.BaseURL,
+			Models:  []string{difyModel},
+		},
 		settingmodel.LLMProviderOpenAI: {
 			Label:   "OpenAI",
 			APIKey:  cfg.OpenAI.APIKey,
@@ -673,14 +716,16 @@ func main() {
 			Models:  cfg.LLM.Kimi.Models,
 		},
 	}
-	llmSettingsResolver := managerbizsetting.NewLLMSettingsResolver(settingSvc, llmEnvDefaults, cfg.LLM.Default)
+	envDefaultProvider := llmDefaultProviderSeed
+	llmSettingsResolver = managerbizsetting.NewLLMSettingsResolver(settingSvc, llmEnvDefaults, envDefaultProvider)
 	llmRouter.SetProvidersResolver(llmSettingsResolver)
-
-	// All downstream agent/investigator wiring takes the router so a
-	// per-request Provider override flows through; absent that, behaviour
-	// matches the legacy single-provider path (router falls back to
-	// openaiClient when no providers are configured).
-	llmClient := llm.Client(llmRouter)
+	llmRouter.SetDifyConfigResolver(managerbizsetting.NewDifyConfigAdapter(llmSettingsResolver, difyEnvCfg, difyExtras))
+	llmClient = llmRouter
+	if useDifyFallback {
+		log.Info("llm: CheryGPT / Dify fallback backend enabled (no standard LLM provider configured)",
+			slog.String("base_url", cfg.Dify.BaseURL),
+			slog.String("model_label", difyModel))
+	}
 
 	// manager/edge biz + service + server.
 	edgeRepo := manageredgedata.NewRepo(db)
@@ -911,8 +956,10 @@ func main() {
 	// Web search probe — same WebSearchResolver the skill uses, so a
 	// passing probe means the skill itself will work.
 	webSearchProbe := managerbizsetting.NewWebSearchProbe(managerbizsetting.NewWebSearchResolver(settingSvc))
+	difyProbe := managerbizsetting.NewDifyURLProbe(llmSettingsResolver, difyEnvCfg, difyExtras)
 	integrationHandler = managerserverintegration.NewHandler(grafanaSvc, promTester, lokiProbe, tempoProbe, webSearchProbe)
 	integrationHandler.SetLLMRouter(llmRouter)
+	integrationHandler.SetDifyProbe(difyProbe)
 
 	// Prom-backed metric read handler (PR-F replacement for the MySQL
 	// fast path). When prom is disabled the handler still installs but
@@ -1597,7 +1644,8 @@ func main() {
 		NotifyCooldown:      cfg.Alert.Cooldown,
 		FrontierAddr:        cfg.FrontierClient.Addr,
 		FrontierDisabled:    cfg.FrontierClient.Disabled,
-		LLMConfigured:       cfg.OpenAI.APIKey != "",
+		LLMConfigured:       envHasStandardLLM || cfg.Dify.Configured(),
+		DifyConfigured:      true,
 		EmbeddingConfigured: embErr == nil,
 		QdrantURL:           qdrantURL,
 		QdrantCollection:    managerbizknowledge.CollectionName,
@@ -1611,6 +1659,7 @@ func main() {
 		Incidents: alertSvc,
 		Edges:     edgeSvc,
 		LLM:       llmSettingsResolver,
+		Dify:      difyProbe,
 	})
 	systemHealthHandler := managerserversystemhealth.NewHandler(systemHealthSvc)
 
@@ -2140,6 +2189,18 @@ func (r *llmResolverFunc) Resolve(ctx context.Context) (string, string, string, 
 	return apiKey, model, baseURL, nil
 }
 
+// envHasStandardLLMProvider reports whether any OpenAI-compatible LLM
+// provider is configured via environment variables at boot. DB-only
+// custom-provider keys are handled later by LLMSettingsResolver.
+func envHasStandardLLMProvider(cfg config.Config) bool {
+	return cfg.OpenAI.APIKey != "" ||
+		cfg.LLM.Anthropic.APIKey != "" ||
+		cfg.LLM.Zhipu.APIKey != "" ||
+		cfg.LLM.Gemini.APIKey != "" ||
+		cfg.LLM.DeepSeek.APIKey != "" ||
+		cfg.LLM.Kimi.APIKey != ""
+}
+
 // firstNonEmpty returns the first non-empty string from its arguments,
 // falling back to "" if all are empty. Used at the LLM provider wiring
 // site to layer "config → env default → hard-coded default" without
@@ -2176,6 +2237,7 @@ func knownLLMProviderIDs() []string {
 		llm.ProviderDeepSeek,
 		llm.ProviderKimi,
 		llm.ProviderCustom,
+		llm.ProviderDify,
 	}
 }
 

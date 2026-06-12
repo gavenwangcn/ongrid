@@ -120,6 +120,14 @@ func allProviderKeys() []providerKeys {
 			models:       model.KeyCustomModels,
 			defaultModel: model.KeyCustomDefaultModel,
 		},
+		{
+			id:           model.LLMProviderDify,
+			label:        "CheryGPT",
+			apiKey:       model.KeyDifyAPIKey,
+			baseURL:      model.KeyDifyBaseURL,
+			models:       model.KeyDifyModels,
+			defaultModel: model.KeyDifyDefaultModel,
+		},
 	}
 }
 
@@ -149,10 +157,11 @@ func (r *LLMSettingsResolver) ResolveProviders(ctx context.Context) ([]llm.Provi
 		if strings.TrimSpace(baseURL) == "" {
 			baseURL = def.BaseURL
 		}
-		// A custom provider has no default endpoint — without a base URL the
-		// SDK would silently fall back to OpenAI's, sending the operator's key
-		// to the wrong host. Skip until a base URL is supplied.
-		if pk.id == model.LLMProviderCustom && strings.TrimSpace(baseURL) == "" {
+		// A custom / Dify provider has no default endpoint — without a base
+		// URL the SDK would silently fall back to OpenAI's (custom) or fail
+		// chat-messages routing (dify). Skip until a base URL is supplied.
+		if (pk.id == model.LLMProviderCustom || pk.id == model.LLMProviderDify) &&
+			strings.TrimSpace(baseURL) == "" {
 			continue
 		}
 
@@ -214,13 +223,96 @@ func (r *LLMSettingsResolver) ResolveProviders(ctx context.Context) ([]llm.Provi
 		})
 	}
 
+	// CheryGPT / Dify is a fallback backend: only enter the active catalog
+	// when no OpenAI-compatible provider (openai / anthropic / zhipu / gemini /
+	// deepseek / kimi / custom) is configured anywhere.
+	out, def := applyLLMPriority(out)
+
 	// Default provider: DB > env > "" (router picks first sorted).
 	dbDefault, _, _ := r.svc.Get(ctx, model.CategoryLLM, model.KeyLLMDefaultProvider)
-	def := strings.TrimSpace(dbDefault)
-	if def == "" {
-		def = strings.TrimSpace(r.envDefaultProvider)
+	dbDef := strings.TrimSpace(dbDefault)
+	if dbDef == "" {
+		dbDef = strings.TrimSpace(r.envDefaultProvider)
+	}
+	if dbDef != "" {
+		for _, p := range out {
+			if p.ID == dbDef {
+				def = dbDef
+				break
+			}
+		}
+	}
+	if def == "" && len(out) > 0 {
+		def = out[0].ID
 	}
 	return out, def, nil
+}
+
+// applyLLMPriority keeps Dify out of the routing catalog whenever any
+// standard (OpenAI-compatible) provider is configured. Dify only remains
+// when it is the sole usable backend.
+func applyLLMPriority(providers []llm.ProviderConfig) ([]llm.ProviderConfig, string) {
+	var standard []llm.ProviderConfig
+	var dify llm.ProviderConfig
+	hasDify := false
+	for _, p := range providers {
+		if p.ID == model.LLMProviderDify {
+			dify = p
+			hasDify = true
+			continue
+		}
+		standard = append(standard, p)
+	}
+	if len(standard) > 0 {
+		return standard, ""
+	}
+	if hasDify {
+		return []llm.ProviderConfig{dify}, model.LLMProviderDify
+	}
+	return nil, ""
+}
+
+// DifyEnvDefaults is the env-seeded fallback for CheryGPT / Dify extras
+// (user + App inputs). API key / base URL / model flow through the
+// standard per-provider keys above.
+type DifyEnvDefaults struct {
+	User          string
+	InputsContent string
+	InputsOnline  string
+}
+
+// ResolveDifyConfig merges env defaults with system_settings.llm.dify_*
+// rows into an llm.DifyConfig suitable for NewDifyClient / health probes.
+func (r *LLMSettingsResolver) ResolveDifyConfig(ctx context.Context, env llm.DifyConfig, extras DifyEnvDefaults) llm.DifyConfig {
+	if r == nil || r.svc == nil {
+		return env
+	}
+	out := env
+	if apiKey, _, _ := r.svc.Get(ctx, model.CategoryLLM, model.KeyDifyAPIKey); strings.TrimSpace(apiKey) != "" {
+		out.APIKey = apiKey
+	}
+	if baseURL, _, _ := r.svc.Get(ctx, model.CategoryLLM, model.KeyDifyBaseURL); strings.TrimSpace(baseURL) != "" {
+		out.BaseURL = baseURL
+	}
+	if user, _, _ := r.svc.Get(ctx, model.CategoryLLM, model.KeyDifyUser); strings.TrimSpace(user) != "" {
+		out.User = user
+	} else if strings.TrimSpace(out.User) == "" {
+		out.User = extras.User
+	}
+	if content, _, _ := r.svc.Get(ctx, model.CategoryLLM, model.KeyDifyInputsContent); strings.TrimSpace(content) != "" {
+		out.InputsContent = content
+	} else if strings.TrimSpace(out.InputsContent) == "" {
+		out.InputsContent = extras.InputsContent
+	}
+	if online, _, _ := r.svc.Get(ctx, model.CategoryLLM, model.KeyDifyInputsOnline); strings.TrimSpace(online) != "" {
+		out.InputsOnline = online
+	} else if strings.TrimSpace(out.InputsOnline) == "" {
+		out.InputsOnline = extras.InputsOnline
+	}
+	if modelLabel, _, _ := r.svc.Get(ctx, model.CategoryLLM, model.KeyDifyDefaultModel); strings.TrimSpace(modelLabel) != "" {
+		out.Model = modelLabel
+	}
+	return out
 }
 
 // EncodeModelsList serialises a closed-set of model slugs into the JSON

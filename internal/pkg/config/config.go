@@ -34,6 +34,7 @@ type Config struct {
 	DB             DBConfig
 	JWT            JWTConfig
 	OpenAI         OpenAIConfig
+	Dify           DifyConfig
 	LLM            LLMConfig
 	Admin          AdminConfig
 	Edge           EdgeConfig
@@ -276,6 +277,25 @@ type OpenAIConfig struct {
 	BaseURL string
 }
 
+// DifyConfig holds credentials for a Dify Service API backend (e.g.
+// CheryGPT POST /v1/chat-messages). When APIKey and BaseURL are both
+// set, the manager routes all LLM traffic through this backend instead
+// of the OpenAI-compatible multi-provider stack.
+type DifyConfig struct {
+	APIKey        string
+	BaseURL       string
+	User          string
+	InputsContent string
+	InputsOnline  string
+	Model         string
+}
+
+// Configured reports whether the Dify backend should replace the
+// OpenAI-compatible LLM stack at startup.
+func (d DifyConfig) Configured() bool {
+	return strings.TrimSpace(d.APIKey) != "" && strings.TrimSpace(d.BaseURL) != ""
+}
+
 // LLMProviderConfig is one configured LLM upstream beyond OpenAI. The
 // SPA chat input's per-message model selector is populated from the
 // configured-and-non-empty subset of these. All fields env-derived to
@@ -400,6 +420,13 @@ func Load() (*Config, error) {
 	c.OpenAI.APIKey = getEnv("ONGRID_OPENAI_API_KEY", "")
 	c.OpenAI.Model = getEnv("ONGRID_OPENAI_MODEL", "gpt-5.4")
 	c.OpenAI.BaseURL = getEnv("ONGRID_OPENAI_BASE_URL", "")
+
+	c.Dify.APIKey = getEnv("ONGRID_DIFY_API_KEY", "")
+	c.Dify.BaseURL = getEnv("ONGRID_DIFY_BASE_URL", "")
+	c.Dify.User = getEnv("ONGRID_DIFY_USER", "ongrid")
+	c.Dify.InputsContent = getEnv("ONGRID_DIFY_INPUTS_CONTENT", "输入数据源")
+	c.Dify.InputsOnline = getEnv("ONGRID_DIFY_INPUTS_ONLINE", "1")
+	c.Dify.Model = getEnv("ONGRID_DIFY_MODEL", "advanced-chat")
 
 	// Multi-provider LLM config (HLD: ChatInput model selector). Each
 	// provider is gated by its own API key — empty key = provider not

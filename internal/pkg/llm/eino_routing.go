@@ -48,6 +48,8 @@ const (
 	// entirely from settings (base_url + key + models). Routing is
 	// id-agnostic, so it dispatches like any other provider.
 	ProviderCustom = "custom"
+	// ProviderDify is the Dify Service API backend (non-OpenAI).
+	ProviderDify = "dify"
 )
 
 // ErrUnknownProvider is returned when WithProvider names a provider that

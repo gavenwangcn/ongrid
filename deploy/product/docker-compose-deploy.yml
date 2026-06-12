@@ -125,6 +125,14 @@ services:
       ONGRID_OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ONGRID_OPENAI_MODEL: ${OPENAI_MODEL:-}
       ONGRID_OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      # Dify Service API (CheryGPT). When API_KEY + BASE_URL are both set,
+      # manager routes all LLM traffic through /v1/chat-messages instead of OpenAI.
+      ONGRID_DIFY_API_KEY: ${DIFY_API_KEY:-}
+      ONGRID_DIFY_BASE_URL: ${DIFY_BASE_URL:-}
+      ONGRID_DIFY_USER: ${DIFY_USER:-ongrid}
+      ONGRID_DIFY_INPUTS_CONTENT: ${DIFY_INPUTS_CONTENT:-输入数据源}
+      ONGRID_DIFY_INPUTS_ONLINE: ${DIFY_INPUTS_ONLINE:-1}
+      ONGRID_DIFY_MODEL: ${DIFY_MODEL:-advanced-chat}
       ONGRID_ZHIPU_API_KEY: ${ONGRID_ZHIPU_API_KEY:-}
       ONGRID_ZHIPU_MODEL: ${ONGRID_ZHIPU_MODEL:-}
       ONGRID_ZHIPU_BASE_URL: ${ONGRID_ZHIPU_BASE_URL:-}

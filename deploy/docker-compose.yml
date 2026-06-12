@@ -69,6 +69,12 @@ services:
       ONGRID_OPENAI_API_KEY: ${ONGRID_OPENAI_API_KEY:-}
       ONGRID_OPENAI_MODEL: ${ONGRID_OPENAI_MODEL:-gpt-4o}
       ONGRID_OPENAI_BASE_URL: ${ONGRID_OPENAI_BASE_URL:-}
+      ONGRID_DIFY_API_KEY: ${ONGRID_DIFY_API_KEY:-}
+      ONGRID_DIFY_BASE_URL: ${ONGRID_DIFY_BASE_URL:-}
+      ONGRID_DIFY_USER: ${ONGRID_DIFY_USER:-ongrid}
+      ONGRID_DIFY_INPUTS_CONTENT: ${ONGRID_DIFY_INPUTS_CONTENT:-输入数据源}
+      ONGRID_DIFY_INPUTS_ONLINE: ${ONGRID_DIFY_INPUTS_ONLINE:-1}
+      ONGRID_DIFY_MODEL: ${ONGRID_DIFY_MODEL:-advanced-chat}
       # AIOps agent kernel. "graph" enables the eino graph kernel +
       # SkillRegistry.Resolve activation-keyword filter (skills with
       # activation:keyword stay out of the prompt unless the user query

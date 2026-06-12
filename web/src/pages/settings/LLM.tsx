@@ -5,13 +5,14 @@
 // integrations 里以 LLMCard 形式存在。这次拆出来，让 /settings/llm
 // 直接进多 provider 配置（更对应它的菜单名字）。
 import { useCallback, useEffect, useState } from 'react';
-import { Check, Eye, EyeOff, Loader2, Plus, Save, Sparkles, Star, Trash2 } from 'lucide-react';
+import { Check, Eye, EyeOff, Loader2, Plug, Plus, Save, Sparkles, Star, Trash2 } from 'lucide-react';
 import { ApiError } from '@/api/client';
 import {
   invalidateLLMRouter,
   listSettings,
   revealSetting,
   setSetting,
+  testDifyConnection,
   type SystemSetting,
 } from '@/api/settings';
 import { Button, Card, Chip } from '@/components/ui';
@@ -19,7 +20,7 @@ import { ProviderIcon } from '@/components/icons/Provider';
 import { cn } from '@/lib/cn';
 import { useI18n } from '@/i18n/locale';
 
-type LLMProviderID = 'openai' | 'anthropic' | 'zhipu' | 'gemini' | 'deepseek' | 'kimi' | 'custom';
+type LLMProviderID = 'dify' | 'openai' | 'anthropic' | 'zhipu' | 'gemini' | 'deepseek' | 'kimi' | 'custom';
 
 type LLMProviderForm = {
   api_key: string;
@@ -41,6 +42,8 @@ type LLMProviderMeta = {
   // shown prominently (not under Advanced), and it's the one place we say
   // "OpenAI-compatible" out loud.
   custom?: boolean;
+  // dify = CheryGPT / Dify Service API (non-OpenAI chat-messages).
+  dify?: boolean;
   // system_settings.llm.<key> — 列在这里让 loader / saver 直接查
   keyAPIKey: string;
   keyBaseURL: string;
@@ -49,6 +52,21 @@ type LLMProviderMeta = {
 };
 
 const LLM_PROVIDERS: LLMProviderMeta[] = [
+  {
+    id: 'dify',
+    dify: true,
+    label: 'CheryGPT',
+    labelEn: 'CheryGPT',
+    hintZh: '奇瑞 Dify Service API（/v1/chat-messages）。仅当上方所有 OpenAI 兼容提供商均未配置时才会作为 LLM 后端启用；任一标准模型源已配置时 CheryGPT 不会参与路由。',
+    hintEn: 'Chery Dify Service API (/v1/chat-messages). Used only when no OpenAI-compatible provider above is configured; CheryGPT is excluded from routing once any standard model source is set.',
+    baseURLPlaceholderZh: 'https://uat.cherygpt.com/v1',
+    baseURLPlaceholderEn: 'https://uat.cherygpt.com/v1',
+    modelPlaceholder: 'advanced-chat',
+    keyAPIKey: 'dify_api_key',
+    keyBaseURL: 'dify_base_url',
+    keyModels: 'dify_models',
+    keyDefaultModel: 'dify_default_model',
+  },
   {
     id: 'openai',
     label: 'OpenAI',
@@ -152,8 +170,8 @@ const LLM_PROVIDERS: LLMProviderMeta[] = [
 // can reach over the public internet without VPN; en-US flips it so
 // OpenAI / Anthropic / Gemini head the list. Falls back to LLM_PROVIDERS
 // order for an unknown locale.
-const PROVIDER_ORDER_ZH = ['zhipu', 'deepseek', 'kimi', 'openai', 'anthropic', 'gemini', 'custom'] as const;
-const PROVIDER_ORDER_EN = ['openai', 'anthropic', 'gemini', 'zhipu', 'deepseek', 'kimi', 'custom'] as const;
+const PROVIDER_ORDER_ZH = ['dify', 'zhipu', 'deepseek', 'kimi', 'openai', 'anthropic', 'gemini', 'custom'] as const;
+const PROVIDER_ORDER_EN = ['dify', 'openai', 'anthropic', 'gemini', 'zhipu', 'deepseek', 'kimi', 'custom'] as const;
 
 function orderedProviders(locale: string): LLMProviderMeta[] {
   const order = locale === 'zh-CN' ? PROVIDER_ORDER_ZH : PROVIDER_ORDER_EN;
@@ -200,10 +218,353 @@ export default function SettingsLLM() {
         <b>{tr('~60 秒内自动生效', 'within ~60 seconds')}</b>
         {tr('，保存时也会立刻让 manager 失效缓存（通常 1 秒内）。留空 API key = 该提供商不出现在聊天页下拉里。', ', and saving also instantly invalidates the manager cache (usually within 1 s). Leaving the API key blank hides the provider from the chat dropdown.')}
       </div>
-      {providers.map((meta) => (
-        <LLMProviderCard key={meta.id} meta={meta} />
-      ))}
+      {providers.map((meta) =>
+        meta.dify ? (
+          <DifyProviderCard key={meta.id} meta={meta} />
+        ) : (
+          <LLMProviderCard key={meta.id} meta={meta} />
+        ),
+      )}
     </div>
+  );
+}
+
+type DifyProviderForm = LLMProviderForm & {
+  user: string;
+  inputs_content: string;
+  inputs_online: string;
+};
+
+const emptyDifyForm: DifyProviderForm = {
+  ...emptyLLMForm,
+  user: 'ongrid',
+  inputs_content: '输入数据源',
+  inputs_online: '1',
+};
+
+function DifyProviderCard({ meta }: { meta: LLMProviderMeta }) {
+  const { tr } = useI18n();
+  const [server, setServer] = useState<DifyProviderForm>(emptyDifyForm);
+  const [draft, setDraft] = useState<DifyProviderForm>(emptyDifyForm);
+  const [revealed, setRevealed] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testOk, setTestOk] = useState(false);
+  const [savedOk, setSavedOk] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [newModel, setNewModel] = useState('');
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const r = await listSettings('llm');
+      const next: DifyProviderForm = { ...emptyDifyForm, models: [] };
+      for (const it of r.items as SystemSetting[]) {
+        if (it.key === meta.keyBaseURL) next.base_url = it.value ?? '';
+        if (it.key === meta.keyDefaultModel) next.default_model = it.value ?? '';
+        if (it.key === 'dify_user') next.user = it.value ?? next.user;
+        if (it.key === 'dify_inputs_content') next.inputs_content = it.value ?? next.inputs_content;
+        if (it.key === 'dify_inputs_online') next.inputs_online = it.value ?? next.inputs_online;
+        if (it.key === meta.keyModels && it.value) {
+          try {
+            const parsed = JSON.parse(it.value);
+            if (Array.isArray(parsed)) {
+              next.models = parsed.filter((s) => typeof s === 'string');
+            }
+          } catch {
+            /* keep [] */
+          }
+        }
+      }
+      const apiRow = (r.items as SystemSetting[]).find((it) => it.key === meta.keyAPIKey);
+      if (apiRow && (apiRow.value ?? '') !== '') {
+        try {
+          const real = await revealSetting('llm', meta.keyAPIKey);
+          next.api_key = real.value ?? '';
+        } catch {
+          /* leave empty */
+        }
+      }
+      setServer(next);
+      setDraft(next);
+      setRevealed(false);
+      setTestOk(false);
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : (e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, [meta]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const dirty =
+    draft.api_key !== server.api_key ||
+    draft.base_url !== server.base_url ||
+    draft.default_model !== server.default_model ||
+    draft.user !== server.user ||
+    draft.inputs_content !== server.inputs_content ||
+    draft.inputs_online !== server.inputs_online ||
+    JSON.stringify(draft.models) !== JSON.stringify(server.models);
+
+  const update = <K extends keyof DifyProviderForm>(k: K, v: DifyProviderForm[K]) => {
+    setSavedOk(false);
+    setTestOk(false);
+    setDraft((cur) => ({ ...cur, [k]: v }));
+  };
+
+  const addModel = () => {
+    const m = newModel.trim();
+    if (!m || draft.models.includes(m)) {
+      setNewModel('');
+      return;
+    }
+    const nextModels = [...draft.models, m];
+    setDraft((cur) => ({
+      ...cur,
+      models: nextModels,
+      default_model: cur.default_model || m,
+    }));
+    setSavedOk(false);
+    setTestOk(false);
+    setNewModel('');
+  };
+
+  const removeModel = (m: string) => {
+    setSavedOk(false);
+    setTestOk(false);
+    setDraft((cur) => {
+      const next = cur.models.filter((x) => x !== m);
+      let defM = cur.default_model;
+      if (defM === m) defM = next[0] ?? '';
+      return { ...cur, models: next, default_model: defM };
+    });
+  };
+
+  const setDefault = (m: string) => {
+    setSavedOk(false);
+    setTestOk(false);
+    setDraft((cur) => ({ ...cur, default_model: m }));
+  };
+
+  const submit = async () => {
+    setSaving(true);
+    setErr(null);
+    try {
+      if (draft.api_key !== server.api_key) {
+        await setSetting('llm', meta.keyAPIKey, draft.api_key, true);
+      }
+      if (draft.base_url !== server.base_url) {
+        await setSetting('llm', meta.keyBaseURL, draft.base_url, false);
+      }
+      if (draft.default_model !== server.default_model) {
+        await setSetting('llm', meta.keyDefaultModel, draft.default_model, false);
+      }
+      if (draft.user !== server.user) {
+        await setSetting('llm', 'dify_user', draft.user, false);
+      }
+      if (draft.inputs_content !== server.inputs_content) {
+        await setSetting('llm', 'dify_inputs_content', draft.inputs_content, false);
+      }
+      if (draft.inputs_online !== server.inputs_online) {
+        await setSetting('llm', 'dify_inputs_online', draft.inputs_online, false);
+      }
+      if (JSON.stringify(draft.models) !== JSON.stringify(server.models)) {
+        await setSetting('llm', meta.keyModels, JSON.stringify(draft.models), false);
+      }
+      try {
+        await invalidateLLMRouter();
+      } catch {
+        /* TTL fallback */
+      }
+      await refresh();
+      setSavedOk(true);
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : (e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const runTest = async () => {
+    setTesting(true);
+    setErr(null);
+    setTestOk(false);
+    try {
+      if (dirty) {
+        await submit();
+      }
+      await testDifyConnection();
+      setTestOk(true);
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : (e as Error).message);
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const configured = server.api_key.trim() !== '' && server.base_url.trim() !== '';
+
+  return (
+    <Card className="p-5">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <ProviderIcon provider={meta.id} size={16} />
+        <h2 className="text-sm font-medium text-zinc-100">{tr(meta.label, meta.labelEn ?? meta.label)}</h2>
+        {configured ? <Chip tone="success">{tr('已配置', 'Configured')}</Chip> : <Chip>{tr('未配置', 'Not configured')}</Chip>}
+      </div>
+      <p className="mb-4 text-[11px] text-zinc-500">{tr(meta.hintZh, meta.hintEn)}</p>
+
+      {loading ? (
+        <div className="flex h-20 items-center justify-center text-sm text-zinc-500">
+          <Loader2 size={14} className="mr-2 animate-spin" /> {tr('加载中…', 'Loading…')}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <FieldRow
+              label="API Key"
+              hint={tr('Dify App API key（Bearer token）', 'Dify app API key (Bearer token)')}
+              sensitive
+              revealed={revealed}
+              onToggleReveal={() => setRevealed((v) => !v)}
+              value={draft.api_key}
+              onChange={(v) => update('api_key', v)}
+              placeholder="app-..."
+            />
+            <FieldRow
+              label={tr('Base URL（必填）', 'Base URL (required)')}
+              hint={tr('CheryGPT 根地址，需含 /v1', 'CheryGPT root URL, must include /v1')}
+              value={draft.base_url}
+              onChange={(v) => update('base_url', v)}
+              placeholder={tr(meta.baseURLPlaceholderZh, meta.baseURLPlaceholderEn)}
+            />
+          </div>
+
+          <details className="rounded-md border border-zinc-800/60 bg-zinc-950/30 px-3 py-2">
+            <summary className="cursor-pointer select-none text-[11px] text-zinc-500 hover:text-zinc-300">
+              {tr('高级 · Dify App 参数', 'Advanced · Dify app inputs')}
+            </summary>
+            <div className="mt-2 grid grid-cols-1 gap-3 md:grid-cols-3">
+              <FieldRow
+                label="User"
+                hint={tr('Dify user 标识', 'Dify user id')}
+                value={draft.user}
+                onChange={(v) => update('user', v)}
+                placeholder="ongrid"
+              />
+              <FieldRow
+                label={tr('inputs.content', 'inputs.content')}
+                value={draft.inputs_content}
+                onChange={(v) => update('inputs_content', v)}
+                placeholder={tr('输入数据源', 'Input data source')}
+              />
+              <FieldRow
+                label={tr('inputs.online', 'inputs.online')}
+                value={draft.inputs_online}
+                onChange={(v) => update('inputs_online', v)}
+                placeholder="1"
+              />
+            </div>
+          </details>
+
+          <div>
+            <span className="mb-1 block text-xs text-zinc-400">{tr('模型列表（显示标签）', 'Models (display labels)')}</span>
+            {draft.models.length === 0 ? (
+              <p className="rounded border border-dashed border-zinc-800 bg-zinc-950/40 px-3 py-2 text-[11px] text-zinc-600">
+                {tr(`还没添加模型 — 在下面输入框里加一个，例 ${meta.modelPlaceholder}`, `No models yet — add one below, e.g. ${meta.modelPlaceholder}`)}
+              </p>
+            ) : (
+              <ul className="space-y-1">
+                {draft.models.map((m) => {
+                  const isDefault = draft.default_model === m;
+                  return (
+                    <li
+                      key={m}
+                      className="flex items-center gap-2 rounded border border-zinc-800 bg-zinc-950/40 px-2.5 py-1.5 text-[12px]"
+                    >
+                      <code className="font-mono text-zinc-100">{m}</code>
+                      {isDefault && (
+                        <span className="inline-flex items-center gap-0.5 rounded border border-emerald-700/60 bg-emerald-900/20 px-1 text-[10px] text-emerald-300">
+                          <Star size={9} /> {tr('默认', 'Default')}
+                        </span>
+                      )}
+                      <span className="ml-auto flex items-center gap-1">
+                        {!isDefault && (
+                          <button
+                            type="button"
+                            onClick={() => setDefault(m)}
+                            className="rounded px-1.5 py-0.5 text-[10px] text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+                          >
+                            {tr('设为默认', 'Set default')}
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => removeModel(m)}
+                          aria-label={tr(`移除 ${m}`, `Remove ${m}`)}
+                          className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-red-300"
+                        >
+                          <Trash2 size={11} />
+                        </button>
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+            <div className="mt-2 flex items-center gap-2">
+              <input
+                type="text"
+                value={newModel}
+                onChange={(e) => setNewModel(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    addModel();
+                  }
+                }}
+                placeholder={tr(`新增模型，例 ${meta.modelPlaceholder}`, `Add a model, e.g. ${meta.modelPlaceholder}`)}
+                className="flex-1 rounded-md border border-zinc-800 bg-zinc-950/40 px-2.5 py-1.5 text-xs text-zinc-100 placeholder:text-zinc-600 focus:border-zinc-600 focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={addModel}
+                disabled={newModel.trim() === ''}
+                className="inline-flex items-center gap-1 rounded-md border border-zinc-700 px-2.5 py-1.5 text-xs text-zinc-200 hover:border-zinc-500 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Plus size={12} />
+                {tr('添加', 'Add')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <Button onClick={submit} disabled={!dirty || saving} variant="subtle">
+          {savedOk && !dirty ? <Check size={14} /> : <Save size={14} />}
+          <span>{saving ? tr('保存中…', 'Saving…') : savedOk && !dirty ? tr('已保存', 'Saved') : tr('保存', 'Save')}</span>
+        </Button>
+        <Button onClick={runTest} disabled={testing || !configured} variant="subtle">
+          {testing ? <Loader2 size={14} className="animate-spin" /> : <Plug size={14} />}
+          <span>{testing ? tr('测试中…', 'Testing…') : tr('测试连接', 'Test connection')}</span>
+        </Button>
+        <span className="text-xs text-zinc-500">
+          {testOk
+            ? tr('连接正常', 'Connection OK')
+            : dirty
+              ? tr('有未保存修改', 'Unsaved changes')
+              : configured
+                ? tr(`当前默认模型: ${draft.default_model || '(未设)'}`, `Current default model: ${draft.default_model || '(unset)'}`)
+                : ''}
+        </span>
+        {err && <span className="break-all text-xs text-red-400">{err}</span>}
+      </div>
+    </Card>
   );
 }
 

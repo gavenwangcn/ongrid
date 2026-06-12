@@ -3,7 +3,42 @@ package setting
 import (
 	"reflect"
 	"testing"
+
+	model "github.com/ongridio/ongrid/internal/manager/model/setting"
+	"github.com/ongridio/ongrid/internal/pkg/llm"
 )
+
+func TestApplyLLMPriority(t *testing.T) {
+	openai := llm.ProviderConfig{ID: model.LLMProviderOpenAI, APIKey: "sk-test"}
+	dify := llm.ProviderConfig{ID: model.LLMProviderDify, APIKey: "app-test", BaseURL: "https://example.com/v1"}
+
+	t.Run("standard wins over dify", func(t *testing.T) {
+		out, def := applyLLMPriority([]llm.ProviderConfig{openai, dify})
+		if len(out) != 1 || out[0].ID != model.LLMProviderOpenAI {
+			t.Fatalf("out = %+v, want only openai", out)
+		}
+		if def != "" {
+			t.Fatalf("def = %q, want empty (caller reconciles)", def)
+		}
+	})
+
+	t.Run("dify alone stays", func(t *testing.T) {
+		out, def := applyLLMPriority([]llm.ProviderConfig{dify})
+		if len(out) != 1 || out[0].ID != model.LLMProviderDify {
+			t.Fatalf("out = %+v, want only dify", out)
+		}
+		if def != model.LLMProviderDify {
+			t.Fatalf("def = %q, want dify", def)
+		}
+	})
+
+	t.Run("empty when nothing configured", func(t *testing.T) {
+		out, def := applyLLMPriority(nil)
+		if len(out) != 0 || def != "" {
+			t.Fatalf("out = %+v def = %q, want empty", out, def)
+		}
+	})
+}
 
 func TestDedupeStrings(t *testing.T) {
 	cases := []struct {

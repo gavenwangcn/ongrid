@@ -58,6 +58,13 @@ type ProvidersResolver interface {
 	ResolveProviders(ctx context.Context) (providers []ProviderConfig, defaultProvider string, err error)
 }
 
+// DifyConfigResolver supplies the full DifyConfig (user + App inputs)
+// when building a dify sub-client. Optional — without it only API key /
+// base URL / model from ProviderConfig are used.
+type DifyConfigResolver interface {
+	ResolveDifyConfig(ctx context.Context) (DifyConfig, bool)
+}
+
 // MultiClient is a Client that fans Chat() out to a sub-client based on
 // ChatReq.Provider. Sub-clients are built up-front from ProviderConfigs;
 // callers add new providers via NewMultiClient. When a ProvidersResolver
@@ -75,8 +82,9 @@ type MultiClient struct {
 	// Dynamic provider set — repopulated from the resolver every
 	// resolveTTL. When the resolver returns an empty slice, the static
 	// set is used. nil resolver = static-only (legacy behaviour).
-	resolver   ProvidersResolver
-	resolveTTL time.Duration
+	resolver       ProvidersResolver
+	difyResolver   DifyConfigResolver
+	resolveTTL     time.Duration
 
 	mu          sync.RWMutex
 	dynSubs     map[string]Client
@@ -105,7 +113,7 @@ func NewMultiClient(providers []ProviderConfig, defaultProvider string, fallback
 		if strings.TrimSpace(p.APIKey) == "" {
 			continue
 		}
-		sub := New(Config{APIKey: p.APIKey, Model: p.Model, BaseURL: p.BaseURL}, nil, nil)
+		sub := buildProviderClient(p, nil)
 		mc.staticSubs[p.ID] = sub
 		models := p.Models
 		if len(models) == 0 && p.Model != "" {
@@ -145,6 +153,44 @@ func (m *MultiClient) SetProvidersResolver(r ProvidersResolver) {
 	m.dynActive = false
 }
 
+// SetDifyConfigResolver wires DB-backed Dify extras (user, inputs) into
+// dify sub-client construction. Pass nil to clear.
+func (m *MultiClient) SetDifyConfigResolver(r DifyConfigResolver) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.difyResolver = r
+	m.dynLoadedAt = time.Time{}
+	m.dynActive = false
+	m.dynSubs = nil
+	m.dynInfos = nil
+	m.dynDefID = ""
+}
+
+func buildProviderClient(p ProviderConfig, difyCfg *DifyConfig) Client {
+	if p.ID == ProviderDify {
+		cfg := DifyConfig{
+			APIKey:  p.APIKey,
+			BaseURL: p.BaseURL,
+			Model:   p.Model,
+		}
+		if difyCfg != nil {
+			merged := *difyCfg
+			if strings.TrimSpace(merged.APIKey) == "" {
+				merged.APIKey = p.APIKey
+			}
+			if strings.TrimSpace(merged.BaseURL) == "" {
+				merged.BaseURL = p.BaseURL
+			}
+			if strings.TrimSpace(merged.Model) == "" {
+				merged.Model = p.Model
+			}
+			cfg = merged
+		}
+		return NewDifyClient(cfg, nil, nil)
+	}
+	return New(Config{APIKey: p.APIKey, Model: p.Model, BaseURL: p.BaseURL}, nil, nil)
+}
+
 // SetResolveTTL overrides the dynamic-resolve cache TTL. Mainly used by
 // tests; production code should leave the default.
 func (m *MultiClient) SetResolveTTL(d time.Duration) {
@@ -160,6 +206,7 @@ func (m *MultiClient) SetResolveTTL(d time.Duration) {
 func (m *MultiClient) activeSubs(ctx context.Context) (map[string]Client, []ProviderInfo, string) {
 	m.mu.RLock()
 	resolver := m.resolver
+	difyResolver := m.difyResolver
 	ttl := m.resolveTTL
 	loadedAt := m.dynLoadedAt
 	dynActive := m.dynActive
@@ -191,11 +238,17 @@ func (m *MultiClient) activeSubs(ctx context.Context) (map[string]Client, []Prov
 
 	newSubs := make(map[string]Client, len(cfgs))
 	newInfos := make([]ProviderInfo, 0, len(cfgs))
+	var difyCfg *DifyConfig
+	if difyResolver != nil {
+		if dc, ok := difyResolver.ResolveDifyConfig(ctx); ok {
+			difyCfg = &dc
+		}
+	}
 	for _, p := range cfgs {
 		if strings.TrimSpace(p.APIKey) == "" {
 			continue
 		}
-		sub := New(Config{APIKey: p.APIKey, Model: p.Model, BaseURL: p.BaseURL}, nil, nil)
+		sub := buildProviderClient(p, difyCfg)
 		newSubs[p.ID] = sub
 		models := p.Models
 		if len(models) == 0 && p.Model != "" {

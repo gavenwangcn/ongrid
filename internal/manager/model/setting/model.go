@@ -104,6 +104,16 @@ const (
 	KeyCustomModels       = "custom_models"
 	KeyCustomDefaultModel = "custom_default_model"
 
+	// Dify / CheryGPT — Dify Service API (POST /v1/chat-messages), not
+	// OpenAI-compatible. base_url is required (e.g. https://uat.cherygpt.com/v1).
+	KeyDifyAPIKey         = "dify_api_key" // sensitive
+	KeyDifyBaseURL        = "dify_base_url"
+	KeyDifyModels         = "dify_models"
+	KeyDifyDefaultModel   = "dify_default_model"
+	KeyDifyUser           = "dify_user"
+	KeyDifyInputsContent  = "dify_inputs_content"
+	KeyDifyInputsOnline   = "dify_inputs_online"
+
 	// KeyLLMDefaultProvider stores the cluster-wide default provider id.
 	// Empty → first provider (alphabetical) is used.
 	KeyLLMDefaultProvider = "default_provider"
@@ -119,6 +129,7 @@ const (
 	LLMProviderDeepSeek  = "deepseek"
 	LLMProviderKimi      = "kimi"
 	LLMProviderCustom    = "custom"
+	LLMProviderDify      = "dify"
 )
 
 // Well-known keys under CategoryProm. internal/pkg/promauth reads bearer/

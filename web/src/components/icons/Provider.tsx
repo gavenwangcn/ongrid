@@ -159,6 +159,33 @@ export function KimiIcon({ size = 16, className, style }: ProviderIconProps) {
 }
 
 // Generic fallback for an unknown provider id — zinc circle, white dot.
+// CheryGPT / Dify — indigo badge with a stylised "C".
+export function DifyIcon({ size = 16, className, style }: ProviderIconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 32 32"
+      className={className}
+      style={style}
+      aria-hidden
+    >
+      <circle cx="16" cy="16" r="16" fill="#4f46e5" />
+      <text
+        x="16"
+        y="21"
+        textAnchor="middle"
+        fill="#ffffff"
+        fontSize="14"
+        fontWeight="700"
+        fontFamily="ui-sans-serif, system-ui, sans-serif"
+      >
+        C
+      </text>
+    </svg>
+  );
+}
+
 export function GenericProviderIcon({ size = 16, className, style }: ProviderIconProps) {
   return (
     <svg
@@ -181,7 +208,7 @@ export function GenericProviderIcon({ size = 16, className, style }: ProviderIco
 // generic dot. Knowing the actual model is more reliable than the
 // provider config — many shops bridge non-OpenAI models through an
 // OpenAI-compatible gateway.
-type Brand = 'openai' | 'anthropic' | 'zhipu' | 'gemini' | 'deepseek' | 'kimi' | 'generic';
+type Brand = 'openai' | 'anthropic' | 'zhipu' | 'gemini' | 'deepseek' | 'kimi' | 'dify' | 'generic';
 
 function brandFromModel(modelName: string): Brand | null {
   const n = (modelName || '').toLowerCase();
@@ -213,6 +240,9 @@ function brandFromProvider(provider: string): Brand {
     case 'kimi':
     case 'moonshot':
       return 'kimi';
+    case 'dify':
+    case 'cherygpt':
+      return 'dify';
     default:
       return 'generic';
   }
@@ -232,6 +262,8 @@ function renderBrand(brand: Brand, props: ProviderIconProps) {
       return <DeepSeekIcon {...props} />;
     case 'kimi':
       return <KimiIcon {...props} />;
+    case 'dify':
+      return <DifyIcon {...props} />;
     default:
       return <GenericProviderIcon {...props} />;
   }
