@@ -3,6 +3,7 @@ package edge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -182,17 +183,26 @@ func (uc *PluginConfigUC) Set(ctx context.Context, edgeID uint64, plugin string,
 	if !model.IsKnownPluginName(plugin) {
 		return nil, fmt.Errorf("%w: unknown plugin %q", errs.ErrInvalid, plugin)
 	}
+	var databaseSecretReqs []tunnel.WriteDatabaseMetricsSecretRequest
+	var previous *model.PluginConfig
 	switch plugin {
 	case model.PluginNameCustomMetrics:
 		if err := validateCustomMetricsSpec(in.Spec); err != nil {
 			return nil, err
 		}
 	case model.PluginNameDatabaseMetrics:
-		spec, err := uc.prepareDatabaseMetricsSpec(ctx, edgeID, in.Spec)
+		spec, secretReqs, err := uc.prepareDatabaseMetricsSpec(in.Spec)
 		if err != nil {
 			return nil, err
 		}
 		in.Spec = spec
+		databaseSecretReqs = secretReqs
+		if len(databaseSecretReqs) > 0 {
+			previous, err = uc.repo.Get(ctx, edgeID, plugin)
+			if err != nil {
+				return nil, fmt.Errorf("load previous %s config: %w", plugin, err)
+			}
+		}
 	}
 	specJSON := "{}"
 	if in.Spec != nil {
@@ -211,8 +221,24 @@ func (uc *PluginConfigUC) Set(ctx context.Context, edgeID uint64, plugin string,
 	if err != nil {
 		return nil, err
 	}
+	if len(databaseSecretReqs) > 0 {
+		if err := uc.writeDatabaseMetricsSecrets(ctx, edgeID, databaseSecretReqs); err != nil {
+			if rollbackErr := uc.rollbackPluginConfig(ctx, edgeID, plugin, previous); rollbackErr != nil {
+				return nil, errors.Join(err, fmt.Errorf("rollback plugin config: %w", rollbackErr))
+			}
+			return nil, err
+		}
+	}
 	uc.notify(ctx, edgeID, plugin)
 	return &PluginRow{PluginName: row.PluginName, Enabled: row.Enabled, Spec: decodeSpec(row.SpecJSON)}, nil
+}
+
+func (uc *PluginConfigUC) rollbackPluginConfig(ctx context.Context, edgeID uint64, plugin string, previous *model.PluginConfig) error {
+	if previous != nil {
+		_, err := uc.repo.Upsert(ctx, previous)
+		return err
+	}
+	return uc.repo.Delete(ctx, edgeID, plugin)
 }
 
 // FetchForEdge is the tunnel-RPC view: returns the wire snapshot the

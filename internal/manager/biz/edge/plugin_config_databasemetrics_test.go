@@ -3,6 +3,7 @@ package edge
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -11,7 +12,9 @@ import (
 )
 
 type fakePluginConfigRepo struct {
-	rows map[string]*model.PluginConfig
+	rows      map[string]*model.PluginConfig
+	upsertErr error
+	deleteErr error
 }
 
 func newFakePluginConfigRepo() *fakePluginConfigRepo {
@@ -39,13 +42,21 @@ func (r *fakePluginConfigRepo) Get(_ context.Context, edgeID uint64, plugin stri
 }
 
 func (r *fakePluginConfigRepo) Upsert(_ context.Context, in *model.PluginConfig) (*model.PluginConfig, error) {
+	if r.upsertErr != nil {
+		return nil, r.upsertErr
+	}
 	cp := *in
-	cp.ID = 1
+	if cp.ID == 0 {
+		cp.ID = 1
+	}
 	r.rows[in.PluginName] = &cp
 	return &cp, nil
 }
 
 func (r *fakePluginConfigRepo) Delete(_ context.Context, _ uint64, plugin string) error {
+	if r.deleteErr != nil {
+		return r.deleteErr
+	}
 	delete(r.rows, plugin)
 	return nil
 }
@@ -62,10 +73,14 @@ func (fakeEndpointResolver) Endpoint(_ context.Context, plugin string) string {
 
 type fakeDatabaseSecretWriter struct {
 	reqs []tunnel.WriteDatabaseMetricsSecretRequest
+	err  error
 }
 
 func (w *fakeDatabaseSecretWriter) WriteDatabaseMetricsSecret(_ context.Context, _ uint64, req tunnel.WriteDatabaseMetricsSecretRequest) error {
 	w.reqs = append(w.reqs, req)
+	if w.err != nil {
+		return w.err
+	}
 	return nil
 }
 
@@ -127,6 +142,96 @@ func TestSetDatabaseMetricsWritesSecretAndStripsPassword(t *testing.T) {
 	connection := source["connection"].(map[string]interface{})
 	if connection["type"] != "managed" || connection["secret_set"] != true {
 		t.Fatalf("connection = %#v", connection)
+	}
+}
+
+func TestSetDatabaseMetrics_WhenUpsertFails_DoesNotWriteSecret(t *testing.T) {
+	repo := newFakePluginConfigRepo()
+	repo.upsertErr = fmt.Errorf("database unavailable")
+	writer := &fakeDatabaseSecretWriter{}
+	uc := NewPluginConfigUC(repo, nil, fakeEndpointResolver{}, nil)
+	uc.SetDatabaseMetricsSecretWriter(writer)
+
+	_, err := uc.Set(context.Background(), 7, model.PluginNameDatabaseMetrics, SetInput{
+		Enabled: true,
+		Spec: map[string]interface{}{
+			"sources": []interface{}{
+				map[string]interface{}{
+					"id":             "pg-prod",
+					"db_type":        "postgresql",
+					"listen_address": "127.0.0.1:19187",
+					"credentials": map[string]interface{}{
+						"host":     "127.0.0.1",
+						"port":     "15432",
+						"username": "u",
+						"password": "p-secret",
+						"database": "postgres",
+						"sslmode":  "disable",
+					},
+				},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("Set() error = nil, want upsert error")
+	}
+	if len(writer.reqs) != 0 {
+		t.Fatalf("secret writes = %d, want 0", len(writer.reqs))
+	}
+	if repo.rows[model.PluginNameDatabaseMetrics] != nil {
+		t.Fatal("databasemetrics row was persisted after upsert error")
+	}
+}
+
+func TestSetDatabaseMetrics_WhenSecretWriteFails_RollsBackConfig(t *testing.T) {
+	oldSpec := `{"sources":[{"id":"old-redis","db_type":"redis","enabled":true,"connection":{"type":"managed","path":"/var/lib/ongrid-edge/secrets/old-redis.dsn","secret_set":true}}]}`
+	repo := newFakePluginConfigRepo()
+	repo.rows[model.PluginNameDatabaseMetrics] = &model.PluginConfig{
+		ID:         23,
+		EdgeID:     7,
+		PluginName: model.PluginNameDatabaseMetrics,
+		Enabled:    false,
+		SpecJSON:   oldSpec,
+	}
+	writer := &fakeDatabaseSecretWriter{err: fmt.Errorf("edge tunnel unavailable")}
+	uc := NewPluginConfigUC(repo, nil, fakeEndpointResolver{}, nil)
+	uc.SetDatabaseMetricsSecretWriter(writer)
+
+	_, err := uc.Set(context.Background(), 7, model.PluginNameDatabaseMetrics, SetInput{
+		Enabled: true,
+		Spec: map[string]interface{}{
+			"sources": []interface{}{
+				map[string]interface{}{
+					"id":             "pg-prod",
+					"db_type":        "postgresql",
+					"listen_address": "127.0.0.1:19187",
+					"credentials": map[string]interface{}{
+						"host":     "127.0.0.1",
+						"port":     "15432",
+						"username": "u",
+						"password": "p-secret",
+						"database": "postgres",
+						"sslmode":  "disable",
+					},
+				},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("Set() error = nil, want secret write error")
+	}
+	if !strings.Contains(err.Error(), "edge tunnel unavailable") {
+		t.Fatalf("Set() error = %v", err)
+	}
+	if len(writer.reqs) != 1 {
+		t.Fatalf("secret writes = %d, want 1", len(writer.reqs))
+	}
+	got := repo.rows[model.PluginNameDatabaseMetrics]
+	if got == nil {
+		t.Fatal("databasemetrics row missing after rollback")
+	}
+	if got.ID != 23 || got.Enabled != false || got.SpecJSON != oldSpec {
+		t.Fatalf("rolled back row = %#v, want old spec/enabled/id", got)
 	}
 }
 

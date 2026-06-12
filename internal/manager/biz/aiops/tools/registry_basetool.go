@@ -91,7 +91,7 @@ func (r *Registry) BuildBaseTools() *ToolBag {
 	}
 	// 3b: database status — curated PromQL checks over databasemetrics /
 	// database-tagged custommetrics sources.
-	if r.promQuery != nil && r.edges != nil {
+	if r.promQuery != nil && r.edges != nil && r.pluginConfigs != nil {
 		out = append(out, NewAnalyzeDatabaseStatusTool(r.promQuery, r.edges, r.devices, r.pluginConfigs, r.log))
 	}
 	// 4: query_logql — gated on Loki client.

@@ -128,6 +128,14 @@ func (r *Registry) SetPluginConfigLister(p PluginConfigLister) {
 			Schema:      ListDatabaseSourcesSchema,
 			Execute:     r.executeListDatabaseSources,
 		})
+		if r.promQuery != nil {
+			r.Register(Tool{
+				Name:        ToolNameAnalyzeDatabaseStatus,
+				Description: AnalyzeDatabaseStatusDescription,
+				Schema:      AnalyzeDatabaseStatusSchema,
+				Execute:     r.executeAnalyzeDatabaseStatus,
+			})
+		}
 	}
 }
 
@@ -208,12 +216,6 @@ func NewRegistry(caller Caller, edges *edgebiz.Usecase, devices *devicebiz.Useca
 		})
 	}
 	if edges != nil && promQuery != nil {
-		r.Register(Tool{
-			Name:        ToolNameAnalyzeDatabaseStatus,
-			Description: AnalyzeDatabaseStatusDescription,
-			Schema:      AnalyzeDatabaseStatusSchema,
-			Execute:     r.executeAnalyzeDatabaseStatus,
-		})
 		r.Register(Tool{
 			Name:        ToolNameRankEdges,
 			Description: RankEdgesDescription,

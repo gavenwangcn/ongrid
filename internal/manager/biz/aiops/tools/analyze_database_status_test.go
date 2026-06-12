@@ -82,11 +82,19 @@ func promVector(items ...promTestValue) *promquery.InstantResult {
 	return &promquery.InstantResult{ResultType: "vector", Result: raw}
 }
 
-func TestAnalyzeDatabaseStatus_RegisteredWhenPromAndEdgesPresent(t *testing.T) {
+func TestAnalyzeDatabaseStatus_RegisteredWhenPromEdgesAndPluginConfigsPresent(t *testing.T) {
 	deviceID := uint64(42)
 	uc := edgebiz.NewUsecase(newFakeEdgeRepo(&edgemodel.Edge{ID: 1, Name: "node-a", DeviceID: &deviceID}), nil, nil, slog.Default())
 	reg := NewRegistry(&fakeCaller{}, uc, nil, &fakeDatabaseProm{}, nil, nil, nil, slog.Default())
 
+	if containsName(schemaNames(reg.Schemas()), ToolNameAnalyzeDatabaseStatus) {
+		t.Fatalf("%s should not register before plugin config lister is wired", ToolNameAnalyzeDatabaseStatus)
+	}
+	if containsToolName(t, reg.BuildBaseTools().AllTools(), ToolNameAnalyzeDatabaseStatus) {
+		t.Fatalf("%s should not be in BaseTool bag before plugin config lister is wired", ToolNameAnalyzeDatabaseStatus)
+	}
+
+	reg.SetPluginConfigLister(fakePluginConfigLister{rows: map[uint64][]edgebiz.PluginRow{}})
 	if !containsName(schemaNames(reg.Schemas()), ToolNameAnalyzeDatabaseStatus) {
 		t.Fatalf("%s not registered: %v", ToolNameAnalyzeDatabaseStatus, schemaNames(reg.Schemas()))
 	}
@@ -98,6 +106,7 @@ func TestAnalyzeDatabaseStatus_RegisteredWhenPromAndEdgesPresent(t *testing.T) {
 func TestAnalyzeDatabaseStatus_NotRegisteredWhenPromNil(t *testing.T) {
 	uc := edgebiz.NewUsecase(newFakeEdgeRepo(), nil, nil, slog.Default())
 	reg := NewRegistry(&fakeCaller{}, uc, nil, nil, nil, nil, nil, slog.Default())
+	reg.SetPluginConfigLister(fakePluginConfigLister{rows: map[uint64][]edgebiz.PluginRow{}})
 
 	if containsName(schemaNames(reg.Schemas()), ToolNameAnalyzeDatabaseStatus) {
 		t.Fatalf("%s should not register without Prom", ToolNameAnalyzeDatabaseStatus)

@@ -19,17 +19,17 @@ const databaseMetricsSecretDir = "/var/lib/ongrid-edge/secrets"
 
 var databaseMetricsSourceIDRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
 
-func (uc *PluginConfigUC) prepareDatabaseMetricsSpec(ctx context.Context, edgeID uint64, spec map[string]interface{}) (map[string]interface{}, error) {
+func (uc *PluginConfigUC) prepareDatabaseMetricsSpec(spec map[string]interface{}) (map[string]interface{}, []tunnel.WriteDatabaseMetricsSecretRequest, error) {
 	if spec == nil {
-		return map[string]interface{}{}, nil
+		return map[string]interface{}{}, nil, nil
 	}
 	rawSources, ok := spec["sources"]
 	if !ok {
-		return spec, nil
+		return spec, nil, nil
 	}
 	sources, ok := rawSources.([]interface{})
 	if !ok {
-		return nil, fmt.Errorf("%w: databasemetrics.sources must be an array", errs.ErrInvalid)
+		return nil, nil, fmt.Errorf("%w: databasemetrics.sources must be an array", errs.ErrInvalid)
 	}
 	nextSources := make([]interface{}, 0, len(sources))
 	secretReqs := make([]tunnel.WriteDatabaseMetricsSecretRequest, 0, len(sources))
@@ -38,18 +38,18 @@ func (uc *PluginConfigUC) prepareDatabaseMetricsSpec(ctx context.Context, edgeID
 	for i, raw := range sources {
 		source, ok := raw.(map[string]interface{})
 		if !ok {
-			return nil, fmt.Errorf("%w: databasemetrics.sources[%d] must be an object", errs.ErrInvalid, i)
+			return nil, nil, fmt.Errorf("%w: databasemetrics.sources[%d] must be an object", errs.ErrInvalid, i)
 		}
 		nextSource, secretReq, err := sanitizeDatabaseMetricsSource(i, source)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if secretReq != nil {
 			secretReqs = append(secretReqs, *secretReq)
 		}
 		id := mapString(nextSource, "id")
 		if _, exists := seenIDs[id]; exists {
-			return nil, fmt.Errorf("%w: databasemetrics.sources[%d] duplicate id %q", errs.ErrInvalid, i, id)
+			return nil, nil, fmt.Errorf("%w: databasemetrics.sources[%d] duplicate id %q", errs.ErrInvalid, i, id)
 		}
 		seenIDs[id] = struct{}{}
 		dbType := strings.ToLower(mapString(nextSource, "db_type"))
@@ -59,34 +59,44 @@ func (uc *PluginConfigUC) prepareDatabaseMetricsSpec(ctx context.Context, edgeID
 		}
 		port, err := databaseMetricsListenPort(listenAddress)
 		if err != nil {
-			return nil, fmt.Errorf("%w: databasemetrics.sources[%d].listen_address: %v", errs.ErrInvalid, i, err)
+			return nil, nil, fmt.Errorf("%w: databasemetrics.sources[%d].listen_address: %v", errs.ErrInvalid, i, err)
 		}
 		if owner, exists := databaseMetricsReservedListenPorts[port]; exists {
-			return nil, fmt.Errorf("%w: databasemetrics.sources[%d].listen_address port %s conflicts with %s", errs.ErrInvalid, i, port, owner)
+			return nil, nil, fmt.Errorf("%w: databasemetrics.sources[%d].listen_address port %s conflicts with %s", errs.ErrInvalid, i, port, owner)
 		}
 		if prevID, exists := seenListenPorts[port]; exists {
-			return nil, fmt.Errorf("%w: databasemetrics.sources[%d].listen_address port %s conflicts with source %q", errs.ErrInvalid, i, port, prevID)
+			return nil, nil, fmt.Errorf("%w: databasemetrics.sources[%d].listen_address port %s conflicts with source %q", errs.ErrInvalid, i, port, prevID)
 		}
 		seenListenPorts[port] = id
 		nextSources = append(nextSources, nextSource)
 	}
 	if len(secretReqs) > 0 && uc.secretWriter == nil {
-		return nil, fmt.Errorf("databasemetrics secret writer is not configured")
-	}
-	for _, secretReq := range secretReqs {
-		writeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		err := uc.secretWriter.WriteDatabaseMetricsSecret(writeCtx, edgeID, secretReq)
-		cancel()
-		if err != nil {
-			return nil, fmt.Errorf("write databasemetrics secret source %q: %w", secretReq.SourceID, err)
-		}
+		return nil, nil, fmt.Errorf("databasemetrics secret writer is not configured")
 	}
 	out := make(map[string]interface{}, len(spec))
 	for k, v := range spec {
 		out[k] = v
 	}
 	out["sources"] = nextSources
-	return out, nil
+	return out, secretReqs, nil
+}
+
+func (uc *PluginConfigUC) writeDatabaseMetricsSecrets(ctx context.Context, edgeID uint64, secretReqs []tunnel.WriteDatabaseMetricsSecretRequest) error {
+	if len(secretReqs) == 0 {
+		return nil
+	}
+	if uc.secretWriter == nil {
+		return fmt.Errorf("databasemetrics secret writer is not configured")
+	}
+	for _, secretReq := range secretReqs {
+		writeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		err := uc.secretWriter.WriteDatabaseMetricsSecret(writeCtx, edgeID, secretReq)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("write databasemetrics secret source %q: %w", secretReq.SourceID, err)
+		}
+	}
+	return nil
 }
 
 func sanitizeDatabaseMetricsSource(i int, source map[string]interface{}) (map[string]interface{}, *tunnel.WriteDatabaseMetricsSecretRequest, error) {
