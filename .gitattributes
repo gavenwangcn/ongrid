@@ -1,5 +1,8 @@
-# Shell scripts and Linux deploy artifacts must use LF (CRLF breaks shebang on Linux).
+# Linux deploy artifacts must use LF (CRLF breaks shebang / `source .env` on Linux).
 *.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+.env.example text eol=lf
 deploy/product/** text eol=lf
 deploy/install/**/*.sh text eol=lf
 scripts/** text eol=lf
