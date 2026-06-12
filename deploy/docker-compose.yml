@@ -199,10 +199,15 @@ services:
       - ongrid_net
 
   frontier:
-    # Upstream broker (ADR-007). No build stanza — image pulled from
-    # Docker Hub. Edge-bound port 40012 is exposed on host:40012 so the
-    # tunnel endpoint URL stays identical to pre-split deployments.
-    image: singchia/frontier:1.2.5
+    # Upstream broker (ADR-007). Built from local frontier source — same
+    # Dockerfile/make target as `make docker-build-broker`. Do not pull from
+    # Docker Hub; use `docker compose up -d --build frontier` or build first:
+    #   make docker-build-broker FRONTIER_SRC=/root/frontier FRONTIER_VERSION=v1.2.5
+    build:
+      context: ${FRONTIER_SRC:-../../frontier}
+      dockerfile: Dockerfile.frontier
+    image: singchia/frontier:${FRONTIER_VERSION:-v1.2.5}
+    pull_policy: never
     container_name: ongrid-frontier
     restart: unless-stopped
     volumes:

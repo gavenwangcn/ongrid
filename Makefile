@@ -233,7 +233,7 @@ docker-build-web: ## [release] 构建 ongrid-web:$(VERSION) 镜像（前端 SPA 
 # is unreliable in some networks, so we build the image locally from the
 # upstream source and ship it in the release tarball.
 FRONTIER_SRC     ?= $(HOME)/frontier
-FRONTIER_VERSION ?= v1.2.4
+FRONTIER_VERSION ?= v1.2.5
 FRONTIER_BUILD_FORCE ?= 1
 
 .PHONY: docker-build-broker
