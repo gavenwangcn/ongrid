@@ -2192,7 +2192,10 @@ func (r *llmResolverFunc) Resolve(ctx context.Context) (string, string, string, 
 // envHasStandardLLMProvider reports whether any OpenAI-compatible LLM
 // provider is configured via environment variables at boot. DB-only
 // custom-provider keys are handled later by LLMSettingsResolver.
-func envHasStandardLLMProvider(cfg config.Config) bool {
+func envHasStandardLLMProvider(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
 	return cfg.OpenAI.APIKey != "" ||
 		cfg.LLM.Anthropic.APIKey != "" ||
 		cfg.LLM.Zhipu.APIKey != "" ||
