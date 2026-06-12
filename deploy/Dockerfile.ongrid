@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.7
 # ongrid cloud service image — multi-stage, distroless final.
 # Build context MUST be the repo root (see Makefile target `docker-ongrid`).
 
@@ -20,27 +19,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-# Cache go.mod / go.sum layer separately from source. The
-# `--mount=type=cache,target=/go/pkg/mod` keeps the module download
-# cache across image rebuilds — without it every package run repays
-# the ~150s mod-download cost. Requires syntax=docker/dockerfile:1.7
-# (declared at the top of this file).
+# Cache go.mod / go.sum layer separately from source.
 COPY go.mod go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod \
-    go mod download
+RUN go mod download
 
 # Copy the rest of the repo (build context = repo root).
 COPY . .
 
 # CGO_ENABLED=1 because of the local embedder (see top of stage 1).
-# Two cache mounts:
-#   /go/pkg/mod    — module download cache (same as above)
-#   /root/.cache/go-build — Go's per-package compile cache; the big
-#                          win — a no-op rebuild drops from ~2min to
-#                          ~5s when the cache hits.
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=1 GOOS=linux GOARCH="${TARGETARCH:-$(go env GOARCH)}" \
+RUN CGO_ENABLED=1 GOOS=linux GOARCH="${TARGETARCH:-$(go env GOARCH)}" \
     go build -trimpath \
     -ldflags="-s -w -X main.version=${VERSION}" \
     -o /out/ongrid ./cmd/ongrid

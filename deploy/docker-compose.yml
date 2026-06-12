@@ -205,7 +205,9 @@ services:
     #   make docker-build-broker FRONTIER_SRC=/root/frontier FRONTIER_VERSION=v1.2.5
     build:
       context: ${FRONTIER_SRC:-../../frontier}
-      dockerfile: Dockerfile.frontier
+      # dockerfile is relative to build context (frontier repo root), not
+      # deploy/. Assumes sibling layout: ~/frontier + ~/ongrid.
+      dockerfile: ${FRONTIER_DOCKERFILE:-../ongrid/deploy/Dockerfile.frontier}
     image: singchia/frontier:${FRONTIER_VERSION:-v1.2.5}
     pull_policy: never
     container_name: ongrid-frontier
