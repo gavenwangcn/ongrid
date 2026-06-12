@@ -1,0 +1,5 @@
+# Shell scripts and Linux deploy artifacts must use LF (CRLF breaks shebang on Linux).
+*.sh text eol=lf
+deploy/product/** text eol=lf
+deploy/install/**/*.sh text eol=lf
+scripts/** text eol=lf
