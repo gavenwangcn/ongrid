@@ -104,9 +104,17 @@ export function getTrace(traceId: string) {
   return request<TraceGetResponse>('GET', `/traces/${encodeURIComponent(traceId)}`);
 }
 
-export function listTraceTagValues(tag: string) {
+export function listTraceTagValues(
+  tag: string,
+  params?: { q?: string; start?: string; end?: string },
+) {
+  const qs = new URLSearchParams();
+  if (params?.q) qs.set('q', params.q);
+  if (params?.start) qs.set('start', params.start);
+  if (params?.end) qs.set('end', params.end);
+  const suffix = qs.toString();
   return request<{ values: string[] | null }>(
     'GET',
-    `/traces/tags/${encodeURIComponent(tag)}/values`,
+    `/traces/tags/${encodeURIComponent(tag)}/values${suffix ? `?${suffix}` : ''}`,
   );
 }

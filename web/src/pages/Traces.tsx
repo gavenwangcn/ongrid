@@ -24,6 +24,8 @@ import {
   type TraceGetResponse,
 } from '@/api/traces';
 import { ApiError } from '@/api/client';
+import { listEdges, type Edge } from '@/api/edges';
+import { onDevicesChanged } from '@/lib/events';
 import { openObservabilityUrl, buildExploreUrl } from '@/lib/drilldown';
 import { GrafanaLinkButton } from '@/components/GrafanaLinkButton';
 import { NLQueryHelper } from '@/components/NLQueryHelper';
@@ -115,6 +117,97 @@ type TraceRow = {
   spanCount: number;
 };
 
+function traceqlEscape(s: string): string {
+  return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+// Resolve device_ids for system / device facet filters.
+function scopedDeviceIDs(
+  edges: Edge[],
+  systemFilter: string,
+  deviceFilter: string,
+): string[] | null {
+  if (deviceFilter) {
+    return Number.isFinite(Number(deviceFilter)) ? [deviceFilter] : [];
+  }
+  if (!systemFilter) return null;
+  return edges
+    .filter((e) => e.device_id != null && e.system_name?.trim() === systemFilter)
+    .map((e) => String(e.device_id));
+}
+
+// TraceQL spanset for Tempo tag-value filtering (system / device scope).
+function buildDeviceScopeTraceQL(
+  edges: Edge[],
+  systemFilter: string,
+  deviceFilter: string,
+): string | undefined {
+  if (!systemFilter && !deviceFilter) return undefined;
+  const ids = scopedDeviceIDs(edges, systemFilter, deviceFilter);
+  if (!ids || ids.length === 0) return '{ resource.device_id = "__none__" }';
+  if (ids.length === 1) return `{ resource.device_id = "${ids[0]}" }`;
+  return `{ resource.device_id =~ "${ids.join('|')}" }`;
+}
+
+function buildOperationTagScopeTraceQL(
+  edges: Edge[],
+  systemFilter: string,
+  deviceFilter: string,
+  serviceFilter: string,
+): string | undefined {
+  const svc = serviceFilter.trim();
+  const deviceQ = buildDeviceScopeTraceQL(edges, systemFilter, deviceFilter);
+  if (!svc && !deviceQ) return undefined;
+  if (!svc) return deviceQ;
+  const svcPart = `resource.service.name = "${traceqlEscape(svc)}"`;
+  if (!deviceQ) return `{ ${svcPart} }`;
+  const inner = deviceQ.replace(/^\{\s*/, '').replace(/\s*\}$/, '');
+  return `{ ${inner} && ${svcPart} }`;
+}
+
+// When system/device scope is active we synthesize TraceQL on
+// resource.device_id (edge spans carry it). Legacy service+operation
+// tags stay on the cheap path when no device scope is set.
+function resolveTraceSearchParams(
+  submitted: {
+    traceQL: string;
+    service: string;
+    operation: string;
+    system: string;
+    device: string;
+  },
+  edges: Edge[],
+): { q?: string; service?: string; operation?: string } {
+  const ql = submitted.traceQL.trim();
+  if (ql) return { q: ql };
+
+  const deviceIDs = scopedDeviceIDs(edges, submitted.system, submitted.device);
+  const needsDeviceScope = submitted.system || submitted.device;
+
+  if (needsDeviceScope) {
+    const parts: string[] = [];
+    if (deviceIDs && deviceIDs.length === 0) {
+      parts.push('resource.device_id = "__none__"');
+    } else if (deviceIDs?.length === 1) {
+      parts.push(`resource.device_id = "${deviceIDs[0]}"`);
+    } else if (deviceIDs && deviceIDs.length > 1) {
+      parts.push(`resource.device_id =~ "${deviceIDs.join('|')}"`);
+    }
+    if (submitted.service) {
+      parts.push(`resource.service.name = "${traceqlEscape(submitted.service)}"`);
+    }
+    if (submitted.operation) {
+      parts.push(`name = "${traceqlEscape(submitted.operation)}"`);
+    }
+    return { q: `{ ${parts.join(' && ')} }` };
+  }
+
+  return {
+    service: submitted.service || undefined,
+    operation: submitted.operation || undefined,
+  };
+}
+
 function normalizeRow(t: TempoTraceSummary): TraceRow {
   // Tempo 2.x: durationMs; 1.x: traceDurationMs. Default 0 if absent.
   const durationMs =
@@ -148,13 +241,18 @@ export default function TracesPage() {
   const [range, setRange] = useState(DEFAULT_RANGE);
   const [serviceFilter, setServiceFilter] = useState('');
   const [operationFilter, setOperationFilter] = useState('');
+  const [systemFilter, setSystemFilter] = useState('');
+  const [deviceFilter, setDeviceFilter] = useState('');
   const [traceQL, setTraceQL] = useState(DEFAULT_TRACEQL);
   const [submitted, setSubmitted] = useState({
     range: DEFAULT_RANGE,
     service: '',
     operation: '',
     traceQL: DEFAULT_TRACEQL,
+    system: '',
+    device: '',
   });
+  const [edges, setEdges] = useState<Edge[]>([]);
   // Default empty: don't fire a query on first render — Tempo searches
   // Auto-query on page load with the default filters (range=1h, no
   // service/operation/TraceQL). Matches the Logs page convention —
@@ -173,6 +271,64 @@ export default function TracesPage() {
   const [traceIdInput, setTraceIdInput] = useState('');
   const [autoOpenTraceId, setAutoOpenTraceId] = useState<string | null>(null);
   const requestSeq = useRef(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      listEdges()
+        .then((r) => { if (!cancelled) setEdges(r.items ?? []); })
+        .catch(() => { if (!cancelled) setEdges([]); });
+    };
+    load();
+    const unsubscribe = onDevicesChanged(load);
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, []);
+
+  const systemNames = useMemo(() => {
+    const set = new Set<string>();
+    for (const e of edges) {
+      const s = e.system_name?.trim();
+      if (s) set.add(s);
+    }
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [edges]);
+
+  const deviceOptions = useMemo(() => {
+    let list = edges.filter((e) => e.device_id != null);
+    if (systemFilter) {
+      list = list.filter((e) => e.system_name?.trim() === systemFilter);
+    }
+    return list;
+  }, [edges, systemFilter]);
+
+  const scopedDeviceCount = useMemo(() => {
+    const ids = scopedDeviceIDs(edges, systemFilter, deviceFilter);
+    return ids;
+  }, [edges, systemFilter, deviceFilter]);
+
+  const commitFacetSearch = useCallback(
+    (patch: Partial<typeof submitted>) => {
+      const next = {
+        range,
+        service: serviceFilter,
+        operation: operationFilter,
+        traceQL,
+        system: systemFilter,
+        device: deviceFilter,
+        ...patch,
+      };
+      if (patch.service !== undefined) setServiceFilter(patch.service);
+      if (patch.operation !== undefined) setOperationFilter(patch.operation);
+      if (patch.system !== undefined) setSystemFilter(patch.system);
+      if (patch.device !== undefined) setDeviceFilter(patch.device);
+      setSubmitted(next);
+      setHasSearched(true);
+    },
+    [range, serviceFilter, operationFilter, traceQL, systemFilter, deviceFilter],
+  );
 
   const submitTraceId = useCallback(() => {
     const id = traceIdInput.trim();
@@ -194,10 +350,9 @@ export default function TracesPage() {
       const startMs = now.getTime() - rangeToMs(submitted.range);
       const start = new Date(startMs).toISOString();
       const end = now.toISOString();
+      const params = resolveTraceSearchParams(submitted, edges);
       const resp = await searchTraces({
-        q: submitted.traceQL.trim() || undefined,
-        service: submitted.traceQL.trim() ? undefined : submitted.service || undefined,
-        operation: submitted.traceQL.trim() ? undefined : submitted.operation || undefined,
+        ...params,
         start,
         end,
         limit: PAGE_LIMIT,
@@ -215,7 +370,7 @@ export default function TracesPage() {
     } finally {
       if (seq === requestSeq.current) setLoading(false);
     }
-  }, [submitted.range, submitted.service, submitted.operation, submitted.traceQL]);
+  }, [submitted, edges]);
 
   useEffect(() => {
     if (!hasSearched) return;
@@ -235,6 +390,8 @@ export default function TracesPage() {
       service: serviceFilter,
       operation: operationFilter,
       traceQL,
+      system: systemFilter,
+      device: deviceFilter,
     });
     setHasSearched(true);
     void fetchTraces();
@@ -249,24 +406,54 @@ export default function TracesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [live, fetchTraces]);
 
-  // Populate service + operation dropdowns from Tempo tags (best-effort;
-  // on error operators just type values manually or use TraceQL).
+  // Populate service + operation dropdowns from Tempo tags. When a
+  // system / device scope is active, pass a device_id TraceQL filter so
+  // service.name only lists services seen on those edges (cascade).
   useEffect(() => {
     let cancelled = false;
     void (async () => {
+      const now = new Date();
+      const start = new Date(now.getTime() - rangeToMs(range)).toISOString();
+      const end = now.toISOString();
+      const deviceQ = buildDeviceScopeTraceQL(edges, systemFilter, deviceFilter);
+      const opQ = buildOperationTagScopeTraceQL(
+        edges,
+        systemFilter,
+        deviceFilter,
+        serviceFilter,
+      );
+      const timeParams = { start, end };
       const [services, ops] = await Promise.all([
-        listTraceTagValues('service.name').then((r) => r.values ?? []).catch(() => []),
-        listTraceTagValues('name').then((r) => r.values ?? []).catch(() => []),
+        listTraceTagValues(
+          'service.name',
+          deviceQ ? { q: deviceQ, ...timeParams } : undefined,
+        ).then((r) => r.values ?? []).catch(() => []),
+        listTraceTagValues(
+          'name',
+          opQ
+            ? { q: opQ, ...timeParams }
+            : deviceQ
+              ? { q: deviceQ, ...timeParams }
+              : undefined,
+        ).then((r) => r.values ?? []).catch(() => []),
       ]);
       if (!cancelled) {
         setServiceOptions(services ?? []);
         setOperationOptions(ops ?? []);
+        if (serviceFilter && !services.includes(serviceFilter)) {
+          setServiceFilter('');
+          setOperationFilter('');
+          setSubmitted((s) => ({ ...s, service: '', operation: '' }));
+        } else if (operationFilter && !ops.includes(operationFilter)) {
+          setOperationFilter('');
+          setSubmitted((s) => ({ ...s, operation: '' }));
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [edges, systemFilter, deviceFilter, serviceFilter, operationFilter, range]);
 
   const submit = (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -284,6 +471,8 @@ export default function TracesPage() {
       service: serviceFilter,
       operation: operationFilter,
       traceQL,
+      system: systemFilter,
+      device: deviceFilter,
     });
     setHasSearched(true);
   };
@@ -293,11 +482,8 @@ export default function TracesPage() {
   // TraceQL) and arm hasSearched so the fetch effect fires. A typed
   // trace-id still wins, so skip when a trace-id lookup is in progress.
   const pickServiceOperation = (svc: string, op: string) => {
-    setServiceFilter(svc);
-    setOperationFilter(op);
     if (traceIdInput.trim()) return;
-    setSubmitted({ range, service: svc, operation: op, traceQL });
-    setHasSearched(true);
+    commitFacetSearch({ service: svc, operation: op });
   };
 
   // "深度分析 → Grafana" deep-link to Tempo Explore. The TraceQL we
@@ -309,11 +495,19 @@ export default function TracesPage() {
   const onOpenGrafana = useCallback(() => {
     const base =
       (grafanaBaseUrl || '').replace(/\/+$/, '') || `${window.location.origin}/grafana`;
-    let expr = traceQL.trim();
+    const draft = {
+      traceQL,
+      service: serviceFilter,
+      operation: operationFilter,
+      system: systemFilter,
+      device: deviceFilter,
+    };
+    const resolved = resolveTraceSearchParams(draft, edges);
+    let expr = resolved.q ?? '';
     if (!expr) {
       const parts: string[] = [];
-      if (serviceFilter) parts.push(`resource.service.name="${serviceFilter}"`);
-      if (operationFilter) parts.push(`name="${operationFilter}"`);
+      if (serviceFilter) parts.push(`resource.service.name="${traceqlEscape(serviceFilter)}"`);
+      if (operationFilter) parts.push(`name="${traceqlEscape(operationFilter)}"`);
       expr = `{${parts.join(' && ') || 'true'}}`;
     }
     const now = Date.now();
@@ -328,7 +522,7 @@ export default function TracesPage() {
       orgId: grafanaOrgId,
     });
     void openObservabilityUrl(url);
-  }, [grafanaBaseUrl, grafanaOrgId, range, serviceFilter, operationFilter, traceQL]);
+  }, [grafanaBaseUrl, grafanaOrgId, range, serviceFilter, operationFilter, systemFilter, deviceFilter, traceQL, edges]);
 
   return (
     <main className="anim-fade flex flex-1 flex-col overflow-hidden">
@@ -387,15 +581,48 @@ export default function TracesPage() {
               what people set first, and the Search button should live
               with them). */}
           <div className="flex flex-wrap items-end gap-2 order-1">
+          <label className="block w-40 shrink-0">
+            <span className="mb-1 block text-[11px] text-zinc-500">
+              <Filter size={10} className="-mt-0.5 mr-1 inline" />
+              {tr('系统', 'System')}
+            </span>
+            <select
+              value={systemFilter}
+              onChange={(e) => {
+                const v = e.target.value;
+                const patch: Partial<typeof submitted> = {
+                  system: v,
+                  service: '',
+                  operation: '',
+                };
+                if (deviceFilter && v) {
+                  const stillValid = edges.some(
+                    (d) => String(d.device_id) === deviceFilter && d.system_name?.trim() === v,
+                  );
+                  if (!stillValid) patch.device = '';
+                }
+                commitFacetSearch(patch);
+              }}
+              className={INPUT_BASE}
+            >
+              <option value="">{tr('全部系统', 'All systems')}</option>
+              {systemNames.map((name) => (
+                <option key={name} value={name}>{name}</option>
+              ))}
+            </select>
+          </label>
           <label className="block w-48 shrink-0">
             <span className="mb-1 block text-[11px] text-zinc-500">
               <Filter size={10} className="-mt-0.5 mr-1 inline" />
-              service.name
+              {systemFilter || deviceFilter
+                ? tr('service.name（范围内）', 'service.name (scoped)')
+                : 'service.name'}
             </span>
             <select
               value={serviceFilter}
-              onChange={(e) => pickServiceOperation(e.target.value, operationFilter)}
+              onChange={(e) => pickServiceOperation(e.target.value, '')}
               className={INPUT_BASE}
+              disabled={scopedDeviceCount !== null && scopedDeviceCount.length === 0}
             >
               <option value="">{tr('全部', 'All')}</option>
               {serviceOptions.map((v) => (
@@ -406,16 +633,42 @@ export default function TracesPage() {
           <label className="block w-48 shrink-0">
             <span className="mb-1 block text-[11px] text-zinc-500">
               <Filter size={10} className="-mt-0.5 mr-1 inline" />
-              operation
+              {serviceFilter
+                ? tr('operation（服务内）', 'operation (in service)')
+                : systemFilter || deviceFilter
+                  ? tr('operation（范围内）', 'operation (scoped)')
+                  : 'operation'}
             </span>
             <select
               value={operationFilter}
               onChange={(e) => pickServiceOperation(serviceFilter, e.target.value)}
               className={cn(INPUT_BASE, 'font-mono')}
+              disabled={
+                (scopedDeviceCount !== null && scopedDeviceCount.length === 0) ||
+                (serviceFilter && operationOptions.length === 0)
+              }
             >
               <option value="">{tr('全部', 'All')}</option>
               {operationOptions.map((v) => (
                 <option key={v} value={v}>{v}</option>
+              ))}
+            </select>
+          </label>
+          <label className="block w-44 shrink-0">
+            <span className="mb-1 block text-[11px] text-zinc-500">
+              <Filter size={10} className="-mt-0.5 mr-1 inline" />
+              {tr('设备', 'Device')}
+            </span>
+            <select
+              value={deviceFilter}
+              onChange={(e) => commitFacetSearch({ device: e.target.value, service: '', operation: '' })}
+              className={INPUT_BASE}
+            >
+              <option value="">{tr('全部设备', 'All devices')}</option>
+              {deviceOptions.map((e) => (
+                <option key={e.id} value={String(e.device_id)}>
+                  {e.name} (#{e.device_id})
+                </option>
               ))}
             </select>
           </label>
@@ -458,6 +711,18 @@ export default function TracesPage() {
             {loading ? <Loader2 size={12} className="animate-spin" /> : <SearchIcon size={12} />}
             {tr('查询', 'Search')}
           </button>
+          {(systemFilter || deviceFilter) && scopedDeviceCount !== null && (
+            <span className="self-end text-[11px] text-zinc-500">
+              {scopedDeviceCount.length === 0
+                ? tr('系统下无设备', 'No devices in system')
+                : deviceFilter
+                  ? tr(`单设备 (#${deviceFilter})`, `Single device (#${deviceFilter})`)
+                  : tr(
+                      `系统「${systemFilter}」· ${scopedDeviceCount.length} 台`,
+                      `System “${systemFilter}” · ${scopedDeviceCount.length} device(s)`,
+                    )}
+            </span>
+          )}
           </div>
           {/* TraceQL row — advanced query language + 快捷 chips. Falls
               below the facets row (order-2). */}
@@ -478,6 +743,8 @@ export default function TracesPage() {
                 dialect="traceql"
                 context={{
                   range,
+                  system_name: systemFilter || undefined,
+                  device_id: deviceFilter || undefined,
                   service: serviceFilter || undefined,
                   operation: operationFilter || undefined,
                 }}
@@ -506,6 +773,8 @@ export default function TracesPage() {
                     service: serviceFilter,
                     operation: operationFilter,
                     traceQL: c.query,
+                    system: systemFilter,
+                    device: deviceFilter,
                   });
                   setHasSearched(true);
                 }}
@@ -573,17 +842,25 @@ export default function TracesPage() {
               >
                 {tr('扩大到 24 小时', 'Widen to 24 h')}
               </button>
-              {(serviceFilter || operationFilter) && (
+              {(serviceFilter || operationFilter || systemFilter || deviceFilter) && (
                 <button
                   type="button"
                   onClick={() => {
                     setServiceFilter('');
                     setOperationFilter('');
-                    setSubmitted((s) => ({ ...s, service: '', operation: '' }));
+                    setSystemFilter('');
+                    setDeviceFilter('');
+                    setSubmitted((s) => ({
+                      ...s,
+                      service: '',
+                      operation: '',
+                      system: '',
+                      device: '',
+                    }));
                   }}
                   className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-[11px] text-zinc-300 hover:bg-zinc-800"
                 >
-                  {tr('清除服务 / 操作筛选', 'Clear service / operation filters')}
+                  {tr('清除筛选', 'Clear filters')}
                 </button>
               )}
               {traceQL.trim() && (

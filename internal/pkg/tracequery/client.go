@@ -108,6 +108,14 @@ type SearchOptions struct {
 	MaxDuration time.Duration
 }
 
+// TagValuesOptions narrows /api/search/tag/<tag>/values. Query is a
+// TraceQL spanset filter (e.g. `{ resource.device_id = "7" }`).
+type TagValuesOptions struct {
+	Query string
+	Start time.Time
+	End   time.Time
+}
+
 // SearchTraces runs a Tempo trace summary search.
 func (c *Client) SearchTraces(ctx context.Context, opts SearchOptions) (*SearchResult, error) {
 	q := url.Values{}
@@ -161,17 +169,24 @@ func (c *Client) SearchTraces(ctx context.Context, opts SearchOptions) (*SearchR
 // operation dropdowns. Mirrors logquery.LabelValues — same role for
 // the trace signal.
 //
-// Tempo's response shape is `{"tagValues":[...]}` for the v1 endpoint
-// (`/api/search/tag/<tag>/values`); newer versions also expose
-// `/api/v2/search/tag/<tag>/values` with a richer payload — we stick to
-// v1 because that's what Tempo 2.x stable serves and the value list is
-// all the UI needs.
-func (c *Client) TagValues(ctx context.Context, tag string) ([]string, error) {
+// Optional Query + time window narrow values to spans matching a TraceQL
+// spanset (e.g. resource.device_id for system-scoped service lists).
+func (c *Client) TagValues(ctx context.Context, tag string, opts TagValuesOptions) ([]string, error) {
 	if tag == "" {
 		return nil, errors.New("tracequery: tag is empty")
 	}
 	path := "/api/search/tag/" + url.PathEscape(tag) + "/values"
-	body, err := c.do(ctx, path, nil)
+	q := url.Values{}
+	if s := strings.TrimSpace(opts.Query); s != "" {
+		q.Set("q", s)
+	}
+	if !opts.Start.IsZero() {
+		q.Set("start", fmt.Sprintf("%d", opts.Start.Unix()))
+	}
+	if !opts.End.IsZero() {
+		q.Set("end", fmt.Sprintf("%d", opts.End.Unix()))
+	}
+	body, err := c.do(ctx, path, q)
 	if err != nil {
 		return nil, err
 	}

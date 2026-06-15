@@ -31,7 +31,7 @@ import (
 type Querier interface {
 	SearchTraces(ctx context.Context, opts tracequery.SearchOptions) (*tracequery.SearchResult, error)
 	GetTrace(ctx context.Context, traceID string) (*tracequery.TraceResult, error)
-	TagValues(ctx context.Context, tag string) ([]string, error)
+	TagValues(ctx context.Context, tag string, opts tracequery.TagValuesOptions) ([]string, error)
 }
 
 // Handler exposes the auth'd Tempo query proxy. Requires an underlying
@@ -185,9 +185,30 @@ func (h *Handler) tagValues(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "tag required")
 		return
 	}
+	q := r.URL.Query()
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	out, err := h.q.TagValues(ctx, tag)
+	var start, end time.Time
+	var err error
+	if s := q.Get("start"); s != "" {
+		start, err = parseTime(s)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, fmt.Sprintf("start: %v", err))
+			return
+		}
+	}
+	if s := q.Get("end"); s != "" {
+		end, err = parseTime(s)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, fmt.Sprintf("end: %v", err))
+			return
+		}
+	}
+	out, err := h.q.TagValues(ctx, tag, tracequery.TagValuesOptions{
+		Query: q.Get("q"),
+		Start: start,
+		End:   end,
+	})
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
