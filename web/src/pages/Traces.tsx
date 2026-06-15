@@ -427,7 +427,9 @@ export default function TracesPage() {
         listTraceTagValues(
           'service.name',
           deviceQ ? { q: deviceQ, ...timeParams } : undefined,
-        ).then((r) => r.values ?? []).catch(() => []),
+        )
+          .then((r) => r.values ?? [])
+          .catch((): string[] => []),
         listTraceTagValues(
           'name',
           opQ
@@ -435,7 +437,9 @@ export default function TracesPage() {
             : deviceQ
               ? { q: deviceQ, ...timeParams }
               : undefined,
-        ).then((r) => r.values ?? []).catch(() => []),
+        )
+          .then((r) => r.values ?? [])
+          .catch((): string[] => []),
       ]);
       if (!cancelled) {
         setServiceOptions(services ?? []);
@@ -645,7 +649,7 @@ export default function TracesPage() {
               className={cn(INPUT_BASE, 'font-mono')}
               disabled={
                 (scopedDeviceCount !== null && scopedDeviceCount.length === 0) ||
-                (serviceFilter && operationOptions.length === 0)
+                (serviceFilter !== '' && operationOptions.length === 0)
               }
             >
               <option value="">{tr('全部', 'All')}</option>
