@@ -48,8 +48,8 @@ func (s *Service) SetEdgeCaller(c EdgeCaller) { s.caller = c }
 // Create delegates to biz.Usecase.Create. The plaintext SecretKey in the
 // returned CreateResult must be echoed back to the caller ONCE; it is not
 // stored anywhere the API can retrieve it later.
-func (s *Service) Create(ctx context.Context, name string, createdBy *uint64) (*biz.CreateResult, error) {
-	return s.uc.Create(ctx, name, createdBy)
+func (s *Service) Create(ctx context.Context, p biz.CreateParams, createdBy *uint64) (*biz.CreateResult, error) {
+	return s.uc.Create(ctx, p, createdBy)
 }
 
 // List returns edges matching filter.
@@ -65,6 +65,10 @@ func (s *Service) Get(ctx context.Context, id uint64) (*model.Edge, error) {
 // Delete soft-deletes an edge.
 func (s *Service) Delete(ctx context.Context, id uint64) error {
 	return s.uc.Delete(ctx, id)
+}
+
+func (s *Service) UpdateOperatorMeta(ctx context.Context, id uint64, systemName, deviceIP string) error {
+	return s.uc.UpdateOperatorMeta(ctx, id, systemName, deviceIP)
 }
 
 // RotateSecret generates + stores a new hash, returns plaintext ONCE.

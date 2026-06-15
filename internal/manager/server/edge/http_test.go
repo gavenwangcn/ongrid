@@ -64,6 +64,9 @@ func (d *fakeDeviceRepo) UpdateRoles(context.Context, uint64, uint8) error      
 func (d *fakeDeviceRepo) UpdateNameDescription(context.Context, uint64, string, string) error {
 	return nil
 }
+func (d *fakeDeviceRepo) UpdateOperatorMeta(context.Context, uint64, string, string) error {
+	return nil
+}
 func (d *fakeDeviceRepo) SetNodeID(context.Context, uint64, uint64) error { return nil }
 func (d *fakeDeviceRepo) List(context.Context, devicebiz.ListFilter) ([]*devicemodel.Device, error) {
 	out := make([]*devicemodel.Device, 0, len(d.byID))
@@ -109,7 +112,7 @@ type fakeSvc struct {
 	lastRolesNames  []string
 }
 
-func (f *fakeSvc) Create(_ context.Context, _ string, createdBy *uint64) (*biz.CreateResult, error) {
+func (f *fakeSvc) Create(_ context.Context, _ biz.CreateParams, createdBy *uint64) (*biz.CreateResult, error) {
 	f.lastCreatedBy = createdBy
 	return f.createResp, f.createErr
 }
@@ -125,6 +128,7 @@ func (f *fakeSvc) Delete(_ context.Context, id uint64) error {
 	f.lastDeleteID = id
 	return f.deleteErr
 }
+func (f *fakeSvc) UpdateOperatorMeta(_ context.Context, _ uint64, _, _ string) error { return nil }
 func (f *fakeSvc) RotateSecret(_ context.Context, id uint64) (string, error) {
 	f.lastRotateID = id
 	return f.rotateResp, f.rotateErr

@@ -278,9 +278,10 @@ export default function MonitorPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const range = searchParams.get('range') || DEFAULT_RANGE;
   const roleFilter = (searchParams.get('role') || '') as RoleFilterValue;
-  // device filter overrides role: if both set, only `device` is honored
-  // so the user can drill from "all servers" down to one specific host
-  // without resetting the role chip.
+  const systemFilter = searchParams.get('system') || '';
+  // device filter overrides role/system aggregation when set — drill
+  // from "all servers in system X" down to one host without losing system
+  // context in the URL.
   const deviceFilter = searchParams.get('device') || '';
   const refreshSec = (() => {
     const raw = searchParams.get('refresh');
@@ -339,22 +340,46 @@ export default function MonitorPage() {
   }, []);
 
   const filteredDeviceIDs = useMemo<number[] | null>(() => {
-    // Device-pin wins: if the user picked a single device, narrow to it
-    // regardless of role. Empty string === no device pin.
     if (deviceFilter) {
       const n = Number(deviceFilter);
       return Number.isFinite(n) ? [n] : [];
     }
-    if (!roleFilter) return null;
+    if (!systemFilter && !roleFilter) return null;
     const matched = edges.filter((e) => {
+      if (typeof e.device_id !== 'number') return false;
+      if (systemFilter && e.system_name?.trim() !== systemFilter) return false;
       if (roleFilter === 'unknown') return !e.roles || e.roles.length === 0;
-      return Array.isArray(e.roles) && (e.roles as EdgeRole[]).includes(roleFilter as EdgeRole);
+      if (roleFilter) {
+        return Array.isArray(e.roles) && (e.roles as EdgeRole[]).includes(roleFilter as EdgeRole);
+      }
+      return true;
     });
-    const ids = matched
-      .map((e) => e.device_id)
-      .filter((v): v is number => typeof v === 'number');
-    return ids;
-  }, [edges, roleFilter, deviceFilter]);
+    return matched.map((e) => e.device_id as number);
+  }, [edges, roleFilter, deviceFilter, systemFilter]);
+
+  const systemNames = useMemo(() => {
+    const set = new Set<string>();
+    for (const e of edges) {
+      const s = e.system_name?.trim();
+      if (s) set.add(s);
+    }
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [edges]);
+
+  const deviceOptions = useMemo(() => {
+    let list = edges.filter((e) => typeof e.device_id === 'number');
+    if (systemFilter) {
+      list = list.filter((e) => e.system_name?.trim() === systemFilter);
+    }
+    if (roleFilter === 'unknown') {
+      list = list.filter((e) => !e.roles || e.roles.length === 0);
+    } else if (roleFilter) {
+      list = list.filter(
+        (e) => Array.isArray(e.roles) && (e.roles as EdgeRole[]).includes(roleFilter as EdgeRole),
+      );
+    }
+    return list;
+  }, [edges, systemFilter, roleFilter]);
 
   const panels = useMemo<GrafanaPanel[]>(() => {
     const base = buildMonitorPanels();
@@ -547,30 +572,47 @@ export default function MonitorPage() {
           />
           <RoleSelect value={roleFilter} onChange={(v) => updateParams({ role: v, device: '' })} />
           <ToolbarSelect
+            label={tr('系统', 'System')}
+            value={systemFilter}
+            options={[
+              { value: '', label: tr('全部系统', 'All systems') },
+              ...systemNames.map((name) => ({ value: name, label: name })),
+            ]}
+            onChange={(v) => {
+              const patch: Record<string, string> = { system: v };
+              if (deviceFilter && v) {
+                const stillValid = edges.some(
+                  (e) => String(e.device_id) === deviceFilter && e.system_name?.trim() === v,
+                );
+                if (!stillValid) patch.device = '';
+              }
+              updateParams(patch);
+            }}
+          />
+          <ToolbarSelect
             label={tr('设备', 'Device')}
             value={deviceFilter}
             options={[
               { value: '', label: tr('全部设备', 'All devices') },
-              ...edges
-                .filter((e) => typeof e.device_id === 'number')
-                .map((e) => ({
-                  value: String(e.device_id),
-                  // Show display name + device_id so collisions on the
-                  // same hostname stay distinguishable.
-                  label: `${e.name || tr('(未命名)', '(unnamed)')} (#${e.device_id})`,
-                })),
+              ...deviceOptions.map((e) => ({
+                value: String(e.device_id),
+                label: `${e.name || tr('(未命名)', '(unnamed)')} (#${e.device_id})`,
+              })),
             ]}
-            // Picking a device clears the role filter — they're
-            // mutually exclusive in PromQL semantics here.
             onChange={(v) => updateParams({ device: v, role: '' })}
           />
-          {(roleFilter || deviceFilter) && filteredDeviceIDs !== null && (
+          {(roleFilter || systemFilter || deviceFilter) && filteredDeviceIDs !== null && (
             <span className="text-[11px] text-zinc-500">
               {filteredDeviceIDs.length === 0
                 ? tr('无匹配设备', 'No matching device')
                 : deviceFilter
                   ? tr(`单设备视图 (#${deviceFilter})`, `Single device view (#${deviceFilter})`)
-                  : tr(`匹配 ${filteredDeviceIDs.length} 台`, `${filteredDeviceIDs.length} device(s) matched`)}
+                  : systemFilter
+                    ? tr(
+                        `系统「${systemFilter}」· ${filteredDeviceIDs.length} 台`,
+                        `System “${systemFilter}” · ${filteredDeviceIDs.length} device(s)`,
+                      )
+                    : tr(`匹配 ${filteredDeviceIDs.length} 台`, `${filteredDeviceIDs.length} device(s) matched`)}
             </span>
           )}
         </div>

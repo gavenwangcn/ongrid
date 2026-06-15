@@ -9,10 +9,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
 	bizalert "github.com/ongridio/ongrid/internal/manager/biz/alert"
+	devicebiz "github.com/ongridio/ongrid/internal/manager/biz/device"
 	model "github.com/ongridio/ongrid/internal/manager/model/alert"
 	"github.com/ongridio/ongrid/internal/pkg/errs"
 	"github.com/ongridio/ongrid/internal/pkg/notify"
@@ -41,6 +43,8 @@ type Incident struct {
 	TargetType     string            `json:"target_type"`
 	TargetID       string            `json:"target_id,omitempty"`
 	TargetName     string            `json:"target_name,omitempty"`
+	TargetSystemName string          `json:"target_system_name,omitempty"`
+	TargetDeviceIP   string          `json:"target_device_ip,omitempty"`
 	RunbookURL     string            `json:"runbook_url,omitempty"`
 	DedupeKey      string            `json:"dedupe_key,omitempty"`
 	Labels         map[string]string `json:"labels,omitempty"`
@@ -211,6 +215,7 @@ type Service struct {
 	repo        bizalert.Repo
 	notifier    Notifier
 	previewDeps bizalert.PreviewDeps
+	devices     devicebiz.Repo
 	log         *slog.Logger
 }
 
@@ -229,6 +234,11 @@ func New(uc *bizalert.Usecase, repo bizalert.Repo, notifier Notifier, log *slog.
 // return skipped_reason instead of failing.
 func (s *Service) SetPreviewDeps(d bizalert.PreviewDeps) {
 	s.previewDeps = d
+}
+
+// SetDeviceRepo wires device metadata lookup for incident target enrichment.
+func (s *Service) SetDeviceRepo(r devicebiz.Repo) {
+	s.devices = r
 }
 
 // NewStub returns a Service whose methods short-circuit to ErrNotWiredYet
@@ -255,6 +265,7 @@ func (s *Service) ListIncidents(ctx context.Context, _ Caller, in IncidentFilter
 	for _, r := range rows {
 		out = append(out, toServiceIncident(r))
 	}
+	s.enrichIncidentTargets(ctx, out)
 	return out, nil
 }
 
@@ -283,7 +294,9 @@ func (s *Service) GetIncident(ctx context.Context, _ Caller, id uint64) (*Incide
 	if err != nil {
 		return nil, err
 	}
-	return toServiceIncident(row), nil
+	out := toServiceIncident(row)
+	s.enrichIncidentTargets(ctx, []*Incident{out})
+	return out, nil
 }
 
 // GetIncidentModel returns the raw storage row for an incident — used
@@ -319,7 +332,9 @@ func (s *Service) AcknowledgeIncident(ctx context.Context, caller Caller, id uin
 	if err != nil {
 		return nil, err
 	}
-	return toServiceIncident(row), nil
+	out := toServiceIncident(row)
+	s.enrichIncidentTargets(ctx, []*Incident{out})
+	return out, nil
 }
 
 // ResolveIncident transitions an incident to resolved.
@@ -340,7 +355,9 @@ func (s *Service) ResolveIncident(ctx context.Context, caller Caller, id uint64,
 	if err != nil {
 		return nil, err
 	}
-	return toServiceIncident(row), nil
+	out := toServiceIncident(row)
+	s.enrichIncidentTargets(ctx, []*Incident{out})
+	return out, nil
 }
 
 // ListIncidentEvents returns the timeline (most-recent-first via repo) for an
@@ -796,6 +813,60 @@ func toServiceIncident(r *model.Incident) *Incident {
 		}
 	}
 	return out
+}
+
+func (s *Service) enrichIncidentTargets(ctx context.Context, items []*Incident) {
+	if s == nil || s.devices == nil || len(items) == 0 {
+		return
+	}
+	ids := make([]uint64, 0, len(items))
+	seen := make(map[uint64]struct{}, len(items))
+	for _, inc := range items {
+		if inc == nil || inc.TargetID == "" {
+			continue
+		}
+		id, err := strconv.ParseUint(strings.TrimSpace(inc.TargetID), 10, 64)
+		if err != nil || id == 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return
+	}
+	devs, err := s.devices.GetMany(ctx, ids)
+	if err != nil {
+		if s.log != nil {
+			s.log.Warn("alert: enrich incident targets failed", slog.Any("err", err))
+		}
+		return
+	}
+	for _, inc := range items {
+		if inc == nil || inc.TargetID == "" {
+			continue
+		}
+		id, err := strconv.ParseUint(strings.TrimSpace(inc.TargetID), 10, 64)
+		if err != nil || id == 0 {
+			continue
+		}
+		d := devs[id]
+		if d == nil {
+			continue
+		}
+		if strings.TrimSpace(inc.TargetName) == "" && strings.TrimSpace(d.Name) != "" {
+			inc.TargetName = d.Name
+		}
+		if strings.TrimSpace(d.SystemName) != "" {
+			inc.TargetSystemName = d.SystemName
+		}
+		if strings.TrimSpace(d.DeviceIP) != "" {
+			inc.TargetDeviceIP = d.DeviceIP
+		}
+	}
 }
 
 // toServiceChannel converts a storage Channel row to the transport DTO.

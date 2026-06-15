@@ -8,13 +8,17 @@ import { usePermissions } from '@/store/me';
 import { useI18n } from '@/i18n/locale';
 import { ApiError } from '@/api/client';
 import { listChannels, type Channel } from '@/api/alerts';
+import { listDevices } from '@/api/devices';
 import {
   createSchedule,
   deleteSchedule,
+  formatReportScope,
   listSchedules,
+  parseReportScope,
   runScheduleNow,
   toggleSchedule,
   updateSchedule,
+  uniqueSystemNames,
   type ReportKind,
   type ReportSchedule,
   type ScheduleInput,
@@ -155,6 +159,12 @@ export default function ReportSchedulesPage() {
                 <div className="mt-1 font-mono text-xs text-zinc-500">
                   {s.cron_spec} · {s.timezone}
                 </div>
+                {parseReportScope(s.scope_json).system_name && (
+                  <div className="mt-0.5 text-xs text-zinc-500">
+                    {tr('系统：', 'System: ')}
+                    {parseReportScope(s.scope_json).system_name}
+                  </div>
+                )}
                 {s.next_fire_at && (
                   <div className="mt-0.5 text-xs text-zinc-600">
                     {tr('下次：', 'Next: ')}
@@ -238,8 +248,24 @@ function ScheduleForm({
   const [tz, setTz] = useState(initial?.timezone ?? DEFAULT_TZ);
   const [chanIDs, setChanIDs] = useState<number[]>(initial?.channel_ids ?? []);
   const [promptOverride, setPromptOverride] = useState(initial?.prompt_override ?? '');
+  const [systemName, setSystemName] = useState(parseReportScope(initial?.scope_json).system_name ?? '');
+  const [systemNames, setSystemNames] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    listDevices()
+      .then((r) => {
+        if (!cancelled) setSystemNames(uniqueSystemNames(r.items ?? []));
+      })
+      .catch(() => {
+        if (!cancelled) setSystemNames([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const save = useCallback(async () => {
     setSaving(true);
@@ -248,6 +274,7 @@ function ScheduleForm({
       name,
       kind,
       timezone: tz,
+      scope_json: formatReportScope({ system_name: systemName }),
       channel_ids: chanIDs,
       prompt_override: promptOverride || undefined,
       // For custom kind the cron is required; for presets it's optional
@@ -263,7 +290,7 @@ function ScheduleForm({
     } finally {
       setSaving(false);
     }
-  }, [name, kind, tz, cron, chanIDs, promptOverride, initial, onSaved, tr]);
+  }, [name, kind, tz, cron, chanIDs, promptOverride, systemName, initial, onSaved, tr]);
 
   return (
     <Modal
@@ -334,6 +361,24 @@ function ScheduleForm({
 
         <Field label={tr('时区', 'Timezone')}>
           <input value={tz} onChange={(e) => setTz(e.target.value)} className={cn(inputCls, 'font-mono')} />
+        </Field>
+
+        <Field label={tr('系统范围', 'System scope')}>
+          <select
+            value={systemName}
+            onChange={(e) => setSystemName(e.target.value)}
+            className={cn(inputCls, 'text-sm')}
+          >
+            <option value="">{tr('全部设备', 'All devices')}</option>
+            {systemNames.map((name) => (
+              <option key={name} value={name}>{name}</option>
+            ))}
+          </select>
+          {systemNames.length === 0 && (
+            <p className="mt-1 text-[11px] text-zinc-600">
+              {tr('未找到已填系统名称的设备。', 'No devices with a system name yet.')}
+            </p>
+          )}
         </Field>
 
         <Field label={tr('投递渠道', 'Delivery channels')}>

@@ -6,6 +6,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -153,6 +154,21 @@ func (r *Repo) SetNodeID(ctx context.Context, id, nodeID uint64) error {
 	return nil
 }
 
+// UpdateOperatorMeta writes system_name / device_ip.
+func (r *Repo) UpdateOperatorMeta(ctx context.Context, id uint64, systemName, deviceIP string) error {
+	res := r.db.WithContext(ctx).Model(&model.Device{}).Where("id = ?", id).Updates(map[string]any{
+		"system_name": strings.TrimSpace(systemName),
+		"device_ip":   strings.TrimSpace(deviceIP),
+	})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return errs.ErrNotFound
+	}
+	return nil
+}
+
 // UpdateNameDescription writes the operator-editable display fields.
 func (r *Repo) UpdateNameDescription(ctx context.Context, id uint64, name, description string) error {
 	res := r.db.WithContext(ctx).Model(&model.Device{}).Where("id = ?", id).Updates(map[string]any{
@@ -242,6 +258,9 @@ func (r *Repo) List(ctx context.Context, f biz.ListFilter) ([]*model.Device, err
 	}
 	if f.Name != "" {
 		tx = tx.Where("name LIKE ?", "%"+f.Name+"%")
+	}
+	if f.SystemName != "" {
+		tx = tx.Where("system_name = ?", f.SystemName)
 	}
 	if f.Limit > 0 {
 		tx = tx.Limit(f.Limit)

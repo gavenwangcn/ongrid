@@ -169,6 +169,22 @@ function labelHash(labels: Record<string, string>): string {
   return keys.map((k) => `${k}=${labels[k]}`).join('|');
 }
 
+function deviceIDsFromEdges(edges: Edge[], predicate: (e: Edge) => boolean): string[] {
+  return edges
+    .filter((e) => e.device_id != null && predicate(e))
+    .map((e) => String(e.device_id));
+}
+
+function facetForDeviceIDs(ids: string[]): Facet {
+  if (ids.length === 0) {
+    return { label: 'device_id', value: '__no_match__', op: '=' };
+  }
+  if (ids.length === 1) {
+    return { label: 'device_id', value: ids[0], op: '=' };
+  }
+  return { label: 'device_id', value: ids.join('|'), op: '=~' };
+}
+
 // Convert a Loki query_range response into our flat row model. Returns
 // rows sorted newest-first.
 function streamsToRows(resp: { resultType: string; result: unknown }): LogRow[] {
@@ -211,6 +227,7 @@ export default function LogsPage() {
   // label or raw device_id). Kept separate from deviceFilter so the
   // input doesn't disagree with what the user typed when no edge match.
   const [deviceInput, setDeviceInput] = useState('');
+  const [systemFilter, setSystemFilter] = useState('');
   const [roleFilter, setRoleFilter] = useState<'' | EdgeRole>('');
   const [filenameFilter, setFilenameFilter] = useState(''); // value = unit OR filename label
   const [edges, setEdges] = useState<Edge[]>([]);
@@ -241,28 +258,22 @@ export default function LogsPage() {
   // edges API gives us that id directly.
   const topbarFacets = useMemo<Facet[]>(() => {
     const out: Facet[] = [];
-    // deviceFilter (single id) wins over roleFilter (multi-device set)
-    // — explicit device pick is narrower and matches operator intent.
+    // deviceFilter (single id) wins over systemFilter (multi-device set)
+    // and roleFilter — explicit device pick is the narrowest scope.
     if (deviceFilter) {
       out.push({ label: 'device_id', value: deviceFilter, op: '=' });
-    } else if (roleFilter) {
-      // Loki has no `role` label (promtail only stamps device_id, unit,
-      // identifier, ongrid_source, service_name, level — see
-      // edgeagent/plugins/logs/render.go). Expand role into the set of
-      // device_ids that have it: 1 → `=`, many → `=~"id|id|..."`. Zero
-      // matches gets an impossible `device_id="__no_match__"` so the
-      // query returns empty rather than silently dropping the filter and
-      // showing ALL logs — which is what made the role chip look broken.
-      const matching = edges
-        .filter((e) => Array.isArray(e.roles) && (e.roles as string[]).includes(roleFilter))
-        .map((e) => String(e.id));
-      if (matching.length === 0) {
-        out.push({ label: 'device_id', value: '__no_match__', op: '=' });
-      } else if (matching.length === 1) {
-        out.push({ label: 'device_id', value: matching[0], op: '=' });
-      } else {
-        out.push({ label: 'device_id', value: matching.join('|'), op: '=~' });
-      }
+    } else if (systemFilter || roleFilter) {
+      const ids = deviceIDsFromEdges(edges, (e) => {
+        if (systemFilter && e.system_name?.trim() !== systemFilter) return false;
+        if (
+          roleFilter &&
+          !(Array.isArray(e.roles) && (e.roles as string[]).includes(roleFilter))
+        ) {
+          return false;
+        }
+        return true;
+      });
+      out.push(facetForDeviceIDs(ids));
     }
     if (filenameFilter) {
       // Try `unit` first (journald convention), fall back to `filename`
@@ -276,7 +287,29 @@ export default function LogsPage() {
       });
     }
     return out;
-  }, [deviceFilter, roleFilter, filenameFilter, edges]);
+  }, [deviceFilter, systemFilter, roleFilter, filenameFilter, edges]);
+
+  const systemNames = useMemo(() => {
+    const set = new Set<string>();
+    for (const e of edges) {
+      const s = e.system_name?.trim();
+      if (s) set.add(s);
+    }
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [edges]);
+
+  const deviceOptions = useMemo(() => {
+    let list = edges.filter((d) => d.device_id != null);
+    if (systemFilter) {
+      list = list.filter((d) => d.system_name?.trim() === systemFilter);
+    }
+    if (roleFilter) {
+      list = list.filter(
+        (d) => Array.isArray(d.roles) && (d.roles as string[]).includes(roleFilter),
+      );
+    }
+    return list;
+  }, [edges, systemFilter, roleFilter]);
 
   const effectiveQuery = useMemo(
     () => buildEffectiveQuery(committedQuery, topbarFacets, include, exclude),
@@ -381,6 +414,7 @@ export default function LogsPage() {
   }, [
     committedQuery,
     deviceFilter,
+    systemFilter,
     roleFilter,
     filenameFilter,
     include,
@@ -586,7 +620,7 @@ export default function LogsPage() {
         {/* Three-row form (operator feedback 2026-05-18: scope facets
             are what people set first, and the Search button should live
             with them):
-              row 1 = role / device / file / time range + Search
+              row 1 = role / system / device / file / time range + Search
               row 2 = LogQL + 快捷 chips
               row 3 = include / exclude keywords
             Inner divs flex-wrap so the layout degrades gracefully on
@@ -601,6 +635,31 @@ export default function LogsPage() {
             onChange={(v) => setRoleFilter(v as '' | EdgeRole)}
             className="w-36 shrink-0"
           />
+          <label className="block w-40 shrink-0">
+            <span className="mb-1 block text-[11px] text-zinc-500">{tr('系统', 'System')}</span>
+            <select
+              value={systemFilter}
+              onChange={(e) => {
+                const v = e.target.value;
+                setSystemFilter(v);
+                if (deviceFilter && v) {
+                  const stillValid = edges.some(
+                    (d) => String(d.device_id) === deviceFilter && d.system_name?.trim() === v,
+                  );
+                  if (!stillValid) {
+                    setDeviceFilter('');
+                    setDeviceInput('');
+                  }
+                }
+              }}
+              className={INPUT_BASE}
+            >
+              <option value="">{tr('全部系统', 'All systems')}</option>
+              {systemNames.map((name) => (
+                <option key={name} value={name}>{name}</option>
+              ))}
+            </select>
+          </label>
           {/* Device — native <select> so it visually reads as a dropdown.
               The free-form 'paste a device_id' case (rare) is preserved
               via the ?device= URL param + the deviceInput state that
@@ -622,13 +681,11 @@ export default function LogsPage() {
               className={INPUT_BASE}
             >
               <option value="">{tr('全部设备', 'All devices')}</option>
-              {edges
-                .filter((d) => d.device_id != null)
-                .map((d) => (
-                  <option key={d.id} value={String(d.device_id)}>
-                    {d.name} (#{d.device_id})
-                  </option>
-                ))}
+              {deviceOptions.map((d) => (
+                <option key={d.id} value={String(d.device_id)}>
+                  {d.name} (#{d.device_id})
+                </option>
+              ))}
             </select>
           </label>
           {/* File / unit — native <select> for visual consistency with
@@ -691,6 +748,7 @@ export default function LogsPage() {
                 dialect="logql"
                 context={{
                   range,
+                  system_name: systemFilter || undefined,
                   device_id: deviceFilter || undefined,
                   role: roleFilter || undefined,
                 }}
@@ -911,18 +969,19 @@ export default function LogsPage() {
                       {tr('清空 LogQL', 'Clear LogQL')}
                     </button>
                   )}
-                  {(deviceFilter || roleFilter || filenameFilter) && (
+                  {(deviceFilter || systemFilter || roleFilter || filenameFilter) && (
                     <button
                       type="button"
                       onClick={() => {
                         setDeviceFilter('');
                         setDeviceInput('');
+                        setSystemFilter('');
                         setRoleFilter('');
                         setFilenameFilter('');
                       }}
                       className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-[11px] text-zinc-300 hover:bg-zinc-800"
                     >
-                      {tr('清除筛选（设备 / 角色 / 文件）', 'Clear filters (device / role / file)')}
+                      {tr('清除筛选（系统 / 设备 / 角色 / 文件）', 'Clear filters (system / device / role / file)')}
                     </button>
                   )}
                   {(include || exclude) && (

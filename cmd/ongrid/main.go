@@ -1620,6 +1620,7 @@ func main() {
 	}
 
 	alertSvc := managersvcalert.New(alertUC, alertRepo, notifyRouter, log.With(slog.String("comp", "alert-svc")))
+	alertSvc.SetDeviceRepo(deviceRepo)
 	// Wire the read-only preview clients (Prom range + Loki range). Each
 	// is optional — when nil, the corresponding kind returns
 	// skipped_reason instead of a hard error.

@@ -156,6 +156,17 @@ func (d *fakeDeviceRepo) UpdateNameDescription(_ context.Context, id uint64, nam
 	return nil
 }
 
+func (d *fakeDeviceRepo) UpdateOperatorMeta(_ context.Context, id uint64, systemName, deviceIP string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	dev, ok := d.byID[id]
+	if !ok {
+		return errs.ErrNotFound
+	}
+	dev.SystemName, dev.DeviceIP = systemName, deviceIP
+	return nil
+}
+
 func (d *fakeDeviceRepo) SetNodeID(_ context.Context, id, nodeID uint64) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -310,6 +321,17 @@ func (r *fakeRepo) UpdateName(_ context.Context, id uint64, name string) error {
 	return nil
 }
 
+func (r *fakeRepo) UpdateOperatorMeta(_ context.Context, id uint64, systemName, deviceIP string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	e, ok := r.byID[id]
+	if !ok || e.DeletedAt.Valid {
+		return errs.ErrNotFound
+	}
+	e.SystemName, e.DeviceIP = systemName, deviceIP
+	return nil
+}
+
 func (r *fakeRepo) SetDeviceID(_ context.Context, id, deviceID uint64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -364,7 +386,7 @@ func TestCreateReturnsAccessKeyAndSecretKey(t *testing.T) {
 	ctx := context.Background()
 
 	uid := uint64(42)
-	res, err := uc.Create(ctx, "edge-1", &uid)
+	res, err := uc.Create(ctx, CreateParams{Name: "edge-1"}, &uid)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -395,7 +417,7 @@ func TestCreateAcceptsEmptyName(t *testing.T) {
 	// Empty name is intentionally allowed: HandleRegister back-fills
 	// it from the host's hostname on first tunnel handshake.
 	uc := NewUsecase(newFakeRepo(), nil, nil, nil)
-	res, err := uc.Create(context.Background(), "  ", nil)
+	res, err := uc.Create(context.Background(), CreateParams{Name: "  "}, nil)
 	if err != nil {
 		t.Fatalf("Create empty name: %v", err)
 	}
@@ -409,11 +431,11 @@ func TestListFiltersByStatus(t *testing.T) {
 	uc := NewUsecase(repo, nil, nil, nil)
 	ctx := context.Background()
 
-	a, err := uc.Create(ctx, "a", nil)
+	a, err := uc.Create(ctx, CreateParams{Name: "a"}, nil)
 	if err != nil {
 		t.Fatalf("create a: %v", err)
 	}
-	b, err := uc.Create(ctx, "b", nil)
+	b, err := uc.Create(ctx, CreateParams{Name: "b"}, nil)
 	if err != nil {
 		t.Fatalf("create b: %v", err)
 	}
@@ -444,7 +466,7 @@ func TestRotateSecretProducesDifferentHash(t *testing.T) {
 	uc := NewUsecase(repo, nil, nil, nil)
 	ctx := context.Background()
 
-	res, err := uc.Create(ctx, "x", nil)
+	res, err := uc.Create(ctx, CreateParams{Name: "x"}, nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -474,7 +496,7 @@ func TestDeleteHidesFromSubsequentGet(t *testing.T) {
 	uc := NewUsecase(repo, nil, nil, nil)
 	ctx := context.Background()
 
-	res, err := uc.Create(ctx, "gone", nil)
+	res, err := uc.Create(ctx, CreateParams{Name: "gone"}, nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -498,7 +520,7 @@ func TestAuthenticateSuccessReturnsSession(t *testing.T) {
 	uc := NewUsecase(repo, nil, nil, nil)
 	ctx := context.Background()
 
-	res, err := uc.Create(ctx, "auth-target", nil)
+	res, err := uc.Create(ctx, CreateParams{Name: "auth-target"}, nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -524,7 +546,7 @@ func TestHandleRegisterUpsertsDeviceAndLinksEdge(t *testing.T) {
 	uc := NewUsecase(repo, devices, nil, nil)
 	ctx := context.Background()
 
-	res, err := uc.Create(ctx, "edge-reg", nil)
+	res, err := uc.Create(ctx, CreateParams{Name: "edge-reg"}, nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -573,7 +595,7 @@ func TestHandleRegisterIsIdempotentForSameHost(t *testing.T) {
 	uc := NewUsecase(repo, devices, nil, nil)
 	ctx := context.Background()
 
-	res, err := uc.Create(ctx, "edge-idemp", nil)
+	res, err := uc.Create(ctx, CreateParams{Name: "edge-idemp"}, nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -594,7 +616,7 @@ func TestHandleOfflineFlipsStatusToOffline(t *testing.T) {
 	uc := NewUsecase(repo, nil, nil, nil)
 	ctx := context.Background()
 
-	res, err := uc.Create(ctx, "edge-off", nil)
+	res, err := uc.Create(ctx, CreateParams{Name: "edge-off"}, nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -638,7 +660,7 @@ func TestHandleHeartbeatBumpsLastSeen(t *testing.T) {
 	uc := NewUsecase(repo, nil, nil, nil)
 	ctx := context.Background()
 
-	res, err := uc.Create(ctx, "edge-hb", nil)
+	res, err := uc.Create(ctx, CreateParams{Name: "edge-hb"}, nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -663,7 +685,7 @@ func TestAuthenticateWrongSecretFails(t *testing.T) {
 	uc := NewUsecase(repo, nil, nil, nil)
 	ctx := context.Background()
 
-	res, err := uc.Create(ctx, "auth-fail", nil)
+	res, err := uc.Create(ctx, CreateParams{Name: "auth-fail"}, nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -699,7 +721,7 @@ func TestHandleRegisterMirrorsDeviceToNode(t *testing.T) {
 	uc.SetNodeMirror(mirror)
 	ctx := context.Background()
 
-	res, err := uc.Create(ctx, "edge-mirror", nil)
+	res, err := uc.Create(ctx, CreateParams{Name: "edge-mirror"}, nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -759,7 +781,7 @@ func TestHandleRegisterMigratesLegacyFingerprintInPlace(t *testing.T) {
 	uc := NewUsecase(repo, devices, nil, nil)
 	ctx := context.Background()
 
-	res, err := uc.Create(ctx, "edge-mig", nil)
+	res, err := uc.Create(ctx, CreateParams{Name: "edge-mig"}, nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}

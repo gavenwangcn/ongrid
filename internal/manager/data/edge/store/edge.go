@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -136,6 +137,22 @@ func (r *Repo) UpdateStatus(ctx context.Context, id uint64, status string, lastS
 // the edge without a name see it auto-populate when the agent boots.
 func (r *Repo) UpdateName(ctx context.Context, id uint64, name string) error {
 	res := r.db.WithContext(ctx).Model(&model.Edge{}).Where("id = ?", id).Update("name", name)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return errs.ErrNotFound
+	}
+	return nil
+}
+
+// UpdateOperatorMeta writes operator-assigned system_name / device_ip on
+// the edge row (pending until register copies to Device).
+func (r *Repo) UpdateOperatorMeta(ctx context.Context, id uint64, systemName, deviceIP string) error {
+	res := r.db.WithContext(ctx).Model(&model.Edge{}).Where("id = ?", id).Updates(map[string]any{
+		"system_name": strings.TrimSpace(systemName),
+		"device_ip":   strings.TrimSpace(deviceIP),
+	})
 	if res.Error != nil {
 		return res.Error
 	}

@@ -7,6 +7,35 @@ import { request } from './client';
 export type ReportStatus = 'pending' | 'generating' | 'ready' | 'failed';
 export type ReportKind = 'daily' | 'weekly' | 'monthly' | 'custom';
 
+export type ReportScope = {
+  system_name?: string;
+};
+
+export function parseReportScope(json?: string): ReportScope {
+  if (!json?.trim() || json.trim() === '{}') return {};
+  try {
+    const v = JSON.parse(json) as ReportScope;
+    return v && typeof v === 'object' ? v : {};
+  } catch {
+    return {};
+  }
+}
+
+export function formatReportScope(scope: ReportScope): string {
+  const name = scope.system_name?.trim();
+  if (!name) return '{}';
+  return JSON.stringify({ system_name: name });
+}
+
+export function uniqueSystemNames(items: { system_name?: string }[]): string[] {
+  const set = new Set<string>();
+  for (const item of items) {
+    const s = item.system_name?.trim();
+    if (s) set.add(s);
+  }
+  return [...set].sort((a, b) => a.localeCompare(b));
+}
+
 export type ReportListItem = {
   id: string;
   title: string;

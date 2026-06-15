@@ -76,6 +76,8 @@ type deviceItem struct {
 	ID             uint64     `json:"id"`
 	Name           string     `json:"name"`
 	Description    string     `json:"description,omitempty"`
+	SystemName     string     `json:"system_name,omitempty"`
+	DeviceIP       string     `json:"device_ip,omitempty"`
 	Hostname       string     `json:"hostname,omitempty"`
 	OS             string     `json:"os,omitempty"`
 	OSVersion      string     `json:"os_version,omitempty"`
@@ -106,6 +108,8 @@ type listResp struct {
 type updateReq struct {
 	Name        *string `json:"name,omitempty"`
 	Description *string `json:"description,omitempty"`
+	SystemName  *string `json:"system_name,omitempty"`
+	DeviceIP    *string `json:"device_ip,omitempty"`
 }
 
 type updateRolesReq struct {
@@ -128,8 +132,9 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	f := devicebiz.ListFilter{
-		Hostname: q.Get("hostname"),
-		Name:     q.Get("name"),
+		Hostname:   q.Get("hostname"),
+		Name:       q.Get("name"),
+		SystemName: q.Get("system_name"),
 	}
 	if rolesParam := q.Get("roles"); rolesParam != "" {
 		var mask uint8
@@ -225,13 +230,25 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	}
 	name := d.Name
 	desc := d.Description
+	systemName := d.SystemName
+	deviceIP := d.DeviceIP
 	if in.Name != nil {
 		name = *in.Name
 	}
 	if in.Description != nil {
 		desc = *in.Description
 	}
+	if in.SystemName != nil {
+		systemName = *in.SystemName
+	}
+	if in.DeviceIP != nil {
+		deviceIP = *in.DeviceIP
+	}
 	if err := h.uc.UpdateNameDescription(r.Context(), id, name, desc); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := h.uc.UpdateOperatorMeta(r.Context(), id, systemName, deviceIP); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -308,6 +325,8 @@ func devToItem(d *devicemodel.Device) deviceItem {
 		ID:             d.ID,
 		Name:           d.Name,
 		Description:    d.Description,
+		SystemName:     d.SystemName,
+		DeviceIP:       d.DeviceIP,
 		Hostname:       d.Hostname,
 		OS:             d.OS,
 		OSVersion:      d.OSVersion,

@@ -14,7 +14,6 @@ import {
   type IncidentSeverity,
   type IncidentStatus,
 } from '@/api/alerts';
-import { listEdges } from '@/api/edges';
 import { ApiError } from '@/api/client';
 import { useIncidentBadge } from '@/store/incidentBadge';
 import { usePermissions } from '@/store/me';
@@ -48,17 +47,6 @@ export default function AlertsPage() {
   const [severityFilter, setSeverityFilter] = useState<string>('');
   const [resolving, setResolving] = useState<{ incident: Incident } | null>(null);
   const [ackBusyId, setAckBusyId] = useState<number | null>(null);
-  // device_id → name for the Target column. incident.target_id is the
-  // device id (renamed from edge id May 2026, see alert model.go:212).
-  // Best-effort: missing name falls back to "Device <id>".
-  //
-  // IMPORTANT: only key by edge.device_id. The old code also wrote
-  // m[String(e.id)] = e.name which mixed edge.id space with device.id
-  // space — when two edges had id↔device_id swapped (e.g. edge 3 →
-  // device 4 + edge 4 → device 3), the later-iterated edge would
-  // clobber both entries with its own name, so device #3 and #4
-  // rendered with the same name. See 2026-06-02 fix.
-  const [deviceNames, setDeviceNames] = useState<Record<string, string>>({});
   // Source of truth for the global "未确认" count — same store the
   // sidebar badge polls. Reading from here (instead of a page-local
   // computation over filtered items) guarantees the page header
@@ -96,28 +84,6 @@ export default function AlertsPage() {
     },
     [statusFilter, severityFilter, refreshBadge]
   );
-
-  // Load the edge inventory once for Target-column name resolution.
-  useEffect(() => {
-    let cancelled = false;
-    listEdges()
-      .then((r) => {
-        if (cancelled) return;
-        const m: Record<string, string> = {};
-        for (const e of r.items ?? []) {
-          // Only key by device_id. Mixing edge.id keys caused
-          // cross-contamination across rows when ids were swapped.
-          if (e.device_id != null) m[String(e.device_id)] = e.name;
-        }
-        setDeviceNames(m);
-      })
-      .catch(() => {
-        /* best-effort: Target falls back to "Device <id>" */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   useEffect(() => {
     fetchIncidents();
@@ -211,6 +177,7 @@ export default function AlertsPage() {
                   <th className="px-4 py-2 font-medium">{tr('级别', 'Severity')}</th>
                   <th className="px-4 py-2 font-medium">{tr('规则', 'Rule')}</th>
                   <th className="px-4 py-2 font-medium">{tr('摘要', 'Summary')}</th>
+                  <th className="px-4 py-2 font-medium">{tr('系统', 'System')}</th>
                   <th className="px-4 py-2 font-medium">{tr('目标', 'Target')}</th>
                   <th className="px-4 py-2 font-medium">{tr('状态', 'Status')}</th>
                   <th className="px-4 py-2 font-medium">{tr('触发', 'Fired')}</th>
@@ -224,7 +191,6 @@ export default function AlertsPage() {
                   <IncidentRow
                     key={inc.id}
                     incident={inc}
-                    deviceNames={deviceNames}
                     ackBusy={ackBusyId === inc.id}
                     canMutate={canMutate}
                     onAck={async () => {
@@ -265,16 +231,27 @@ export default function AlertsPage() {
   );
 }
 
+function incidentSystemName(incident: Incident): string {
+  return incident.target_system_name?.trim() || '';
+}
+
+function incidentTargetLabel(incident: Incident, tr: (zh: string, en: string) => string): string {
+  if (incident.target_type !== 'edge' || !incident.target_id) return '—';
+  const name = incident.target_name?.trim();
+  const ip = incident.target_device_ip?.trim();
+  const parts = [name, ip].filter(Boolean);
+  if (parts.length > 0) return `${parts.join(' · ')} · #${incident.target_id}`;
+  return tr(`设备 ${incident.target_id}`, `Device ${incident.target_id}`);
+}
+
 function IncidentRow({
   incident,
-  deviceNames,
   onAck,
   onResolve,
   ackBusy,
   canMutate,
 }: {
   incident: Incident;
-  deviceNames: Record<string, string>;
   onAck(): void;
   onResolve(): void;
   ackBusy: boolean;
@@ -329,13 +306,10 @@ function IncidentRow({
         <div className="truncate" title={incident.summary}>{incident.summary}</div>
       </td>
       <td className="whitespace-nowrap px-4 py-2.5 text-zinc-400">
-        {/* Target stays simple: the device (name + id). Detail lives in the
-            wide Summary column — never dump the internal dedupe_key here. */}
-        {incident.target_type === 'edge' && incident.target_id
-          ? (deviceNames[incident.target_id]
-              ? `${deviceNames[incident.target_id]} · #${incident.target_id}`
-              : tr(`设备 ${incident.target_id}`, `Device ${incident.target_id}`))
-          : '—'}
+        {incidentSystemName(incident) || '—'}
+      </td>
+      <td className="whitespace-nowrap px-4 py-2.5 text-zinc-400">
+        {incidentTargetLabel(incident, tr)}
       </td>
       <td className="whitespace-nowrap px-4 py-2.5">
         <StatusBadge status={incident.status} />

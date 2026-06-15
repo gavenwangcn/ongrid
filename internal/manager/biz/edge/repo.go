@@ -37,6 +37,9 @@ type Repo interface {
 	// by HandleRegister to back-fill empty names with the host's
 	// reported hostname on first tunnel handshake.
 	UpdateName(ctx context.Context, id uint64, name string) error
+	// UpdateOperatorMeta stores pending system_name / device_ip before the
+	// host device row exists (copied to Device on register).
+	UpdateOperatorMeta(ctx context.Context, id uint64, systemName, deviceIP string) error
 	// SetDeviceID links an edge row to its host Device after register.
 	// Source of truth for the junction is the edge_devices table; this
 	// field is kept in sync as a convenience pointer.

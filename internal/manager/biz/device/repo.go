@@ -24,6 +24,7 @@ type ListFilter struct {
 	Online           *bool
 	Hostname         string
 	Name             string
+	SystemName       string
 	Limit            int
 	Offset           int
 }
@@ -64,6 +65,9 @@ type Repo interface {
 
 	// UpdateNameDescription updates operator-editable display fields.
 	UpdateNameDescription(ctx context.Context, id uint64, name, description string) error
+
+	// UpdateOperatorMeta updates operator-assigned system / IP metadata.
+	UpdateOperatorMeta(ctx context.Context, id uint64, systemName, deviceIP string) error
 
 	// SetNodeID writes Device.NodeID — the link to the topology
 	// `nodes` table. Called from the edge register flow (via NodeMirror)

@@ -10,9 +10,11 @@ export type Incident = {
   severity: IncidentSeverity;
   status: IncidentStatus;
   summary: string;
-  target_type?: string;
+	target_type?: string;
   target_id?: string;
   target_name?: string;
+  target_system_name?: string;
+  target_device_ip?: string;
   runbook_url?: string;
   dedupe_key?: string;
   labels?: Record<string, string>;

@@ -100,7 +100,13 @@ func TitleFor(kind string, p Period, locale string) string {
 	}
 }
 
-// --- date helpers (all operate in the time's own location) ---
+// TitleWithScope appends a system label when scope_json narrows coverage.
+func TitleWithScope(base, scopeJSON string) string {
+	if s := strings.TrimSpace(ParseScope(scopeJSON).SystemName); s != "" {
+		return base + " · " + s
+	}
+	return base
+}
 
 func startOfDay(t time.Time) time.Time {
 	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())

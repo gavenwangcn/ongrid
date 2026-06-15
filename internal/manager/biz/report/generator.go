@@ -276,6 +276,12 @@ func (g *workerGenerator) buildPrompt(rpt *model.Report, facts *ReportFacts) str
 	b.WriteString(mtr(
 		fmt.Sprintf("报告周期：%s — %s（%s）。\n", rpt.PeriodStart.Format("2006-01-02"), rpt.PeriodEnd.Format("2006-01-02"), rpt.Kind),
 		fmt.Sprintf("Report period: %s — %s (%s).\n", rpt.PeriodStart.Format("2006-01-02"), rpt.PeriodEnd.Format("2006-01-02"), rpt.Kind)))
+	if sys := strings.TrimSpace(ParseScope(rpt.ScopeJSON).SystemName); sys != "" {
+		b.WriteString(mtr(
+			fmt.Sprintf("报告范围：系统「%s」（仅统计该系统下设备）。\n", sys),
+			fmt.Sprintf("Report scope: system \"%s\" (devices in this system only).\n", sys),
+		))
+	}
 	if override := g.scheduleOverride(rpt); override != "" {
 		b.WriteString(mtr("\n额外要求：\n", "\nAdditional requirements:\n"))
 		b.WriteString(override)

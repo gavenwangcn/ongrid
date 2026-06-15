@@ -7,6 +7,8 @@ export type Device = {
   name: string;
   hostname?: string;
   description?: string;
+  system_name?: string;
+  device_ip?: string;
   roles?: string[];
   scope: DeviceRole;
   online?: boolean;
@@ -24,4 +26,11 @@ export function listDevices() {
 
 export function getDevice(id: string | number) {
   return request<Device>('GET', `/devices/${encodeURIComponent(String(id))}`);
+}
+
+export function updateDevice(
+  id: string | number,
+  input: { name?: string; description?: string; system_name?: string; device_ip?: string },
+) {
+  return request<void>('PATCH', `/devices/${encodeURIComponent(String(id))}`, input);
 }

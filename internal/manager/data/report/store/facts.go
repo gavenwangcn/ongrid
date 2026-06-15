@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strconv"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -44,6 +45,10 @@ var _ bizreport.FactsCollector = (*FactsCollector)(nil)
 var severityRank = map[string]int{"info": 0, "warning": 1, "critical": 2}
 
 func (c *FactsCollector) Collect(ctx context.Context, period, prev bizreport.Period, scope bizreport.Scope) (*bizreport.ReportFacts, error) {
+	scope, err := c.resolveScope(ctx, scope)
+	if err != nil {
+		return nil, err
+	}
 	facts := &bizreport.ReportFacts{
 		Period:      period,
 		PrevPeriod:  prev,
@@ -57,11 +62,11 @@ func (c *FactsCollector) Collect(ctx context.Context, period, prev bizreport.Per
 	facts.Incidents = incidents
 	facts.Actions = c.collectActions(ctx, period)
 	facts.AlertCounts = c.collectAlertCounts(ctx, period, scope)
-	facts.Fleet = c.collectFleet(ctx)
+	facts.Fleet = c.collectFleet(ctx, scope)
 	facts.Changes = c.collectChanges(ctx, period)
 	facts.Assets = c.collectAssets(ctx, period)
 	facts.Usage = c.collectUsage(ctx, period)
-	facts.Resource = c.collectResource(ctx, period)
+	facts.Resource = c.collectResource(ctx, period, scope)
 	facts.Hero = c.buildHero(period, prev, scope, incidents, facts.Actions, facts.Fleet, facts.Resource, c.countIncidents(ctx, prev, scope))
 	return facts, nil
 }
@@ -78,10 +83,12 @@ type resourceExpr struct {
 	peakExpr string
 }
 
-func resourceExprs(durStr string) map[string]resourceExpr {
-	cpu := `(100 * (1 - avg by (device_id) (rate(node_cpu_seconds_total{mode="idle"}[5m]))))`
-	mem := `(100 * (1 - (sum by (device_id) (node_memory_MemAvailable_bytes{}) / sum by (device_id) (node_memory_MemTotal_bytes{}))))`
-	disk := `(100 - 100 * (sum by (device_id) (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"}) / sum by (device_id) (node_filesystem_size_bytes{fstype!~"tmpfs|overlay"})))`
+func resourceExprs(durStr string, deviceIDs []uint64) map[string]resourceExpr {
+	devSel := promDeviceIDSelector(deviceIDs)
+	devLabels := promDeviceIDLabels(deviceIDs)
+	cpu := `(100 * (1 - avg by (device_id) (rate(node_cpu_seconds_total{mode="idle"` + devSel + `}[5m]))))`
+	mem := `(100 * (1 - (sum by (device_id) (node_memory_MemAvailable_bytes{` + devLabels + `}) / sum by (device_id) (node_memory_MemTotal_bytes{` + devLabels + `}))))`
+	disk := `(100 - 100 * (sum by (device_id) (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"` + devSel + `}) / sum by (device_id) (node_filesystem_size_bytes{fstype!~"tmpfs|overlay"` + devSel + `})))`
 	mk := func(e string) resourceExpr {
 		return resourceExpr{
 			avgExpr:  "avg(avg_over_time(" + e + "[" + durStr + ":5m]))",
@@ -91,11 +98,15 @@ func resourceExprs(durStr string) map[string]resourceExpr {
 	return map[string]resourceExpr{"cpu": mk(cpu), "mem": mk(mem), "disk": mk(disk)}
 }
 
-func (c *FactsCollector) collectResource(ctx context.Context, p bizreport.Period) bizreport.ResourceFacts {
+func (c *FactsCollector) collectResource(ctx context.Context, p bizreport.Period, scope bizreport.Scope) bizreport.ResourceFacts {
 	var r bizreport.ResourceFacts
 	if c.prom == nil {
 		return r
 	}
+	if scopedEmpty(scope) {
+		return r
+	}
+	deviceIDs := scopedDeviceIDs(scope)
 	// Subquery window = period length, capped at 30d so a long custom
 	// range doesn't ask Prometheus for an unbounded subquery.
 	dur := p.End.Sub(p.Start)
@@ -103,7 +114,7 @@ func (c *FactsCollector) collectResource(ctx context.Context, p bizreport.Period
 		dur = 7 * 24 * time.Hour
 	}
 	durStr := strconv.FormatInt(int64(dur.Hours()), 10) + "h"
-	exprs := resourceExprs(durStr)
+	exprs := resourceExprs(durStr, deviceIDs)
 	any := false
 	get := func(key string) (avg, peak float64, ok bool) {
 		e := exprs[key]
@@ -167,17 +178,23 @@ func parseQuotedFloat(raw json.RawMessage) (float64, bool) {
 
 // --- fleet coverage (devices table) ---
 
-func (c *FactsCollector) collectFleet(ctx context.Context) bizreport.FleetFacts {
+func (c *FactsCollector) collectFleet(ctx context.Context, scope bizreport.Scope) bizreport.FleetFacts {
 	var f bizreport.FleetFacts
+	if scopedEmpty(scope) {
+		return f
+	}
 	type row struct {
 		Online bool
 		Roles  uint8
 	}
 	var rows []row
-	if err := c.db.WithContext(ctx).Table("devices").
+	q := c.db.WithContext(ctx).Table("devices").
 		Select("online, roles").
-		Where("deleted_at IS NULL").
-		Find(&rows).Error; err != nil {
+		Where("deleted_at IS NULL")
+	if ids := scopedDeviceIDs(scope); len(ids) > 0 {
+		q = q.Where("id IN ?", ids)
+	}
+	if err := q.Find(&rows).Error; err != nil {
 		return f
 	}
 	f.Roles = map[string]int{}
@@ -421,11 +438,73 @@ func (c *FactsCollector) buildHero(p, prev bizreport.Period, scope bizreport.Sco
 	return hero
 }
 
+// --- scope resolution (system_name → device ids) ---
+
+func (c *FactsCollector) resolveScope(ctx context.Context, scope bizreport.Scope) (bizreport.Scope, error) {
+	name := strings.TrimSpace(scope.SystemName)
+	if name == "" || len(scope.EdgeIDs) > 0 {
+		return scope, nil
+	}
+	ids, err := c.deviceIDsForSystem(ctx, name)
+	if err != nil {
+		return scope, err
+	}
+	scope.EdgeIDs = ids
+	return scope, nil
+}
+
+func (c *FactsCollector) deviceIDsForSystem(ctx context.Context, name string) ([]uint64, error) {
+	type idRow struct {
+		ID uint64
+	}
+	var rows []idRow
+	err := c.db.WithContext(ctx).Table("devices").
+		Select("id").
+		Where("deleted_at IS NULL").
+		Where("system_name = ?", name).
+		Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	out := make([]uint64, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r.ID)
+	}
+	return out, nil
+}
+
+func scopedDeviceIDs(scope bizreport.Scope) []uint64 {
+	return scope.EdgeIDs
+}
+
+func scopedEmpty(scope bizreport.Scope) bool {
+	return strings.TrimSpace(scope.SystemName) != "" && len(scope.EdgeIDs) == 0
+}
+
+func promDeviceIDSelector(ids []uint64) string {
+	if len(ids) == 0 {
+		return ""
+	}
+	parts := make([]string, len(ids))
+	for i, id := range ids {
+		parts[i] = strconv.FormatUint(id, 10)
+	}
+	return ",device_id=~\"" + strings.Join(parts, "|") + "\""
+}
+
+func promDeviceIDLabels(ids []uint64) string {
+	sel := promDeviceIDSelector(ids)
+	return strings.TrimPrefix(sel, ",")
+}
+
 // --- helpers ---
 
 func applyEdgeScope(q *gorm.DB, scope bizreport.Scope) *gorm.DB {
-	if len(scope.EdgeIDs) > 0 {
-		return q.Where("device_id IN ?", scope.EdgeIDs)
+	if scopedEmpty(scope) {
+		return q.Where("1 = 0")
+	}
+	if ids := scopedDeviceIDs(scope); len(ids) > 0 {
+		return q.Where("device_id IN ?", ids)
 	}
 	return q
 }

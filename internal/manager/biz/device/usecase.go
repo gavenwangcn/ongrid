@@ -88,6 +88,14 @@ func (u *Usecase) UpdateNameDescription(ctx context.Context, id uint64, name, de
 	return u.repo.UpdateNameDescription(ctx, id, strings.TrimSpace(name), strings.TrimSpace(description))
 }
 
+// UpdateOperatorMeta updates operator-assigned system name and device IP.
+func (u *Usecase) UpdateOperatorMeta(ctx context.Context, id uint64, systemName, deviceIP string) error {
+	if u.repo == nil {
+		return errs.ErrNotWiredYet
+	}
+	return u.repo.UpdateOperatorMeta(ctx, id, systemName, deviceIP)
+}
+
 // Delete soft-deletes a device. Junction rows are NOT auto-removed —
 // caller is responsible (the v1 UI doesn't expose device deletion yet
 // so this is a future hook).

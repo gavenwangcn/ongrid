@@ -94,14 +94,23 @@ type CreateResult struct {
 	SecretKey string // plaintext; never stored
 }
 
+// CreateParams is the operator input for registering a new edge agent.
+type CreateParams struct {
+	Name       string
+	SystemName string
+	DeviceIP   string
+}
+
 // Create registers a new edge. It generates a 24-char URL-safe AccessKeyID,
 // a 32-char URL-safe SecretKey, argon2id-hashes the secret, and inserts the
 // row. Status starts as offline and flips to online on first tunnel handshake.
-func (u *Usecase) Create(ctx context.Context, name string, createdBy *uint64) (*CreateResult, error) {
+func (u *Usecase) Create(ctx context.Context, p CreateParams, createdBy *uint64) (*CreateResult, error) {
 	if u.repo == nil {
 		return nil, errs.ErrNotWiredYet
 	}
-	name = strings.TrimSpace(name)
+	name := strings.TrimSpace(p.Name)
+	systemName := strings.TrimSpace(p.SystemName)
+	deviceIP := strings.TrimSpace(p.DeviceIP)
 	// Empty is allowed — edge.HandleRegister back-fills the name with
 	// the host's reported hostname on first tunnel handshake. The SPA
 	// shows "(待主机上线)" placeholder for blank names in the meantime.
@@ -121,6 +130,8 @@ func (u *Usecase) Create(ctx context.Context, name string, createdBy *uint64) (*
 
 	e := &model.Edge{
 		Name:          name,
+		SystemName:    systemName,
+		DeviceIP:      deviceIP,
 		AccessKeyID:   ak,
 		SecretKeyHash: hash,
 		Status:        model.StatusOffline,
@@ -213,6 +224,27 @@ func (u *Usecase) Delete(ctx context.Context, id uint64) error {
 	return u.repo.Delete(ctx, id)
 }
 
+// UpdateOperatorMeta updates pending system/IP metadata on the edge row.
+// When a host device is already linked, the same values are written to Device.
+func (u *Usecase) UpdateOperatorMeta(ctx context.Context, edgeID uint64, systemName, deviceIP string) error {
+	if u.repo == nil {
+		return errs.ErrNotWiredYet
+	}
+	systemName = strings.TrimSpace(systemName)
+	deviceIP = strings.TrimSpace(deviceIP)
+	if err := u.repo.UpdateOperatorMeta(ctx, edgeID, systemName, deviceIP); err != nil {
+		return err
+	}
+	edge, err := u.repo.GetByID(ctx, edgeID)
+	if err != nil {
+		return err
+	}
+	if edge.DeviceID != nil && u.devices != nil {
+		return u.devices.UpdateOperatorMeta(ctx, *edge.DeviceID, systemName, deviceIP)
+	}
+	return nil
+}
+
 // RotateSecret generates a new SecretKey, replaces the stored hash, and
 // returns the plaintext ONCE. The previous secret is immediately invalid
 // (any running tunnel session authenticated with the old secret stays up
@@ -301,6 +333,11 @@ func (u *Usecase) HandleRegister(ctx context.Context, edgeID uint64, info tunnel
 	}
 	if err := u.devices.MarkOnline(ctx, dev.ID); err != nil {
 		return fmt.Errorf("mark device online: %w", err)
+	}
+	if sys := strings.TrimSpace(edge.SystemName); sys != "" || strings.TrimSpace(edge.DeviceIP) != "" {
+		if err := u.devices.UpdateOperatorMeta(ctx, dev.ID, edge.SystemName, edge.DeviceIP); err != nil {
+			return fmt.Errorf("copy operator meta to device: %w", err)
+		}
 	}
 	// device→topology mirror. Best-effort: a mirror failure
 	// must not break edge register, since the topology migration's

@@ -263,10 +263,25 @@ function Header({
             <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-zinc-500">
               {incident.target_type === 'edge' && incident.target_id && (
                 <span>
-                  {tr('设备 ', 'Device ')}
+                  {incident.target_system_name && (
+                    <>
+                      {tr('系统：', 'System: ')}
+                      <span className="text-zinc-300">{incident.target_system_name}</span>
+                      {' · '}
+                    </>
+                  )}
+                  {tr('设备：', 'Device: ')}
                   <Link to={`/edges/${incident.target_id}`} className="text-zinc-300 hover:underline">
-                    {incident.target_id}
+                    {incident.target_name?.trim()
+                      ? `${incident.target_name} · #${incident.target_id}`
+                      : incident.target_id}
                   </Link>
+                  {incident.target_device_ip && (
+                    <>
+                      {' · '}
+                      <span className="text-zinc-400">{incident.target_device_ip}</span>
+                    </>
+                  )}
                 </span>
               )}
               <span>

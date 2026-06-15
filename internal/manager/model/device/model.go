@@ -43,6 +43,13 @@ type Device struct {
 	// detail page without affecting the Edge agent's name.
 	Name        string `gorm:"size:255;not null;default:''"`
 	Description string `gorm:"size:255;not null;default:''"`
+	// SystemName is the operator-assigned business system this host
+	// belongs to (e.g. "订单中心"). Used for fleet grouping, alerts, and
+	// AI tools that reason at the system dimension.
+	SystemName string `gorm:"size:128;not null;default:'';index:idx_devices_system_name;column:system_name"`
+	// DeviceIP is the operator-assigned management / service IP for this
+	// host. May differ from scrape addresses or reported hostname.
+	DeviceIP string `gorm:"size:64;not null;default:'';column:device_ip"`
 
 	Hostname      string `gorm:"size:255;not null"`
 	OS            string `gorm:"size:64;not null"`

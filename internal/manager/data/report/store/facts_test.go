@@ -35,7 +35,7 @@ func newFactsDB(t *testing.T) *gorm.DB {
 			id INTEGER PRIMARY KEY, occurred_at DATETIME, status TEXT,
 			action TEXT, resource_type TEXT, resource_name TEXT, user_email TEXT)`,
 		// Fleet now reads the devices table (online + roles bit field).
-		`CREATE TABLE devices (id INTEGER PRIMARY KEY, online BOOLEAN, roles INTEGER, deleted_at DATETIME)`,
+		`CREATE TABLE devices (id INTEGER PRIMARY KEY, online BOOLEAN, roles INTEGER, system_name TEXT, deleted_at DATETIME)`,
 	}
 	for _, s := range stmts {
 		if err := db.Exec(s).Error; err != nil {
@@ -89,7 +89,7 @@ func TestFactsCollector_Collect(t *testing.T) {
 		(4,'2026-06-04T00:00:00Z','failure','rule_delete','alert_rule','旧规则','ops@x')`)
 
 	// devices: 2 online (server, server+database) + 1 offline (storage).
-	db.Exec(`INSERT INTO devices VALUES (1,1,1,NULL),(2,1,9,NULL),(3,0,2,NULL)`)
+	db.Exec(`INSERT INTO devices VALUES (1,1,1,NULL,NULL),(2,1,9,NULL,NULL),(3,0,2,NULL,NULL)`)
 
 	// prom=nil → Resource.Available=false → hero falls back to
 	// devices/incidents/actions/online.
@@ -153,6 +153,31 @@ func TestFactsCollector_Collect(t *testing.T) {
 	}
 	if facts.Resource.Available {
 		t.Errorf("resource should be unavailable with nil prom")
+	}
+}
+
+func TestFactsCollector_SystemScopeFilter(t *testing.T) {
+	db := newFactsDB(t)
+	ctx := context.Background()
+	period := bizreport.Period{
+		Start: mustParse(t, "2026-06-01T00:00:00Z"),
+		End:   mustParse(t, "2026-06-08T00:00:00Z"),
+	}
+	db.Exec(`INSERT INTO devices VALUES (7, true, 1, 'prod-a', NULL), (9, false, 2, 'prod-b', NULL)`)
+	db.Exec(`INSERT INTO alert_incidents VALUES
+		(1,'A','warning','resolved',7,'2026-06-02T10:00:00Z','2026-06-02T10:30:00Z',NULL),
+		(2,'B','warning','resolved',9,'2026-06-03T10:00:00Z','2026-06-03T10:30:00Z',NULL)`)
+
+	fc := NewFactsCollector(db, nil)
+	facts, err := fc.Collect(ctx, period, period, bizreport.Scope{SystemName: "prod-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(facts.Incidents) != 1 || facts.Incidents[0].DeviceID != 7 {
+		t.Errorf("system scope incidents: %+v", facts.Incidents)
+	}
+	if facts.Fleet.Total != 1 {
+		t.Errorf("system scope fleet total = %d, want 1", facts.Fleet.Total)
 	}
 }
 

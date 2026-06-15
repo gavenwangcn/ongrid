@@ -1,13 +1,22 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Plus, Settings } from 'lucide-react';
+import { Modal } from '@/components/Modal';
 import { cn } from '@/lib/cn';
 import { relativeTime } from '@/lib/format';
 import { usePoll } from '@/lib/usePoll';
 import { usePermissions } from '@/store/me';
 import { useI18n } from '@/i18n/locale';
 import { ApiError } from '@/api/client';
-import { generateNow, listReports, type ReportListItem, type ReportStatus } from '@/api/reports';
+import { listDevices } from '@/api/devices';
+import {
+  formatReportScope,
+  generateNow,
+  listReports,
+  uniqueSystemNames,
+  type ReportListItem,
+  type ReportStatus,
+} from '@/api/reports';
 
 const POLL_MS = 20_000;
 const PAGE_SIZE = 20;
@@ -58,6 +67,8 @@ export default function ReportsPage() {
   const [kindFilter, setKindFilter] = useState('');
   const [page, setPage] = useState(0);
   const [err, setErr] = useState<string | null>(null);
+  const [generateOpen, setGenerateOpen] = useState(false);
+  const [systemNames, setSystemNames] = useState<string[]>([]);
 
   const load = useCallback(async () => {
     try {
@@ -83,19 +94,41 @@ export default function ReportsPage() {
   }, [load]);
   usePoll(load, POLL_MS);
 
-  const onGenerate = useCallback(async () => {
-    setGenerating(true);
-    setErr(null);
-    try {
-      const rpt = await generateNow({ kind: 'weekly' });
-      await load();
-      navigate(`/reports/${rpt.id}`);
-    } catch (e) {
-      setErr(reportActionError(e, tr));
-    } finally {
-      setGenerating(false);
-    }
-  }, [load, navigate, tr]);
+  useEffect(() => {
+    if (!generateOpen) return;
+    let cancelled = false;
+    listDevices()
+      .then((r) => {
+        if (!cancelled) setSystemNames(uniqueSystemNames(r.items ?? []));
+      })
+      .catch(() => {
+        if (!cancelled) setSystemNames([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [generateOpen]);
+
+  const onGenerate = useCallback(
+    async (systemName: string) => {
+      setGenerating(true);
+      setErr(null);
+      try {
+        const rpt = await generateNow({
+          kind: 'weekly',
+          scope_json: formatReportScope({ system_name: systemName }),
+        });
+        setGenerateOpen(false);
+        await load();
+        navigate(`/reports/${rpt.id}`);
+      } catch (e) {
+        setErr(reportActionError(e, tr));
+      } finally {
+        setGenerating(false);
+      }
+    },
+    [load, navigate, tr],
+  );
 
   return (
     <main className="anim-fade flex flex-1 flex-col overflow-hidden">
@@ -117,7 +150,7 @@ export default function ReportsPage() {
             {canMutate && (
               <button
                 type="button"
-                onClick={() => void onGenerate()}
+                onClick={() => setGenerateOpen(true)}
                 disabled={generating}
                 className="inline-flex items-center gap-1.5 rounded-md border border-indigo-600 bg-indigo-600/20 px-2.5 py-1.5 text-xs text-indigo-200 hover:bg-indigo-600/30 disabled:opacity-50"
               >
@@ -240,7 +273,85 @@ export default function ReportsPage() {
           </div>
         )}
       </div>
+
+      {generateOpen && (
+        <GenerateReportModal
+          systemNames={systemNames}
+          generating={generating}
+          onClose={() => setGenerateOpen(false)}
+          onGenerate={(systemName) => void onGenerate(systemName)}
+          tr={tr}
+        />
+      )}
     </main>
+  );
+}
+
+function GenerateReportModal({
+  systemNames,
+  generating,
+  onClose,
+  onGenerate,
+  tr,
+}: {
+  systemNames: string[];
+  generating: boolean;
+  onClose(): void;
+  onGenerate(systemName: string): void;
+  tr: (zh: string, en: string) => string;
+}) {
+  const [systemName, setSystemName] = useState('');
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      size="sm"
+      title={tr('立即生成报告', 'Generate report now')}
+      footer={
+        <>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md border border-zinc-700 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800"
+          >
+            {tr('取消', 'Cancel')}
+          </button>
+          <button
+            type="button"
+            onClick={() => onGenerate(systemName)}
+            disabled={generating}
+            className="rounded-md border border-indigo-600 bg-indigo-600/20 px-3 py-1.5 text-xs text-indigo-200 hover:bg-indigo-600/30 disabled:opacity-50"
+          >
+            {generating ? tr('生成中…', 'Generating…') : tr('生成周报', 'Generate weekly')}
+          </button>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        <p className="text-xs text-zinc-500">
+          {tr('默认生成上一自然周的周报。可选择仅统计某一系统下的设备。', 'Generates the previous calendar week by default. Optionally narrow to one system.')}
+        </p>
+        <label className="block text-xs text-zinc-400">
+          {tr('系统范围', 'System scope')}
+          <select
+            value={systemName}
+            onChange={(e) => setSystemName(e.target.value)}
+            className="mt-1.5 w-full rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-2 text-sm text-zinc-100"
+          >
+            <option value="">{tr('全部设备', 'All devices')}</option>
+            {systemNames.map((name) => (
+              <option key={name} value={name}>{name}</option>
+            ))}
+          </select>
+        </label>
+        {systemNames.length === 0 && (
+          <p className="text-[11px] text-zinc-600">
+            {tr('未找到已填系统名称的设备；将统计全部设备。可在设备元数据中填写系统名称。', 'No devices with a system name yet — report will cover all devices. Set system name on device metadata.')}
+          </p>
+        )}
+      </div>
+    </Modal>
   );
 }
 

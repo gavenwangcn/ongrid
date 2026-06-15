@@ -115,8 +115,12 @@ export default function EdgesPage() {
   }, [refresh]);
   usePoll(refresh, 10_000);
 
-  async function onCreate(name: string) {
-    const created: CreateEdgeResponse = await createEdge({ name });
+  async function onCreate(name: string, systemName: string, deviceIP: string) {
+    const created: CreateEdgeResponse = await createEdge({
+      name,
+      system_name: systemName,
+      device_ip: deviceIP,
+    });
     setSecretReveal({
       title: tr('已创建设备', 'Device created'),
       accessKey: created.access_key_id,
@@ -231,6 +235,8 @@ export default function EdgesPage() {
                 <tr>
                   <th className="px-4 py-2.5 text-left">ID</th>
                   <th className="px-4 py-2.5 text-left">{tr('名称', 'Name')}</th>
+                  <th className="px-4 py-2.5 text-left">{tr('系统名称', 'System')}</th>
+                  <th className="px-4 py-2.5 text-left">{tr('设备 IP', 'Device IP')}</th>
                   <th className="px-4 py-2.5 text-left">{tr('主机名', 'Hostname')}</th>
                   <th className="px-4 py-2.5 text-left">{tr('角色', 'Roles')}</th>
                   <th className="px-4 py-2.5 text-left">{tr('状态', 'Status')}</th>
@@ -243,13 +249,13 @@ export default function EdgesPage() {
               <tbody className="divide-y divide-zinc-800/40">
                 {loading && edges.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="px-4 py-10 text-center text-zinc-500">
+                    <td colSpan={11} className="px-4 py-10 text-center text-zinc-500">
                       {tr('加载中…', 'Loading…')}
                     </td>
                   </tr>
                 ) : edges.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="px-4 py-10 text-center text-zinc-500">
+                    <td colSpan={11} className="px-4 py-10 text-center text-zinc-500">
                       {rolesFilter
                         ? tr(
                             `没有 ${ROLE_FILTER_TITLES[rolesFilter]?.[0] ?? rolesFilter} 设备。点设备名打开详情后可在右上角分配角色。`,
@@ -281,6 +287,12 @@ export default function EdgesPage() {
                         {e.name || (
                           <span className="italic text-zinc-500">{tr('（待主机上线）', '(waiting for host)')}</span>
                         )}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-2.5 text-zinc-400">
+                        {e.system_name?.trim() ? e.system_name : '—'}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-2.5 font-mono text-xs text-zinc-400">
+                        {e.device_ip?.trim() ? e.device_ip : '—'}
                       </td>
                       <td className="whitespace-nowrap px-4 py-2.5 text-zinc-400">
                         {extractHostname(e.host_info) ?? '—'}
@@ -344,8 +356,8 @@ export default function EdgesPage() {
       <CreateEdgeModal
         open={createOpen}
         onClose={() => setCreateOpen(false)}
-        onSubmit={async (name) => {
-          await onCreate(name);
+        onSubmit={async (name, systemName, deviceIP) => {
+          await onCreate(name, systemName, deviceIP);
           setCreateOpen(false);
         }}
       />
@@ -938,16 +950,20 @@ function CreateEdgeModal({
 }: {
   open: boolean;
   onClose(): void;
-  onSubmit(name: string): Promise<void>;
+  onSubmit(name: string, systemName: string, deviceIP: string): Promise<void>;
 }) {
   const { tr } = useI18n();
   const [name, setName] = useState('');
+  const [systemName, setSystemName] = useState('');
+  const [deviceIP, setDeviceIP] = useState('');
   const [pending, setPending] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) {
       setName('');
+      setSystemName('');
+      setDeviceIP('');
       setErr(null);
       setPending(false);
     }
@@ -958,9 +974,7 @@ function CreateEdgeModal({
     setPending(true);
     setErr(null);
     try {
-      // Empty name is allowed; backend will mint a 10-char id as the
-      // default label.
-      await onSubmit(name.trim());
+      await onSubmit(name.trim(), systemName.trim(), deviceIP.trim());
     } catch (e) {
       setErr((e as Error).message || tr('创建失败', 'Create failed'));
     } finally {
@@ -1002,6 +1016,29 @@ function CreateEdgeModal({
         value={name}
         onChange={(e) => setName(e.target.value)}
         placeholder={tr("留空，主机上线后自动填主机名", "Leave blank; auto-fill on first heartbeat")}
+        className="w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-100 focus:border-zinc-600 focus:outline-none"
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') void go();
+        }}
+      />
+      <label htmlFor="edge-system-name" className="mb-1 mt-3 block text-[11px] text-zinc-500">
+        {tr('系统名称', 'System name')}
+      </label>
+      <input
+        id="edge-system-name"
+        value={systemName}
+        onChange={(e) => setSystemName(e.target.value)}
+        placeholder={tr('如：订单中心、监控平台', 'e.g. order-service, monitoring')}
+        className="w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-100 focus:border-zinc-600 focus:outline-none"
+      />
+      <label htmlFor="edge-device-ip" className="mb-1 mt-3 block text-[11px] text-zinc-500">
+        {tr('设备 IP', 'Device IP')}
+      </label>
+      <input
+        id="edge-device-ip"
+        value={deviceIP}
+        onChange={(e) => setDeviceIP(e.target.value)}
+        placeholder={tr('管理/业务 IP，手填', 'Management IP (manual)')}
         className="w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-100 focus:border-zinc-600 focus:outline-none"
         onKeyDown={(e) => {
           if (e.key === 'Enter') void go();

@@ -32,6 +32,7 @@ import { usePoll } from '@/lib/usePoll';
 import {
   getEdge,
   promQueryRange,
+  updateEdgeMeta,
   type Edge,
   type PromMatrixSeries,
 } from '@/api/edges';
@@ -387,22 +388,87 @@ export default function EdgeDetailPage() {
           {tab === 'topology' && edge && <TopologyTab deviceID={edge.device_id ?? null} />}
 
           {tab === 'meta' && edge && (
-            <JsonCard
-              title={tr('元数据', 'Metadata')}
-              data={{
-                id: edge.id,
-                name: edge.name,
-                status: edge.status,
-                access_key_id: edge.access_key_id,
-                last_seen_at: edge.last_seen_at,
-                created_at: edge.created_at,
-                updated_at: edge.updated_at,
-              }}
-              empty={tr('加载中…', 'Loading…')}
-            />
+            <EdgeMetaPanel edge={edge} onSaved={(patch) => setEdge({ ...edge, ...patch })} />
           )}
         </div>
       </main>
+  );
+}
+
+function EdgeMetaPanel({
+  edge,
+  onSaved,
+}: {
+  edge: Edge;
+  onSaved(patch: Pick<Edge, 'system_name' | 'device_ip'>): void;
+}) {
+  const { tr } = useI18n();
+  const [systemName, setSystemName] = useState(edge.system_name ?? '');
+  const [deviceIP, setDeviceIP] = useState(edge.device_ip ?? '');
+  const [pending, setPending] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [ok, setOk] = useState(false);
+
+  useEffect(() => {
+    setSystemName(edge.system_name ?? '');
+    setDeviceIP(edge.device_ip ?? '');
+  }, [edge.id, edge.system_name, edge.device_ip]);
+
+  async function save() {
+    setPending(true);
+    setErr(null);
+    setOk(false);
+    try {
+      await updateEdgeMeta(edge.id, {
+        system_name: systemName.trim(),
+        device_ip: deviceIP.trim(),
+      });
+      onSaved({ system_name: systemName.trim(), device_ip: deviceIP.trim() });
+      setOk(true);
+    } catch (e) {
+      setErr((e as Error).message || tr('保存失败', 'Save failed'));
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <div className="max-w-lg rounded-xl border border-zinc-800/60 bg-zinc-900/40 p-4">
+      <h2 className="text-sm font-medium text-zinc-100">{tr('归属信息', 'Attribution')}</h2>
+      <p className="mt-1 text-[11px] text-zinc-500">
+        {tr('系统名称与设备 IP 用于告警展示、AI 按系统维度巡检。', 'System name and IP feed alerts and system-scoped AI checks.')}
+      </p>
+      <label className="mb-1 mt-4 block text-[11px] text-zinc-500">{tr('系统名称', 'System name')}</label>
+      <input
+        value={systemName}
+        onChange={(e) => setSystemName(e.target.value)}
+        className="w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-100 focus:border-zinc-600 focus:outline-none"
+      />
+      <label className="mb-1 mt-3 block text-[11px] text-zinc-500">{tr('设备 IP', 'Device IP')}</label>
+      <input
+        value={deviceIP}
+        onChange={(e) => setDeviceIP(e.target.value)}
+        className="w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-100 focus:border-zinc-600 focus:outline-none"
+      />
+      <div className="mt-4 flex items-center gap-2">
+        <button
+          type="button"
+          disabled={pending}
+          onClick={() => void save()}
+          className="inline-flex items-center gap-1 rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+        >
+          {pending ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+          {tr('保存', 'Save')}
+        </button>
+        {ok && <span className="text-[11px] text-emerald-400">{tr('已保存', 'Saved')}</span>}
+      </div>
+      {err && <p className="mt-2 text-[11px] text-red-300">{err}</p>}
+      <div className="mt-6 border-t border-zinc-800/60 pt-4 text-[11px] text-zinc-500">
+        <div>ID: {edge.id}</div>
+        <div>Access Key: {edge.access_key_id}</div>
+        <div>Device ID: {edge.device_id ?? '—'}</div>
+      </div>
+    </div>
   );
 }
 

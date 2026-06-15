@@ -28,6 +28,8 @@ export type Edge = {
   id: number;
   name: string;
   status: EdgeStatus;
+  system_name?: string;
+  device_ip?: string;
   // roles is always present (empty array == 未分类). Coding-wise prefer
   // checking includes() rather than .length so the intent reads cleanly.
   roles: EdgeRole[];
@@ -141,8 +143,12 @@ export function getEdge(id: string | number) {
   return request<Edge>('GET', `/edges/${encodeURIComponent(String(id))}`);
 }
 
-export function createEdge(input: { name: string }) {
+export function createEdge(input: { name: string; system_name?: string; device_ip?: string }) {
   return request<CreateEdgeResponse>('POST', '/edges', input);
+}
+
+export function updateEdgeMeta(id: string | number, input: { system_name?: string; device_ip?: string }) {
+  return request<void>('PATCH', `/edges/${encodeURIComponent(String(id))}`, input);
 }
 
 export function deleteEdge(id: string | number) {

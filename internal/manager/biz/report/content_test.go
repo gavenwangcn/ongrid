@@ -118,8 +118,8 @@ func TestFlattenEntities(t *testing.T) {
 }
 
 func TestParseScope(t *testing.T) {
-	s := ParseScope(`{"edge_ids":[7,9],"severity_min":"warning"}`)
-	if len(s.EdgeIDs) != 2 || s.SeverityMin != "warning" {
+	s := ParseScope(`{"edge_ids":[7,9],"severity_min":"warning","system_name":"prod"}`)
+	if len(s.EdgeIDs) != 2 || s.SeverityMin != "warning" || s.SystemName != "prod" {
 		t.Errorf("scope parse: %+v", s)
 	}
 	// Empty / malformed → zero scope (full coverage), no panic.

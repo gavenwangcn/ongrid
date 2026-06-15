@@ -39,10 +39,11 @@ const roleAdmin = "admin"
 // exists so tests can swap in a fake without constructing a full biz stack;
 // *service/edge.Service satisfies it by structural typing.
 type EdgeService interface {
-	Create(ctx context.Context, name string, createdBy *uint64) (*biz.CreateResult, error)
+	Create(ctx context.Context, p biz.CreateParams, createdBy *uint64) (*biz.CreateResult, error)
 	List(ctx context.Context, f biz.ListFilter) ([]*model.Edge, error)
 	Get(ctx context.Context, id uint64) (*model.Edge, error)
 	Delete(ctx context.Context, id uint64) error
+	UpdateOperatorMeta(ctx context.Context, id uint64, systemName, deviceIP string) error
 	RotateSecret(ctx context.Context, id uint64) (string, error)
 	UpgradeAgent(ctx context.Context, edgeID uint64, url, sha256 string) (tunnel.AgentUpgradeResponse, error)
 	FetchPackage(ctx context.Context, edgeID uint64, url, sha256, version string) (tunnel.FetchPackageResponse, error)
@@ -142,6 +143,7 @@ func (h *Handler) Register(r chi.Router) {
 	r.With(h.writeMW("edge:*")).Post("/v1/edges", h.createEdge)
 	r.Get("/v1/edges", h.listEdges)
 	r.Get("/v1/edges/{id}", h.getEdge)
+	r.With(h.requireAdmin).Patch("/v1/edges/{id}", h.patchEdge)
 	r.With(h.deleteMW("edge:*")).Delete("/v1/edges/{id}", h.deleteEdge)
 	r.With(h.writeMW("edge:*")).Post("/v1/edges/{id}/rotate-secret", h.rotateSecret)
 	// Remote agent upgrade (C11 Phase-B). Gated behind edge:* so non-admin
@@ -321,7 +323,9 @@ func (h *Handler) requireAdmin(next http.Handler) http.Handler {
 // --------- DTOs ---------
 
 type createReq struct {
-	Name string `json:"name"`
+	Name       string `json:"name"`
+	SystemName string `json:"system_name"`
+	DeviceIP   string `json:"device_ip"`
 }
 
 type createResp struct {
@@ -351,6 +355,8 @@ type listItem struct {
 	// Roles is denormalised from the linked Device for legacy UI compat
 	// — empty array means 未分类 OR no host device linked yet.
 	Roles       []string   `json:"roles"`
+	SystemName  string     `json:"system_name,omitempty"`
+	DeviceIP    string     `json:"device_ip,omitempty"`
 	LastSeenAt  *time.Time `json:"last_seen_at"`
 	AccessKeyID string     `json:"access_key_id"`
 	// AgentVersion = self-reported on register_edge (optional). Empty
@@ -370,6 +376,8 @@ type getResp struct {
 	Name         string       `json:"name"`
 	Status       string       `json:"status"`
 	Roles        []string     `json:"roles"`
+	SystemName   string       `json:"system_name,omitempty"`
+	DeviceIP     string       `json:"device_ip,omitempty"`
 	AccessKeyID  string       `json:"access_key_id"`
 	LastSeenAt   *time.Time   `json:"last_seen_at"`
 	CreatedAt    time.Time    `json:"created_at"`
@@ -377,6 +385,11 @@ type getResp struct {
 	AgentVersion string       `json:"agent_version,omitempty"`
 	DeviceID     *uint64      `json:"device_id,omitempty"`
 	HostInfo     *hostInfoDTO `json:"host_info,omitempty"`
+}
+
+type patchEdgeReq struct {
+	SystemName *string `json:"system_name,omitempty"`
+	DeviceIP   *string `json:"device_ip,omitempty"`
 }
 
 type rotateResp struct {
@@ -397,7 +410,11 @@ func (h *Handler) createEdge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	uid := t.UserID
-	res, err := h.svc.Create(r.Context(), req.Name, &uid)
+	res, err := h.svc.Create(r.Context(), biz.CreateParams{
+		Name:       req.Name,
+		SystemName: req.SystemName,
+		DeviceIP:   req.DeviceIP,
+	}, &uid)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -446,6 +463,8 @@ func (h *Handler) listEdges(w http.ResponseWriter, r *http.Request) {
 			Name:         e.Name,
 			Status:       e.Status,
 			Roles:        deviceRoles(dev),
+			SystemName:   deviceSystemName(dev, e),
+			DeviceIP:     deviceIP(dev, e),
 			LastSeenAt:   e.LastSeenAt,
 			AccessKeyID:  e.AccessKeyID,
 			AgentVersion: e.AgentVersion,
@@ -477,6 +496,8 @@ func (h *Handler) getEdge(w http.ResponseWriter, r *http.Request) {
 		Name:         e.Name,
 		Status:       e.Status,
 		Roles:        deviceRoles(dev),
+		SystemName:   deviceSystemName(dev, e),
+		DeviceIP:     deviceIP(dev, e),
 		AccessKeyID:  e.AccessKeyID,
 		LastSeenAt:   e.LastSeenAt,
 		CreatedAt:    e.CreatedAt,
@@ -485,6 +506,37 @@ func (h *Handler) getEdge(w http.ResponseWriter, r *http.Request) {
 		DeviceID:     e.DeviceID,
 		HostInfo:     deviceToHostInfo(dev),
 	})
+}
+
+func (h *Handler) patchEdge(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	var req patchEdgeReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, errors.Join(errs.ErrInvalid, err))
+		return
+	}
+	e, err := h.svc.Get(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	systemName := e.SystemName
+	deviceIPVal := e.DeviceIP
+	if req.SystemName != nil {
+		systemName = *req.SystemName
+	}
+	if req.DeviceIP != nil {
+		deviceIPVal = *req.DeviceIP
+	}
+	if err := h.svc.UpdateOperatorMeta(r.Context(), id, systemName, deviceIPVal); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) deleteEdge(w http.ResponseWriter, r *http.Request) {
@@ -775,6 +827,26 @@ func deviceRoles(d *devicemodel.Device) []string {
 		return []string{}
 	}
 	return devicemodel.DecodeRoles(d.Roles)
+}
+
+func deviceSystemName(d *devicemodel.Device, e *model.Edge) string {
+	if d != nil && strings.TrimSpace(d.SystemName) != "" {
+		return d.SystemName
+	}
+	if e != nil {
+		return e.SystemName
+	}
+	return ""
+}
+
+func deviceIP(d *devicemodel.Device, e *model.Edge) string {
+	if d != nil && strings.TrimSpace(d.DeviceIP) != "" {
+		return d.DeviceIP
+	}
+	if e != nil {
+		return e.DeviceIP
+	}
+	return ""
 }
 
 // deviceToHostInfo flattens a Device into the legacy host_info DTO so
