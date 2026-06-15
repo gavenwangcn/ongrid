@@ -147,11 +147,19 @@ func TestExtractWAFMetadata(t *testing.T) {
 	if meta["waf_vendor"] != "CloudWAF" {
 		t.Fatalf("waf_vendor = %q", meta["waf_vendor"])
 	}
-	if meta["header_server"] != "CloudWAF" {
-		t.Fatalf("header_server = %q", meta["header_server"])
-	}
-	if meta["header_x-request-id"] != "req-trace-99" {
-		t.Fatalf("header_x-request-id = %q", meta["header_x-request-id"])
+}
+
+func TestExtractWAFMetadata_CheryCW418(t *testing.T) {
+	body := `<!DOCTYPE html><html><head><meta http-equiv="Server" content="CloudWAF" />
+<title id="title">访问被拦截！</title></head><body>
+<p><span id="c">事件ID：</span><span style="color:#499df2" id="d">03-41-72-20260615143207-87d7773d</span></p>
+</body></html>`
+	hdr := http.Header{}
+	hdr.Set("Server", "CW")
+
+	meta := extractWAFMetadata(body, hdr)
+	if meta["event_id"] != "03-41-72-20260615143207-87d7773d" {
+		t.Fatalf("event_id = %q", meta["event_id"])
 	}
 }
 

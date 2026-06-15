@@ -325,6 +325,10 @@ func messagesToDifyQuery(msgs []Message) (query string, extraContent string) {
 // wafEventIDPatterns extract CloudWAF / vendor block-page identifiers
 // (CheryGPT 418 pages expose an event id for WAF console lookup).
 var wafEventIDPatterns = []*regexp.Regexp{
+	// Huawei / Chery CloudWAF (Server: CW): event id in <span id="d">…</span>
+	regexp.MustCompile(`id=['"]d['"][^>]*>([^<]+)</span>`),
+	regexp.MustCompile(`(?i)事件\s*ID[：:]\s*</span><span[^>]*>([^<]+)</span>`),
+	regexp.MustCompile(`(?i)event\s*ID[：:]\s*</span><span[^>]*>([^<]+)</span>`),
 	regexp.MustCompile(`(?i)event[_-]?id['"\s:=：]+([A-Za-z0-9][A-Za-z0-9._-]{7,})`),
 	regexp.MustCompile(`(?i)事件[_\s]*id['"\s:：]+([A-Za-z0-9][A-Za-z0-9._-]+)`),
 	regexp.MustCompile(`(?i)eventId\s*[=:]\s*['"]([^'"]+)['"]`),
@@ -333,25 +337,8 @@ var wafEventIDPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)request[_-]?id['"\s:=：]+([A-Za-z0-9][A-Za-z0-9._-]{8,})`),
 }
 
-var wafResponseHeaderKeys = []string{
-	"Server",
-	"X-Request-Id",
-	"X-Event-Id",
-	"X-Waf-Event-Id",
-	"X-Waf-Id",
-	"X-Trace-Id",
-	"Trace-Id",
-	"Via",
-	"X-Cache",
-}
-
 func extractWAFMetadata(body string, hdr http.Header) map[string]string {
 	out := make(map[string]string)
-	for _, k := range wafResponseHeaderKeys {
-		if v := strings.TrimSpace(hdr.Get(k)); v != "" {
-			out["header_"+strings.ToLower(k)] = v
-		}
-	}
 	for _, re := range wafEventIDPatterns {
 		if m := re.FindStringSubmatch(body); len(m) > 1 {
 			id := strings.TrimSpace(m[1])
@@ -361,29 +348,35 @@ func extractWAFMetadata(body string, hdr http.Header) map[string]string {
 			}
 		}
 	}
-	if strings.Contains(body, "CloudWAF") || strings.Contains(body, "访问被拦截") {
+	if strings.Contains(body, "CloudWAF") || strings.Contains(body, "访问被拦截") ||
+		strings.EqualFold(hdr.Get("Server"), "CW") {
 		out["waf_vendor"] = "CloudWAF"
 	}
 	return out
+}
+
+func isWAFBlock(status int, hdr http.Header, wafMeta map[string]string) bool {
+	if status == http.StatusTeapot {
+		return true
+	}
+	if wafMeta["waf_vendor"] != "" {
+		return true
+	}
+	return strings.EqualFold(hdr.Get("Server"), "CW")
 }
 
 func difyErrorSnippet(status int, body string, wafMeta map[string]string) string {
 	if eid := wafMeta["event_id"]; eid != "" {
 		return fmt.Sprintf("waf_event_id=%s (status=%d)", eid, status)
 	}
+	if isWAFBlock(status, nil, wafMeta) {
+		return fmt.Sprintf("waf blocked (status=%d, event_id not found)", status)
+	}
 	snippet := strings.TrimSpace(body)
-	if len(snippet) > 512 {
-		snippet = snippet[:512] + "..."
+	if len(snippet) > 240 {
+		snippet = snippet[:240] + "..."
 	}
 	return snippet
-}
-
-func truncateForLog(s string, max int) string {
-	s = strings.TrimSpace(s)
-	if max <= 0 || len(s) <= max {
-		return s
-	}
-	return s[:max] + "..."
 }
 
 func (c *difyClient) logDifyHTTPError(
@@ -398,36 +391,29 @@ func (c *difyClient) logDifyHTTPError(
 	wafMeta map[string]string,
 	body string,
 ) {
-	attrs := []any{
+	if isWAFBlock(status, hdr, wafMeta) {
+		eid := wafMeta["event_id"]
+		if eid == "" {
+			eid = "not_found"
+		}
+		c.log.Warn("dify: WAF blocked",
+			slog.Int("status", status),
+			slog.String("waf_event_id", eid),
+		)
+		return
+	}
+	snippet := strings.TrimSpace(body)
+	if len(snippet) > 240 {
+		snippet = snippet[:240] + "..."
+	}
+	c.log.Warn("dify: http error",
 		slog.Int("status", status),
 		slog.String("endpoint", endpoint),
 		slog.String("model", model),
 		slog.Uint64("user_id", userID),
-		slog.Int("query_len", queryLen),
-		slog.Int("inputs_content_len", inputsContentLen),
 		slog.Duration("duration", dur),
-		slog.Int("response_body_len", len(body)),
-		slog.Any("response_headers", responseHeadersForLog(hdr)),
-		slog.Any("waf", wafMeta),
-		slog.String("response_body", truncateForLog(body, 8192)),
-	}
-	if eid := wafMeta["event_id"]; eid != "" {
-		attrs = append(attrs, slog.String("waf_event_id", eid))
-	}
-	c.log.Warn("dify: request blocked or failed — include waf_event_id when opening a WAF ticket", attrs...)
-}
-
-func responseHeadersForLog(hdr http.Header) map[string]string {
-	if hdr == nil {
-		return nil
-	}
-	out := make(map[string]string, len(wafResponseHeaderKeys))
-	for _, k := range wafResponseHeaderKeys {
-		if v := strings.TrimSpace(hdr.Get(k)); v != "" {
-			out[k] = v
-		}
-	}
-	return out
+		slog.String("response", snippet),
+	)
 }
 
 func firstNonEmpty(vals ...string) string {
