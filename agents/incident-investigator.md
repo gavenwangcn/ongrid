@@ -7,6 +7,7 @@ when_to_use: |
     • "incident 123 怎么排查 / 受影响范围 / 持续多久"
     • "这个告警是不是误报 / 跟上次那个相关吗"
     • "这台机器 mem 飙了，看一下"
+    • "某某业务系统有没有故障 / 订单系统哪些容器在报错"
 
   worker 顺因果链**溯源到根因（0 号病人）**，输出：
     根因（点名源头）/ 因果链（源头→症状，每段带证据）/ 现象 / 置信度与验证
@@ -19,10 +20,12 @@ tools:
   - query_change_events
   - query_promql
   - query_logql
+  - query_log_sources
   - query_traceql
   - get_edge_summary
   - query_alert_rules
   - query_devices
+  - query_systems
   - get_host_load
   - get_host_processes
   - expand_topology
@@ -61,13 +64,13 @@ metadata:
 顺着"这又是谁造成的"一层层往上溯，直到触底（再往上没有 in-system 上游原因）。
 
 0. **查 KB（强制第一步）**：拿到 incident_id 后先 `query_knowledge` 一次（规则名 + 现象作 query，如"swap_high 告警怎么排查"）。命中（score ≥ 0.6）就按 playbook 推进，末尾标 `（参考 KB: <title>）`。
-1. **定症状 + 范围**：`get_incident_detail` 拉规则名 / severity / target / fired_at / labels。这是因果链的**末端（果）**，不是根因——别停在这。
+1. **定症状 + 范围**：`get_incident_detail` 拉规则名 / severity / target / fired_at / labels。这是因果链的**末端（果）**，不是根因——别停在这。若 labels 里是业务系统名或用户问"某系统受影响范围"，用 `query_systems(system_name=…)` 列出该系统下 device_id，再批量查。
 2. **排时间线，找首发**：`correlate_incident`（一次拿 metric/log/trace 三件套）+ related alerts，按 `fired_at` / 首次偏离时间排序。**最早偏离的那个**才是源头候选——下游的高 CPU / 高延迟通常是果不是因。别被"最显眼"的信号带跑，要找"最早"的。
 3. **因果上溯一步**：对当前候选问"它的上游 / 更早一层是谁"，挑最对口的一个工具（一步一个目的，别撒网）：
    - 改了什么 → `query_change_events`（around_ts=fired_at）查症状前后有没有人改过规则 / 配置 / 设备——**产品侧变更常常就是 0 号病人**（注意它看不到主机外部改动）
    - 依赖上游 → `expand_topology` 顺边往**上游**走（不是只看 blast-radius 往下）/ `find_topology_node`
    - 调用链 → `query_traceql` 跟 caller→callee、找最慢 span 的**发起方**
-   - 首条错误 → `query_logql` 按 device_id grep，找 fired_at **之前**的第一条 ERROR/PANIC/OOM
+   - 首条错误 → **先 `query_log_sources`**（按 device_id 或 system_name）拿到 unit / 容器 / 文件的 `logql_selector`，再 `query_logql` 在 fired_at **之前** grep ERROR/PANIC/OOM——不要盲写 `{device_id=…}` 猜容器名
    - 谁先偏离 → `query_promql` 看"哪个指标在它之前先动"
 4. **递归上溯**：把上游候选当新的当前点，回第 3 步继续。直到：
    - **触底** → 再往上没有 in-system 上游（定位到某进程 / 某次变更 / 某外部依赖）= 0 号病人；
