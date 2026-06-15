@@ -77,12 +77,15 @@ func (t *TunnelConfigFetcher) Fetch(ctx context.Context) (map[string]PluginConfi
 	for _, n := range t.knownPlugins {
 		known[n] = true
 	}
-	// Edge ID source of truth: env > tunnel response. Env wins because
-	// the operator may run a single edge against multiple managers in
-	// dev — the env's ID is what's baked into Loki labels regardless.
+	// Edge ID source of truth: env > tunnel response (edge table pk).
+	// Label device_id source: tunnel DeviceID (host device) > env > EdgeID.
 	edgeID := t.edgeID
 	if edgeID == 0 {
 		edgeID = resp.EdgeID
+	}
+	labelDeviceID := resp.DeviceID
+	if labelDeviceID == 0 {
+		labelDeviceID = edgeID
 	}
 	for name, entry := range resp.Configs {
 		if !known[name] {
@@ -90,7 +93,7 @@ func (t *TunnelConfigFetcher) Fetch(ctx context.Context) (map[string]PluginConfi
 		}
 		out[name] = PluginConfig{
 			Enabled:  entry.Enabled,
-			EdgeID:   edgeID,
+			EdgeID:   labelDeviceID,
 			Endpoint: entry.Endpoint,
 			AuthUser: t.authUser,
 			AuthPass: t.authPass,
@@ -101,7 +104,7 @@ func (t *TunnelConfigFetcher) Fetch(ctx context.Context) (map[string]PluginConfi
 	// stops them if they were running.
 	for _, name := range t.knownPlugins {
 		if _, ok := out[name]; !ok {
-			out[name] = PluginConfig{Enabled: false, EdgeID: edgeID}
+			out[name] = PluginConfig{Enabled: false, EdgeID: labelDeviceID}
 		}
 	}
 	return out, nil

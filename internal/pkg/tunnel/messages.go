@@ -155,8 +155,9 @@ type ShellExitResponse struct{}
 // MethodGetPluginConfigs. Mirrors biz/edge.WireSnapshot — duplicated
 // here to keep internal/pkg/tunnel free of biz imports.
 type GetPluginConfigsResponse struct {
-	EdgeID  uint64                           `json:"edge_id"`
-	Configs map[string]GetPluginConfigsEntry `json:"configs"`
+	EdgeID   uint64                           `json:"edge_id"`
+	DeviceID uint64                           `json:"device_id"`
+	Configs  map[string]GetPluginConfigsEntry `json:"configs"`
 }
 
 // GetPluginConfigsEntry is one plugin's slice of the snapshot.

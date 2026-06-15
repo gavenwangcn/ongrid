@@ -48,6 +48,12 @@ type EndpointResolver interface {
 	Endpoint(ctx context.Context, plugin string) string
 }
 
+// HostDeviceLookup resolves edge_id → host device_id for telemetry labels.
+// Implemented by device/store.EdgeDeviceRepo.
+type HostDeviceLookup interface {
+	LookupHostDevice(ctx context.Context, edgeID uint64) (uint64, error)
+}
+
 // PluginConfigUC is the use-case for managing per-edge plugin configs.
 //
 // Two consumers:
@@ -63,6 +69,7 @@ type PluginConfigUC struct {
 	notifier     EdgeReloadNotifier
 	secretWriter DatabaseMetricsSecretWriter
 	resolver     EndpointResolver
+	hostDevice   HostDeviceLookup
 	log          *slog.Logger
 }
 
@@ -87,6 +94,10 @@ func (uc *PluginConfigUC) SetNotifier(n EdgeReloadNotifier) { uc.notifier = n }
 func (uc *PluginConfigUC) SetDatabaseMetricsSecretWriter(w DatabaseMetricsSecretWriter) {
 	uc.secretWriter = w
 }
+
+// SetHostDeviceLookup wires edge_id → device_id resolution for logs/traces
+// labels pushed by the edge (must match PromQL/LogQL device_id filters).
+func (uc *PluginConfigUC) SetHostDeviceLookup(l HostDeviceLookup) { uc.hostDevice = l }
 
 // PluginRow is the UI/HTTP-friendly view of one plugin row.
 type PluginRow struct {
@@ -276,6 +287,14 @@ func (uc *PluginConfigUC) FetchForEdge(ctx context.Context, edgeID uint64) (*Wir
 		model.PluginNameDatabaseMetrics,
 	}
 	out := &WireSnapshot{EdgeID: edgeID, Configs: make(map[string]WireConfig, len(knownPlugins))}
+	if uc.hostDevice != nil {
+		if devID, err := uc.hostDevice.LookupHostDevice(ctx, edgeID); err == nil && devID > 0 {
+			out.DeviceID = devID
+		}
+	}
+	if out.DeviceID == 0 {
+		out.DeviceID = edgeID
+	}
 	enabledNames := make([]string, 0, len(knownPlugins))
 	for _, name := range knownPlugins {
 		cfg := WireConfig{
@@ -327,9 +346,13 @@ func (uc *PluginConfigUC) notify(ctx context.Context, edgeID uint64, plugin stri
 // Endpoint is server-derived; auth_user/auth_pass are filled in by the
 // edge from its own access_key/secret_key (already in env), so secrets
 // never traverse the wire on this RPC.
+//
+// DeviceID is the host device_id emitted as the Prom/Loki `device_id`
+// label (matches Logs/Monitor filters). EdgeID stays the edge table pk.
 type WireSnapshot struct {
-	EdgeID  uint64                `json:"edge_id"`
-	Configs map[string]WireConfig `json:"configs"`
+	EdgeID   uint64                `json:"edge_id"`
+	DeviceID uint64                `json:"device_id"`
+	Configs  map[string]WireConfig `json:"configs"`
 }
 
 // WireConfig is one plugin's config as the edge sees it.

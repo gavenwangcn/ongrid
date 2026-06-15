@@ -401,8 +401,9 @@ func Install(ctx context.Context, c *Client, w Wiring) error {
 			// Convert biz snapshot to wire snapshot (same shape, separate
 			// types so internal/pkg/tunnel stays biz-free).
 			out := tunnel.GetPluginConfigsResponse{
-				EdgeID:  snap.EdgeID,
-				Configs: make(map[string]tunnel.GetPluginConfigsEntry, len(snap.Configs)),
+				EdgeID:   snap.EdgeID,
+				DeviceID: snap.DeviceID,
+				Configs:  make(map[string]tunnel.GetPluginConfigsEntry, len(snap.Configs)),
 			}
 			for name, cfg := range snap.Configs {
 				out.Configs[name] = tunnel.GetPluginConfigsEntry{

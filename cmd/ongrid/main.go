@@ -791,6 +791,7 @@ func main() {
 		tempo:     tempoResolver,
 	}
 	pluginConfigUC := managerbizedge.NewPluginConfigUC(pluginConfigRepo, nil, pluginEndpointResolver, log)
+	pluginConfigUC.SetHostDeviceLookup(edgeDeviceRepo)
 
 	edgeHandler := managerserveredge.NewHandler(edgeSvc, deviceRepo, pluginConfigUC)
 	edgeHandler.SetAuthz(authzMW)
