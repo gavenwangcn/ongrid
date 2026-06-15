@@ -269,6 +269,40 @@ for grp in adm systemd-journal; do
     fi
 done
 
+# Docker API log collector (enable_docker_api) dials docker.sock — same
+# permission chain as `docker logs`. File-path scrape of *-json.log uses ACL
+# below when docker is installed; API mode does not need those paths.
+if getent group docker >/dev/null 2>&1; then
+    usermod -aG docker "$SERVICE_USER" 2>/dev/null || true
+    log_info "added ${SERVICE_USER} to docker group (docker.sock / docker logs API)"
+fi
+
+grant_docker_log_acl() {
+    local root="$1"
+    local containers="${root}/containers"
+    if [[ ! -d "$containers" ]]; then
+        return 0
+    fi
+    if command -v setfacl >/dev/null 2>&1; then
+        setfacl -R -m "u:${SERVICE_USER}:rX" "$containers" 2>/dev/null || true
+        setfacl -R -m "d:u:${SERVICE_USER}:rX" "$containers" 2>/dev/null || true
+        log_info "granted ${SERVICE_USER} read ACL on ${containers} (file_paths scrape only)"
+    else
+        log_warn "setfacl not found; skip ACL on ${containers}"
+    fi
+}
+if command -v docker >/dev/null 2>&1; then
+    for docker_root in /var/lib/docker /kingdee/docker; do
+        grant_docker_log_acl "$docker_root"
+    done
+    docker_root="$(docker info 2>/dev/null | awk -F': ' '/Docker Root Dir/{print $2; exit}' | tr -d '[:space:]')"
+    if [[ -n "$docker_root" ]]; then
+        grant_docker_log_acl "$docker_root"
+    fi
+else
+    log_info "docker not installed; skipping container log ACL (no error)"
+fi
+
 # --- log dir -----------------------------------------------------------------
 
 mkdir -p "$LOG_DIR"
@@ -297,7 +331,12 @@ chown "root:${SERVICE_GROUP}" "$ENV_FILE"
 
 # --- systemd unit ------------------------------------------------------------
 
-cat > "$SERVICE_FILE" <<'EOF'
+SUPP_GROUPS="systemd-journal"
+if getent group docker >/dev/null 2>&1; then
+    SUPP_GROUPS="docker systemd-journal"
+fi
+
+cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=ongrid edge agent
 After=network-online.target
@@ -316,6 +355,8 @@ Restart=always
 RestartSec=5
 User=ongrid-edge
 Group=ongrid-edge
+# promtail journald + Docker API log collector (docker.sock when docker group exists)
+SupplementaryGroups=${SUPP_GROUPS}
 AmbientCapabilities=CAP_NET_ADMIN
 NoNewPrivileges=true
 ProtectSystem=strict
@@ -425,6 +466,22 @@ else
     log_error "${SERVICE_USER} cannot read the journal — journald log shipping will be empty"
     log_error "  fix: usermod -aG systemd-journal ${SERVICE_USER}; ensure persistent journal (/var/log/journal)"
     SELFCHECK_FAIL=1
+fi
+if getent group docker >/dev/null 2>&1 && [[ -S /var/run/docker.sock ]]; then
+    if command -v runuser >/dev/null 2>&1; then
+        DOCKER_PROBE=(runuser -u "$SERVICE_USER" -- curl -sf --unix-socket /var/run/docker.sock \
+            'http://localhost/v1.41/containers/json?filters={"status":["running"]}')
+    else
+        DOCKER_PROBE=(sudo -u "$SERVICE_USER" curl -sf --unix-socket /var/run/docker.sock \
+            'http://localhost/v1.41/containers/json?filters={"status":["running"]}')
+    fi
+    if "${DOCKER_PROBE[@]}" >/dev/null 2>&1; then
+        log_ok "docker.sock readable by ${SERVICE_USER} (Docker API logs)"
+    else
+        log_error "${SERVICE_USER} cannot access /var/run/docker.sock — enable_docker_api logs will crash"
+        log_error "  fix: usermod -aG docker ${SERVICE_USER}; ensure unit has SupplementaryGroups=docker; systemctl restart ongrid-edge"
+        SELFCHECK_FAIL=1
+    fi
 fi
 resolve_dataplane_probe "$SERVER_HTTP_ADDR" "$SERVER_SCHEME"
 if [[ -n "$DP_PROBE_HOST" ]] && timeout 5 bash -c "exec 3<>/dev/tcp/${DP_PROBE_HOST}/${DP_PROBE_PORT}" 2>/dev/null; then
