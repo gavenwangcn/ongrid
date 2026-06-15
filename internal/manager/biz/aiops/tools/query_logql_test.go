@@ -31,6 +31,27 @@ func (f *fakeLogQuerier) QueryRange(_ context.Context, opts logquery.QueryRangeO
 	return f.resp, nil
 }
 
+func (f *fakeLogQuerier) LabelValues(_ context.Context, _ string, _, _ time.Time) ([]string, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return nil, nil
+}
+
+func (f *fakeLogQuerier) LabelValuesWithQuery(_ context.Context, _ string, _ string, _, _ time.Time) ([]string, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return nil, nil
+}
+
+func (f *fakeLogQuerier) Series(_ context.Context, _ []string, _, _ time.Time) ([]map[string]string, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return nil, nil
+}
+
 func TestQueryLogQL_RoundTrip(t *testing.T) {
 	lq := &fakeLogQuerier{
 		resp: &logquery.QueryRangeResult{

@@ -200,10 +200,21 @@ func (c *Client) LabelNames(ctx context.Context, start, end time.Time) ([]string
 
 // LabelValues lists the known values for one label.
 func (c *Client) LabelValues(ctx context.Context, name string, start, end time.Time) ([]string, error) {
+	return c.LabelValuesWithQuery(ctx, name, "", start, end)
+}
+
+// LabelValuesWithQuery lists values for one label, optionally scoped by a
+// LogQL stream selector (e.g. `{device_id="42"}`). Empty query lists values
+// across all streams in the window — mirrors Loki's `query` parameter on
+// /label/<name>/values.
+func (c *Client) LabelValuesWithQuery(ctx context.Context, name, query string, start, end time.Time) ([]string, error) {
 	if name == "" {
 		return nil, errors.New("logquery: label name is empty")
 	}
 	q := url.Values{}
+	if strings.TrimSpace(query) != "" {
+		q.Set("query", strings.TrimSpace(query))
+	}
 	if !start.IsZero() {
 		q.Set("start", strconv.FormatInt(start.UnixNano(), 10))
 	}
@@ -219,6 +230,51 @@ func (c *Client) LabelValues(ctx context.Context, name string, start, end time.T
 		Status string   `json:"status"`
 		Data   []string `json:"data"`
 		Error  string   `json:"error"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil {
+		return nil, fmt.Errorf("logquery: decode: %w", err)
+	}
+	if env.Status != "success" {
+		return nil, fmt.Errorf("logquery: %s", env.Error)
+	}
+	return env.Data, nil
+}
+
+// Series returns the distinct label sets for streams matching any of the
+// given selectors within [start, end]. Each element is one Loki stream's
+// label map (device_id, unit, container, ongrid_source, ...).
+func (c *Client) Series(ctx context.Context, matches []string, start, end time.Time) ([]map[string]string, error) {
+	if len(matches) == 0 {
+		return nil, errors.New("logquery: at least one match selector required")
+	}
+	if start.IsZero() || end.IsZero() {
+		return nil, errors.New("logquery: start/end required")
+	}
+	if !end.After(start) {
+		return nil, errors.New("logquery: end must be after start")
+	}
+	q := url.Values{}
+	for _, m := range matches {
+		m = strings.TrimSpace(m)
+		if m == "" {
+			continue
+		}
+		q.Add("match[]", m)
+	}
+	if len(q["match[]"]) == 0 {
+		return nil, errors.New("logquery: at least one non-empty match selector required")
+	}
+	q.Set("start", strconv.FormatInt(start.UnixNano(), 10))
+	q.Set("end", strconv.FormatInt(end.UnixNano(), 10))
+
+	body, err := c.do(ctx, "/loki/api/v1/series", q)
+	if err != nil {
+		return nil, err
+	}
+	var env struct {
+		Status string              `json:"status"`
+		Data   []map[string]string `json:"data"`
+		Error  string              `json:"error"`
 	}
 	if err := json.Unmarshal(body, &env); err != nil {
 		return nil, fmt.Errorf("logquery: decode: %w", err)

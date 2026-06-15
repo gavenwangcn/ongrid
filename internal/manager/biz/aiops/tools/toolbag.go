@@ -59,6 +59,7 @@ var tierByName = map[string]string{
 	"list_database_sources":   "core",
 	"analyze_database_status": "core",
 	"query_logql":             "core",
+	"query_log_sources":       "core",
 	"query_traceql":           "core",
 	"query_devices":           "core",
 	"query_systems":           "core",

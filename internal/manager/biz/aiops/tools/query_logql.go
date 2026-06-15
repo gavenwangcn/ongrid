@@ -130,11 +130,14 @@ func (r *Registry) executeQueryLogQL(ctx context.Context, args json.RawMessage) 
 	return ExecuteResult{ResultJSON: out}, nil
 }
 
-// LogQuerier is the narrow surface the query_logql executor needs from the
-// logquery client. Declared here so tests can inject a fake.
+// LogQuerier is the narrow surface log tools need from the logquery client.
+// Declared here so tests can inject a fake.
 //
 // NOTE: this interface is what r.logQuery is typed as. The concrete
 // *logquery.Client satisfies it.
 type LogQuerier interface {
 	QueryRange(ctx context.Context, opts logquery.QueryRangeOptions) (*logquery.QueryRangeResult, error)
+	LabelValues(ctx context.Context, name string, start, end time.Time) ([]string, error)
+	LabelValuesWithQuery(ctx context.Context, name, query string, start, end time.Time) ([]string, error)
+	Series(ctx context.Context, matches []string, start, end time.Time) ([]map[string]string, error)
 }

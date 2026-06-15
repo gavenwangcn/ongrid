@@ -187,6 +187,14 @@ func NewRegistry(caller Caller, edges *edgebiz.Usecase, devices *devicebiz.Useca
 			Schema:      QueryLogQLSchema,
 			Execute:     r.executeQueryLogQL,
 		})
+		if r.devices != nil {
+			r.Register(Tool{
+				Name:        ToolNameQueryLogSources,
+				Description: QueryLogSourcesDescription,
+				Schema:      QueryLogSourcesSchema,
+				Execute:     r.executeQueryLogSources,
+			})
+		}
 	}
 	if traceQuery != nil {
 		r.Register(Tool{

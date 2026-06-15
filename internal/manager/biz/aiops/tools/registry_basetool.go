@@ -97,6 +97,9 @@ func (r *Registry) BuildBaseTools() *ToolBag {
 	// 4: query_logql — gated on Loki client.
 	if r.logQuery != nil {
 		out = append(out, NewQueryLogQLTool(r.logQuery, r.log))
+		if r.devices != nil {
+			out = append(out, NewQueryLogSourcesTool(r.logQuery, r.devices, r.pluginConfigs, r.log))
+		}
 	}
 	// 5: query_traceql — gated on Tempo client.
 	if r.traceQuery != nil {
