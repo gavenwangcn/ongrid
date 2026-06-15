@@ -17,7 +17,7 @@
 #   ./scripts/build-product-deploy-bundle.sh --arch arm64
 #
 # 构建机必须先准备：
-#   make fetch-promtail fetch-otelcol fetch-node-exporter fetch-process-exporter
+#   make fetch-promtail fetch-otelcol fetch-node-exporter fetch-process-exporter fetch-db-exporters
 #   make build-edge-linux-amd64 build-edge-linux-arm64
 #   make fetch-embedding-model
 #
@@ -185,8 +185,12 @@ if [[ -f "$REPO_ROOT/deploy/edge/bash-policy.example.yaml" ]]; then
 fi
 
 if [[ "$SKIP_EDGE" -eq 0 ]]; then
+  edge_bins=(
+    ongrid-edge promtail otelcol-contrib node_exporter process_exporter
+    mysqld_exporter postgres_exporter redis_exporter mongodb_exporter
+  )
   for target in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
-    for bin in ongrid-edge promtail otelcol-contrib node_exporter process_exporter; do
+    for bin in "${edge_bins[@]}"; do
       src="$REPO_ROOT/bin/${target}/${bin}"
       dst="$EDGE_DIR/${bin}-${target}"
       if [[ -f "$src" ]]; then
@@ -196,9 +200,13 @@ if [[ "$SKIP_EDGE" -eq 0 ]]; then
       fi
     done
   done
-  for bin in ongrid-edge promtail otelcol-contrib node_exporter process_exporter; do
+  required_edge_bins=(
+    ongrid-edge promtail otelcol-contrib node_exporter process_exporter
+    mysqld_exporter postgres_exporter redis_exporter mongodb_exporter
+  )
+  for bin in "${required_edge_bins[@]}"; do
     f="$EDGE_DIR/${bin}-${PRIMARY_ARCH}"
-    [[ -f "$f" ]] || die "required edge binary missing: $f (run make build-edge-linux-${TARGET_ARCH} etc.)"
+    [[ -f "$f" ]] || die "required edge binary missing: $f (run make build-edge-linux-${TARGET_ARCH} fetch-db-exporters etc.)"
   done
   # ADR-024 一键升级 bundle
   if [[ -x "$EDGE_DIR/build-edge-bundle.sh" ]]; then
