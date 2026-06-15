@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 
 	"github.com/ongridio/ongrid/internal/manager/biz/aiops/tools/basetool"
