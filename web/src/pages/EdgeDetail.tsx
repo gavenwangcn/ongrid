@@ -3700,6 +3700,11 @@ function LogsSpecForm({
   const journaldUnits = asStringArray(draft.journald_units);
   const filePaths = asStringArray(draft.file_paths);
   const enableJournald = draft.enable_journald !== false;
+  const enableDockerAPI = draft.enable_docker_api === true;
+  const defaultDockerSocket = '/var/run/docker.sock';
+  const dockerSocketRaw =
+    typeof draft.docker_socket === 'string' ? draft.docker_socket.trim() : '';
+  const dockerSocketDisplay = dockerSocketRaw || defaultDockerSocket;
   const extraLabels = asStringMap(draft.extra_labels);
   const labelEntries = Object.entries(extraLabels).sort(([a], [b]) => a.localeCompare(b));
 
@@ -3714,14 +3719,61 @@ function LogsSpecForm({
 
   return (
     <div className="space-y-4">
+      <label className="flex items-start gap-2 rounded-md border border-zinc-800 bg-zinc-950/40 p-3 text-xs text-zinc-300">
+        <input
+          type="checkbox"
+          checked={enableDockerAPI}
+          onChange={(e) => {
+            const checked = e.target.checked;
+            const next: Record<string, unknown> = { ...draft, enable_docker_api: checked };
+            if (checked && !dockerSocketRaw) {
+              next.docker_socket = defaultDockerSocket;
+            }
+            onChange(next);
+          }}
+          className="mt-0.5 h-3.5 w-3.5 rounded border-zinc-600 bg-zinc-900 accent-emerald-500"
+        />
+        <span>
+          <span className="block font-medium text-zinc-100">
+            {tr('采集 Docker 容器日志（API）— 等同 docker logs', 'Collect Docker container logs (API) — like docker logs')}
+          </span>
+          <span className="mt-0.5 block text-[11px] text-zinc-500">
+            {tr(
+              '通过 docker.sock 拉取运行中容器 stdout/stderr，无需读 *-json.log（需 ongrid-edge 在 docker 组）。与下方 file_paths 里的 containers/* 路径互斥，开启后会自动忽略这类路径。',
+              'Streams running container stdout/stderr via docker.sock — no *-json.log file read (ongrid-edge must be in the docker group). Mutually exclusive with containers/* file_paths below.',
+            )}
+          </span>
+        </span>
+      </label>
+      {enableDockerAPI && (
+        <div>
+          <span className="mb-1 block text-xs text-zinc-400">docker_socket</span>
+          <input
+            value={dockerSocketDisplay}
+            onChange={(e) => onChange({ ...draft, docker_socket: e.target.value })}
+            onBlur={() => {
+              const v = typeof draft.docker_socket === 'string' ? draft.docker_socket.trim() : '';
+              if (!v) {
+                onChange({ ...draft, docker_socket: defaultDockerSocket });
+              }
+            }}
+            placeholder={defaultDockerSocket}
+            className="w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 font-mono text-[11px] text-zinc-100 focus:border-zinc-600 focus:outline-none"
+          />
+          <div className="mt-1 text-[11px] text-zinc-500">
+            {tr('Docker daemon Unix socket，默认', 'Docker daemon Unix socket; default')}{' '}
+            <span className="font-mono text-zinc-400">{defaultDockerSocket}</span>
+          </div>
+        </div>
+      )}
       <StringListField
         label="file_paths"
         placeholder="/var/log/myapp/*.log"
         values={filePaths}
         onChange={(next) => onChange({ ...draft, file_paths: next })}
         hint={tr(
-          '应用专属日志文件的 tail glob（promtail __path__）。系统日志默认走下方 journald，不必在此填 /var/log/syslog；这里留给 nginx access、应用自有日志文件等。',
-          'Tail glob for app-specific log files (promtail __path__). System logs come from journald (on by default below) — no need to add /var/log/syslog here; use this for nginx access logs, app log files, etc.',
+          'promtail 直接 tail 文件的 glob。Docker 容器日志推荐勾选上方 API 采集；若仍用文件方式，路径为 <Docker Root Dir>/containers/*/*-json.log，且需 setfacl（SELinux 下往往仍不可用）。',
+          'Promtail file tail globs. For Docker containers prefer API collection above; file mode uses <Docker Root Dir>/containers/*/*-json.log and often needs setfacl (may still fail under SELinux).',
         )}
       />
       <label className="flex items-start gap-2 rounded-md border border-zinc-800 bg-zinc-950/40 p-3 text-xs text-zinc-300">

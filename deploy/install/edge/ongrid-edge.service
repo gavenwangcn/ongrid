@@ -18,6 +18,8 @@ Restart=always
 RestartSec=5
 User=ongrid-edge
 Group=ongrid-edge
+# promtail file scrape: docker container logs + journald
+SupplementaryGroups=docker systemd-journal
 AmbientCapabilities=CAP_NET_ADMIN
 NoNewPrivileges=true
 ProtectSystem=strict

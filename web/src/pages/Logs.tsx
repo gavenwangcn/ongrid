@@ -12,7 +12,7 @@ import {
   Search as SearchIcon,
   X,
 } from 'lucide-react';
-import { queryLogsRange, listLogLabels, type LokiStream } from '@/api/logs';
+import { queryLogsRange, listLogLabels, listLogLabelValues, type LokiStream } from '@/api/logs';
 import { ApiError } from '@/api/client';
 import { listEdges, type Edge, type EdgeRole } from '@/api/edges';
 import { onDevicesChanged } from '@/lib/events';
@@ -259,6 +259,7 @@ export default function LogsPage() {
   // "fresh install, no edges shipping yet" from "query is too narrow".
   // Probed once on mount; refreshed when the operator hits refresh.
   const [noStreams, setNoStreams] = useState(false);
+  const [labelFileOptions, setLabelFileOptions] = useState<string[]>([]);
   const [live, setLive] = useState(false);
   const [forceTick, setForceTick] = useState(0);
   const requestSeq = useRef(0);
@@ -501,12 +502,45 @@ export default function LogsPage() {
     };
   }, [forceTick]);
 
-  // Filename autocomplete options come from the live rows. Both
+  // Index Loki label values for unit / filename / file ongrid_source so the
+  // dropdown isn't limited to the current 1000-row window (journald spam
+  // otherwise hides file scrape paths).
+  useEffect(() => {
+    let cancelled = false;
+    const win = resolveWindow();
+    if (!win) return;
+    void (async () => {
+      try {
+        const params = { start: win.start, end: win.end };
+        const [units, filenames, sources] = await Promise.all([
+          listLogLabelValues('unit', params),
+          listLogLabelValues('filename', params),
+          listLogLabelValues('ongrid_source', params),
+        ]);
+        if (cancelled) return;
+        const vals = new Set<string>();
+        for (const v of units.values ?? []) vals.add(v);
+        for (const v of filenames.values ?? []) vals.add(v);
+        for (const s of sources.values ?? []) {
+          if (s.startsWith('file:')) vals.add(s.slice(5));
+        }
+        setLabelFileOptions(Array.from(vals).sort((a, b) => a.localeCompare(b)));
+      } catch {
+        if (!cancelled) setLabelFileOptions([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [resolveWindow, forceTick, range, customStart, customEnd]);
+
+  // Filename autocomplete: merge Loki label index + live rows (frequency sort).
   // `unit` (journald) and `filename` (file source) are surfaced in one
   // list since users think in terms of "what file is this from" not
   // "which Loki label". De-dupe + sort by frequency.
   const filenameOptions = useMemo(() => {
     const tally = new Map<string, number>();
+    for (const v of labelFileOptions) tally.set(v, 0);
     for (const r of rows) {
       const u = r.labels.unit;
       const f = r.labels.filename;
@@ -516,7 +550,7 @@ export default function LogsPage() {
     return Array.from(tally.entries())
       .sort((a, b) => b[1] - a[1])
       .map(([v]) => v);
-  }, [rows]);
+  }, [rows, labelFileOptions]);
 
   const submit = (e?: React.FormEvent) => {
     e?.preventDefault();

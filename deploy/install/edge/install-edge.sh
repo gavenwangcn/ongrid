@@ -253,6 +253,38 @@ mkdir -p "$LOG_DIR"
 chown "$SERVICE_USER":"$SERVICE_GROUP" "$LOG_DIR" 2>/dev/null || true
 chmod 750 "$LOG_DIR"
 
+# Docker json-file on disk: optional ACL (only when docker is installed).
+# enable_docker_api collects via docker.sock and does not need this.
+if getent group docker >/dev/null 2>&1; then
+    usermod -aG docker "$SERVICE_USER" 2>/dev/null || true
+    log_info "added $SERVICE_USER to docker group (docker.sock / docker logs API)"
+fi
+grant_docker_log_acl() {
+    local root="$1"
+    local containers="${root}/containers"
+    if [[ ! -d "$containers" ]]; then
+        return 0
+    fi
+    if command -v setfacl >/dev/null 2>&1; then
+        setfacl -R -m "u:${SERVICE_USER}:rX" "$containers" 2>/dev/null || true
+        setfacl -R -m "d:u:${SERVICE_USER}:rX" "$containers" 2>/dev/null || true
+        log_info "granted ${SERVICE_USER} read ACL on ${containers} (file_paths scrape only)"
+    else
+        log_warn "setfacl not found; skip ACL on ${containers}"
+    fi
+}
+if command -v docker >/dev/null 2>&1; then
+    for docker_root in /var/lib/docker /kingdee/docker; do
+        grant_docker_log_acl "$docker_root"
+    done
+    docker_root="$(docker info 2>/dev/null | awk -F': ' '/Docker Root Dir/{print $2; exit}' | tr -d '[:space:]')"
+    if [[ -n "$docker_root" ]]; then
+        grant_docker_log_acl "$docker_root"
+    fi
+else
+    log_info "docker not installed; skipping container log ACL (no error)"
+fi
+
 # ---------- systemd unit ----------
 log_info "installing systemd unit"
 install -m 0644 -o root -g root "${SCRIPT_DIR}/ongrid-edge.service" "$UNIT_FILE"

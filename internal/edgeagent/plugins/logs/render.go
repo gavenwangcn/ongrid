@@ -99,6 +99,9 @@ scrape_configs:
 //	                          opt out, which falls back to syslog file tail)
 //	journald_units : []string (default all units when journald enabled)
 //	file_paths : []string (default empty; add app-specific log files here)
+//	enable_docker_api : bool — collect running containers via docker.sock
+//	                      (same permission chain as docker logs -f)
+//	docker_socket : string (default /var/run/docker.sock)
 //	extra_labels : map[string]string (allow-list policed by manager;
 func render(cfg plugins.PluginConfig) ([]byte, error) {
 	if cfg.Endpoint == "" {
@@ -133,12 +136,12 @@ func render(cfg plugins.PluginConfig) ([]byte, error) {
 
 	units := stringSlice(cfg.Spec, "journald_units")
 	filePaths := stringSlice(cfg.Spec, "file_paths")
+	if enableDockerAPI(cfg.Spec) {
+		filePaths = filterDockerFilePaths(filePaths)
+	}
 	// Fallback only when the operator explicitly turned journald OFF and
-	// set no file paths: tail the universal syslog files so the plugin
-	// still emits at least one scrape job (a config with zero jobs = silent
-	// empty Loki, which reads as "RAG/logs broke"). With journald on by
-	// default this branch is normally skipped.
-	if len(filePaths) == 0 && !enableJournald {
+	// set no file paths (and docker API is not collecting containers).
+	if len(filePaths) == 0 && !enableJournald && !enableDockerAPI(cfg.Spec) {
 		filePaths = []string{"/var/log/syslog", "/var/log/messages"}
 	}
 	extra := stringMap(cfg.Spec, "extra_labels")
