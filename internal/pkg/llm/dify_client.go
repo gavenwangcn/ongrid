@@ -120,12 +120,16 @@ func (c *difyClient) Chat(ctx context.Context, req ChatReq) (*ChatResp, error) {
 		return nil, fmt.Errorf("llm: dify: no user query in messages")
 	}
 
+	// CheryGPT App inputs.content is a fixed app variable (e.g. "输入数据源"),
+	// not a dump target for ongrid system prompts / tool history. Merging
+	// multi-k-token context there triggered CloudWAF 418 on real chats while
+	// minimal probe bodies still passed.
 	inputs := map[string]string{
 		"content": c.cfg.InputsContent,
 		"online":  c.cfg.InputsOnline,
 	}
 	if extraContent != "" {
-		inputs["content"] = strings.TrimSpace(c.cfg.InputsContent + "\n\n" + extraContent)
+		query = strings.TrimSpace(extraContent + "\n\n" + query)
 	}
 
 	user := c.cfg.User
@@ -257,8 +261,9 @@ func difyChatEndpoint(baseURL string) (string, error) {
 }
 
 // messagesToDifyQuery maps OpenAI-shaped history to Dify's query + extra
-// context. The last user turn becomes query; earlier system notes are
-// folded into inputs.content via the returned extraContent string.
+// context. The last user turn becomes query; earlier system notes and
+// history are returned in extraContent to be prepended to query (not
+// merged into inputs.content).
 func messagesToDifyQuery(msgs []Message) (query string, extraContent string) {
 	var systemParts []string
 	var history strings.Builder
