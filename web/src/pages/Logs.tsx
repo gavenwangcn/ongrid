@@ -169,7 +169,7 @@ function labelHash(labels: Record<string, string>): string {
   return keys.map((k) => `${k}=${labels[k]}`).join('|');
 }
 
-func deviceIDsFromEdges(edges: Edge[], predicate: (e: Edge) => boolean): string[] {
+function deviceIDsFromEdges(edges: Edge[], predicate: (e: Edge) => boolean): string[] {
   return edges
     .filter((e) => e.device_id != null && predicate(e))
     .map((e) => String(e.device_id));
