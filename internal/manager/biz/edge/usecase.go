@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -45,6 +46,7 @@ type Usecase struct {
 	links   devicebiz.EdgeDeviceRepo
 	mirror  NodeMirror
 	plugins PluginConfigSeeder
+	cascade PluginConfigCascade
 	log     *slog.Logger
 
 	// In-memory per-edge plugin health, fed by the heartbeat path. See
@@ -60,6 +62,11 @@ type Usecase struct {
 // EdgeReloadNotifier, which itself needs *frontierbound.Client).
 type PluginConfigSeeder interface {
 	UpsertSpec(ctx context.Context, edgeID uint64, plugin string, enabled bool, specJSON string) error
+}
+
+// PluginConfigCascade hard-deletes plugin config rows when an edge is removed.
+type PluginConfigCascade interface {
+	DeleteAllForEdge(ctx context.Context, edgeID uint64) error
 }
 
 // NewUsecase builds the usecase. devices is required for the
@@ -83,6 +90,9 @@ func (u *Usecase) SetNodeMirror(m NodeMirror) { u.mirror = m }
 // manually flipping each plugin in the UI. Nil = no seeding (test
 // path); operators on existing edges fall back to the manual UI.
 func (u *Usecase) SetPluginSeeder(s PluginConfigSeeder) { u.plugins = s }
+
+// SetPluginConfigCascade wires plugin-config cleanup for edge deletion.
+func (u *Usecase) SetPluginConfigCascade(c PluginConfigCascade) { u.cascade = c }
 
 // CreateResult is returned from Create. AccessKey is echoed back (it's also
 // stored, so the caller could GET it later). SecretKey is the ONLY time the
@@ -216,12 +226,64 @@ func (u *Usecase) List(ctx context.Context, f ListFilter) ([]*model.Edge, error)
 	return u.repo.List(ctx, f)
 }
 
-// Delete soft-deletes an edge.
+// Delete hard-deletes an edge and cascades to linked devices, junction
+// rows, and plugin configs (rows are removed from MySQL).
 func (u *Usecase) Delete(ctx context.Context, id uint64) error {
 	if u.repo == nil {
 		return errs.ErrNotWiredYet
 	}
+	edge, err := u.repo.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	deviceIDs := collectDeviceIDsForEdge(edge, u.links, ctx, id)
+	if u.cascade != nil {
+		if err := u.cascade.DeleteAllForEdge(ctx, id); err != nil {
+			return fmt.Errorf("delete plugin configs: %w", err)
+		}
+	}
+	if u.links != nil {
+		if err := u.links.DeleteAllForEdge(ctx, id); err != nil {
+			return fmt.Errorf("delete edge_devices: %w", err)
+		}
+	}
+	if u.devices != nil {
+		for _, devID := range deviceIDs {
+			if err := u.devices.Delete(ctx, devID); err != nil {
+				if !errors.Is(err, errs.ErrNotFound) {
+					return fmt.Errorf("delete device %d: %w", devID, err)
+				}
+			}
+		}
+	}
 	return u.repo.Delete(ctx, id)
+}
+
+func collectDeviceIDsForEdge(edge *model.Edge, links devicebiz.EdgeDeviceRepo, ctx context.Context, edgeID uint64) []uint64 {
+	var ids []uint64
+	seen := make(map[uint64]struct{})
+	add := func(id uint64) {
+		if id == 0 {
+			return
+		}
+		if _, ok := seen[id]; ok {
+			return
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if links != nil {
+		rows, err := links.ListDevicesForEdge(ctx, edgeID)
+		if err == nil {
+			for _, row := range rows {
+				add(row.DeviceID)
+			}
+		}
+	}
+	if edge.DeviceID != nil {
+		add(*edge.DeviceID)
+	}
+	return ids
 }
 
 // UpdateOperatorMeta updates pending system/IP metadata on the edge row.

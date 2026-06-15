@@ -90,8 +90,8 @@ type Repo interface {
 	List(ctx context.Context, f ListFilter) ([]*model.Device, error)
 	// Count returns the total non-soft-deleted device count.
 	Count(ctx context.Context) (int64, error)
-	// Delete soft-deletes a device (does NOT touch its junction rows;
-	// callers should remove the junction first if they want a clean cut).
+	// Delete hard-deletes a device and does NOT touch junction rows;
+	// edge deletion cascades through edge usecase instead.
 	Delete(ctx context.Context, id uint64) error
 }
 

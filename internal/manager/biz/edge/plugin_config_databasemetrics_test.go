@@ -54,11 +54,23 @@ func (r *fakePluginConfigRepo) Upsert(_ context.Context, in *model.PluginConfig)
 	return &cp, nil
 }
 
-func (r *fakePluginConfigRepo) Delete(_ context.Context, _ uint64, plugin string) error {
+func (r *fakePluginConfigRepo) Delete(_ context.Context, edgeID uint64, plugin string) error {
 	if r.deleteErr != nil {
 		return r.deleteErr
 	}
-	delete(r.rows, plugin)
+	row := r.rows[plugin]
+	if row != nil && row.EdgeID == edgeID {
+		delete(r.rows, plugin)
+	}
+	return nil
+}
+
+func (r *fakePluginConfigRepo) DeleteAllForEdge(_ context.Context, edgeID uint64) error {
+	for k, row := range r.rows {
+		if row.EdgeID == edgeID {
+			delete(r.rows, k)
+		}
+	}
 	return nil
 }
 

@@ -38,15 +38,24 @@ func (r *EdgeDeviceRepo) Link(ctx context.Context, edgeID, deviceID uint64, t mo
 	}).Create(&row).Error
 }
 
-// Unlink soft-deletes the (edge, device, type) row. Idempotent.
+// Unlink hard-deletes the (edge, device, type) row. Idempotent.
 func (r *EdgeDeviceRepo) Unlink(ctx context.Context, edgeID, deviceID uint64, t model.EdgeDeviceRelationType) error {
 	res := r.db.WithContext(ctx).
 		Where("edge_id = ? AND device_id = ? AND type = ?", edgeID, deviceID, t).
+		Unscoped().
 		Delete(&model.EdgeDevice{})
 	if res.Error != nil {
 		return res.Error
 	}
 	return nil
+}
+
+// DeleteAllForEdge hard-deletes every junction row for one edge.
+func (r *EdgeDeviceRepo) DeleteAllForEdge(ctx context.Context, edgeID uint64) error {
+	return r.db.WithContext(ctx).
+		Where("edge_id = ?", edgeID).
+		Unscoped().
+		Delete(&model.EdgeDevice{}).Error
 }
 
 // LookupHostDevice resolves edge_id → host device_id via the type=Host

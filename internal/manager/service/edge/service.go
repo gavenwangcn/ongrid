@@ -62,7 +62,7 @@ func (s *Service) Get(ctx context.Context, id uint64) (*model.Edge, error) {
 	return s.uc.Get(ctx, id)
 }
 
-// Delete soft-deletes an edge.
+// Delete hard-deletes an edge.
 func (s *Service) Delete(ctx context.Context, id uint64) error {
 	return s.uc.Delete(ctx, id)
 }

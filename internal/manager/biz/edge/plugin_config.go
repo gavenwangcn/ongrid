@@ -19,6 +19,8 @@ type PluginConfigRepo interface {
 	Get(ctx context.Context, edgeID uint64, plugin string) (*model.PluginConfig, error)
 	Upsert(ctx context.Context, in *model.PluginConfig) (*model.PluginConfig, error)
 	Delete(ctx context.Context, edgeID uint64, plugin string) error
+	// DeleteAllForEdge hard-deletes every plugin config row for edge_id.
+	DeleteAllForEdge(ctx context.Context, edgeID uint64) error
 	CountByPlugin(ctx context.Context) (map[string]int64, error)
 }
 

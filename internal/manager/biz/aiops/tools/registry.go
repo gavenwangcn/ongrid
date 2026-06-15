@@ -208,6 +208,14 @@ func NewRegistry(caller Caller, edges *edgebiz.Usecase, devices *devicebiz.Useca
 			Schema:      QueryEdgesSchema,
 			Execute:     r.executeQueryEdges,
 		})
+		if r.devices != nil {
+			r.Register(Tool{
+				Name:        ToolNameQuerySystems,
+				Description: QuerySystemsDescription,
+				Schema:      QuerySystemsSchema,
+				Execute:     r.executeQuerySystems,
+			})
+		}
 		r.Register(Tool{
 			Name:        ToolNameGetTopology,
 			Description: GetTopologyDescription,

@@ -28,6 +28,9 @@ type EdgeDeviceRepo interface {
 	// no row matched (idempotent on the delete side too).
 	Unlink(ctx context.Context, edgeID, deviceID uint64, t model.EdgeDeviceRelationType) error
 
+	// DeleteAllForEdge hard-deletes every junction row for edge_id.
+	DeleteAllForEdge(ctx context.Context, edgeID uint64) error
+
 	// LookupHostDevice resolves the host device_id for an edge. Used on
 	// the push path: every metric/log/trace coming from the edge tunnel
 	// is labelled with the host device_id. Returns ErrNotFound when the

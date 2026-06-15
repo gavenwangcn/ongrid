@@ -205,6 +205,101 @@ func (d *fakeDeviceRepo) Delete(_ context.Context, id uint64) error {
 	return nil
 }
 
+// fakeEdgeDeviceRepo is an in-memory EdgeDeviceRepo for cascade-delete tests.
+type fakeEdgeDeviceRepo struct {
+	mu   sync.Mutex
+	rows []*devicemodel.EdgeDevice
+}
+
+func newFakeEdgeDeviceRepo() *fakeEdgeDeviceRepo {
+	return &fakeEdgeDeviceRepo{}
+}
+
+func (f *fakeEdgeDeviceRepo) Link(_ context.Context, edgeID, deviceID uint64, t devicemodel.EdgeDeviceRelationType) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, r := range f.rows {
+		if r.EdgeID == edgeID && r.DeviceID == deviceID && r.Type == t {
+			return nil
+		}
+	}
+	f.rows = append(f.rows, &devicemodel.EdgeDevice{EdgeID: edgeID, DeviceID: deviceID, Type: t})
+	return nil
+}
+
+func (f *fakeEdgeDeviceRepo) Unlink(_ context.Context, edgeID, deviceID uint64, t devicemodel.EdgeDeviceRelationType) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]*devicemodel.EdgeDevice, 0, len(f.rows))
+	for _, r := range f.rows {
+		if r.EdgeID == edgeID && r.DeviceID == deviceID && r.Type == t {
+			continue
+		}
+		out = append(out, r)
+	}
+	f.rows = out
+	return nil
+}
+
+func (f *fakeEdgeDeviceRepo) DeleteAllForEdge(_ context.Context, edgeID uint64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]*devicemodel.EdgeDevice, 0, len(f.rows))
+	for _, r := range f.rows {
+		if r.EdgeID != edgeID {
+			out = append(out, r)
+		}
+	}
+	f.rows = out
+	return nil
+}
+
+func (f *fakeEdgeDeviceRepo) LookupHostDevice(_ context.Context, edgeID uint64) (uint64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, r := range f.rows {
+		if r.EdgeID == edgeID && r.Type == devicemodel.EdgeDeviceRelationHost {
+			return r.DeviceID, nil
+		}
+	}
+	return 0, errs.ErrNotFound
+}
+
+func (f *fakeEdgeDeviceRepo) LookupEdgeForDevice(_ context.Context, deviceID uint64, t devicemodel.EdgeDeviceRelationType) (uint64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, r := range f.rows {
+		if r.DeviceID == deviceID && r.Type == t {
+			return r.EdgeID, nil
+		}
+	}
+	return 0, errs.ErrNotFound
+}
+
+func (f *fakeEdgeDeviceRepo) ListDevicesForEdge(_ context.Context, edgeID uint64) ([]*devicemodel.EdgeDevice, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]*devicemodel.EdgeDevice, 0)
+	for _, r := range f.rows {
+		if r.EdgeID == edgeID {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeEdgeDeviceRepo) ListEdgesForDevice(_ context.Context, deviceID uint64) ([]*devicemodel.EdgeDevice, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]*devicemodel.EdgeDevice, 0)
+	for _, r := range f.rows {
+		if r.DeviceID == deviceID {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
 // fakeRepo is an in-memory biz.Repo for usecase-level tests. Mirrors the
 // SQLite implementation's observable semantics (soft-delete hides rows,
 // lookups by AccessKey exclude deleted, etc.) without dragging in gorm.
@@ -358,12 +453,10 @@ func (r *fakeRepo) SetAgentVersion(_ context.Context, id uint64, v string) error
 func (r *fakeRepo) Delete(_ context.Context, id uint64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	e, ok := r.byID[id]
-	if !ok || e.DeletedAt.Valid {
+	if _, ok := r.byID[id]; !ok {
 		return errs.ErrNotFound
 	}
-	e.DeletedAt.Valid = true
-	e.DeletedAt.Time = time.Now()
+	delete(r.byID, id)
 	return nil
 }
 
@@ -512,6 +605,41 @@ func TestDeleteHidesFromSubsequentGet(t *testing.T) {
 	}
 	if len(list) != 0 {
 		t.Errorf("List after Delete: got %d items, want 0", len(list))
+	}
+}
+
+func TestDeleteCascadesLinkedDevice(t *testing.T) {
+	repo := newFakeRepo()
+	devices := newFakeDeviceRepo()
+	links := newFakeEdgeDeviceRepo()
+	uc := NewUsecase(repo, devices, links, nil)
+	ctx := context.Background()
+
+	res, err := uc.Create(ctx, CreateParams{Name: "edge-del"}, nil)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	info := tunnel.HostInfo{Hostname: "host-1", OS: "linux", Arch: "amd64", CPUCount: 4}
+	if err := uc.HandleRegister(ctx, res.Edge.ID, info, ""); err != nil {
+		t.Fatalf("HandleRegister: %v", err)
+	}
+	edge, err := uc.Get(ctx, res.Edge.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if edge.DeviceID == nil {
+		t.Fatal("DeviceID not set")
+	}
+	devID := *edge.DeviceID
+
+	if err := uc.Delete(ctx, res.Edge.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := devices.Get(ctx, devID); !errors.Is(err, errs.ErrNotFound) {
+		t.Errorf("device still visible after edge delete: %v", err)
+	}
+	if rows, _ := links.ListDevicesForEdge(ctx, res.Edge.ID); len(rows) != 0 {
+		t.Errorf("junction rows remain: %d", len(rows))
 	}
 }
 

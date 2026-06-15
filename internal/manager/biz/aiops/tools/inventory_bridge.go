@@ -181,7 +181,7 @@ func classifyToolCategory(name string) string {
 		return "system"
 	case "host_find_large_files", "host_du_summary", "host_stat_file":
 		return "filesystem"
-	case "get_edge_summary", "get_topology", "query_devices",
+	case "get_edge_summary", "get_topology", "query_devices", "query_systems",
 		"query_alert_rules", "query_incidents", "get_incident_detail",
 		"rank_edges", "find_outlier_edges", "correlate_incident":
 		return "diagnostic"

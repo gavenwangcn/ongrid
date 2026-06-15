@@ -190,10 +190,9 @@ func (r *Repo) SetAgentVersion(ctx context.Context, id uint64, version string) e
 	return nil
 }
 
-// Delete soft-deletes an edge (gorm's DeletedAt). Subsequent Get/List hide
-// the row.
+// Delete hard-deletes an edge. Subsequent Get/List no longer find the row.
 func (r *Repo) Delete(ctx context.Context, id uint64) error {
-	res := r.db.WithContext(ctx).Delete(&model.Edge{}, id)
+	res := r.db.WithContext(ctx).Unscoped().Delete(&model.Edge{}, id)
 	if res.Error != nil {
 		return res.Error
 	}

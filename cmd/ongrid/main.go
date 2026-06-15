@@ -785,6 +785,7 @@ func main() {
 	// constructed below; until then SetEdge() etc. are no-ops on the wire
 	// (edge's 60s safety-net poll covers).
 	pluginConfigRepo := manageredgedata.NewPluginConfigRepo(db)
+	edgeUC.SetPluginConfigCascade(pluginConfigRepo)
 	pluginEndpointResolver := pluginEndpointResolver{
 		publicURL: cfg.PublicURL,
 		loki:      lokiResolver,

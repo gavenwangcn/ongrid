@@ -284,9 +284,9 @@ func (r *Repo) Count(ctx context.Context) (int64, error) {
 	return n, nil
 }
 
-// Delete soft-deletes a device by id.
+// Delete hard-deletes a device by id (row removed from devices).
 func (r *Repo) Delete(ctx context.Context, id uint64) error {
-	res := r.db.WithContext(ctx).Delete(&model.Device{}, id)
+	res := r.db.WithContext(ctx).Unscoped().Delete(&model.Device{}, id)
 	if res.Error != nil {
 		return res.Error
 	}

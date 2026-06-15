@@ -96,9 +96,8 @@ func (u *Usecase) UpdateOperatorMeta(ctx context.Context, id uint64, systemName,
 	return u.repo.UpdateOperatorMeta(ctx, id, systemName, deviceIP)
 }
 
-// Delete soft-deletes a device. Junction rows are NOT auto-removed —
-// caller is responsible (the v1 UI doesn't expose device deletion yet
-// so this is a future hook).
+// Delete hard-deletes a device. Junction rows are NOT auto-removed —
+// edge deletion cascades through edge usecase instead.
 func (u *Usecase) Delete(ctx context.Context, id uint64) error {
 	if u.repo == nil {
 		return errs.ErrNotWiredYet

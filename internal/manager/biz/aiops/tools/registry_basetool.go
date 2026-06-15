@@ -122,6 +122,9 @@ func (r *Registry) BuildBaseTools() *ToolBag {
 	if r.edges != nil || r.devices != nil {
 		out = append(out, NewQueryEdgesTool(r.devices, r.edges, r.log))
 	}
+	if r.devices != nil {
+		out = append(out, NewQuerySystemsTool(r.devices, r.log))
+	}
 	if r.edges != nil {
 		out = append(out, NewGetTopologyTool(r.edges, r.alertUC, r.topology, r.log))
 	}

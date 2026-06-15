@@ -69,11 +69,20 @@ func (r *PluginConfigRepo) Upsert(ctx context.Context, in *model.PluginConfig) (
 	return in, nil
 }
 
-// Delete removes one (edge_id, plugin_name) row. Idempotent (no error
+// Delete hard-deletes one (edge_id, plugin_name) row. Idempotent (no error
 // when the row didn't exist).
 func (r *PluginConfigRepo) Delete(ctx context.Context, edgeID uint64, plugin string) error {
 	return r.db.WithContext(ctx).
 		Where("edge_id = ? AND plugin_name = ?", edgeID, plugin).
+		Unscoped().
+		Delete(&model.PluginConfig{}).Error
+}
+
+// DeleteAllForEdge hard-deletes every plugin config row for one edge.
+func (r *PluginConfigRepo) DeleteAllForEdge(ctx context.Context, edgeID uint64) error {
+	return r.db.WithContext(ctx).
+		Where("edge_id = ?", edgeID).
+		Unscoped().
 		Delete(&model.PluginConfig{}).Error
 }
 
