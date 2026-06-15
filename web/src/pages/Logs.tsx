@@ -126,6 +126,40 @@ function reEscape(s: string): string {
 // stay on `=` for clarity.
 type Facet = { label: string; value: string; op: '=' | '=~' };
 
+type SourceKind = 'file' | 'unit' | 'container';
+
+type SourceOption = {
+  kind: SourceKind;
+  value: string;
+  facet: Facet;
+};
+
+function sourceOptionKey(o: SourceOption): string {
+  return `${o.kind}:${o.value}`;
+}
+
+function parseSourceOptionKey(key: string): SourceOption | null {
+  const idx = key.indexOf(':');
+  if (idx <= 0) return null;
+  const kind = key.slice(0, idx) as SourceKind;
+  const value = key.slice(idx + 1);
+  if (kind !== 'file' && kind !== 'unit' && kind !== 'container') return null;
+  if (!value) return null;
+  switch (kind) {
+    case 'unit':
+      return { kind, value, facet: { label: 'unit', value, op: '=' } };
+    case 'container':
+      return { kind, value, facet: { label: 'container', value, op: '=' } };
+    case 'file':
+      // Paths scraped via promtail file job use ongrid_source=file:<path>.
+      const facet: Facet =
+        value.includes('/') || value.startsWith('*')
+          ? { label: 'ongrid_source', value: `file:${value}`, op: '=' }
+          : { label: 'filename', value, op: '=' };
+      return { kind, value, facet };
+  }
+}
+
 function buildEffectiveQuery(
   baseQuery: string,
   facets: Facet[],
@@ -249,7 +283,12 @@ export default function LogsPage() {
   const [deviceInput, setDeviceInput] = useState('');
   const [systemFilter, setSystemFilter] = useState('');
   const [roleFilter, setRoleFilter] = useState<'' | EdgeRole>('');
-  const [filenameFilter, setFilenameFilter] = useState(''); // value = unit OR filename label
+  const [sourceFilterKey, setSourceFilterKey] = useState('');
+  const [sourceKinds, setSourceKinds] = useState<Record<SourceKind, boolean>>({
+    file: true,
+    unit: true,
+    container: true,
+  });
   const [edges, setEdges] = useState<Edge[]>([]);
   const [rows, setRows] = useState<LogRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -259,7 +298,12 @@ export default function LogsPage() {
   // "fresh install, no edges shipping yet" from "query is too narrow".
   // Probed once on mount; refreshed when the operator hits refresh.
   const [noStreams, setNoStreams] = useState(false);
-  const [labelFileOptions, setLabelFileOptions] = useState<string[]>([]);
+  const [indexedSourceLabels, setIndexedSourceLabels] = useState<{
+    units: string[];
+    filenames: string[];
+    filePaths: string[];
+    containers: string[];
+  }>({ units: [], filenames: [], filePaths: [], containers: [] });
   const [live, setLive] = useState(false);
   const [forceTick, setForceTick] = useState(0);
   const requestSeq = useRef(0);
@@ -296,19 +340,12 @@ export default function LogsPage() {
       });
       out.push(facetForDeviceIDs(ids));
     }
-    if (filenameFilter) {
-      // Try `unit` first (journald convention), fall back to `filename`
-      // (file source). Picker offers both — value is the literal label
-      // value. We disambiguate by sniffing rows.
-      const looksLikeUnit = /\.(service|target|socket|timer|scope)$/.test(filenameFilter);
-      out.push({
-        label: looksLikeUnit ? 'unit' : 'filename',
-        value: filenameFilter,
-        op: '=',
-      });
+    if (sourceFilterKey) {
+      const parsed = parseSourceOptionKey(sourceFilterKey);
+      if (parsed) out.push(parsed.facet);
     }
     return out;
-  }, [deviceFilter, systemFilter, roleFilter, filenameFilter, edges]);
+  }, [deviceFilter, systemFilter, roleFilter, sourceFilterKey, edges]);
 
   const systemNames = useMemo(() => {
     const set = new Set<string>();
@@ -437,7 +474,7 @@ export default function LogsPage() {
     deviceFilter,
     systemFilter,
     roleFilter,
-    filenameFilter,
+    sourceFilterKey,
     include,
     exclude,
     range,
@@ -502,9 +539,8 @@ export default function LogsPage() {
     };
   }, [forceTick]);
 
-  // Index Loki label values for unit / filename / file ongrid_source so the
-  // dropdown isn't limited to the current 1000-row window (journald spam
-  // otherwise hides file scrape paths).
+  // Index Loki label values for unit / filename / file paths / container so the
+  // dropdown isn't limited to the current 1000-row window.
   useEffect(() => {
     let cancelled = false;
     const win = resolveWindow();
@@ -512,21 +548,27 @@ export default function LogsPage() {
     void (async () => {
       try {
         const params = { start: win.start, end: win.end };
-        const [units, filenames, sources] = await Promise.all([
+        const [units, filenames, sources, containers] = await Promise.all([
           listLogLabelValues('unit', params),
           listLogLabelValues('filename', params),
           listLogLabelValues('ongrid_source', params),
+          listLogLabelValues('container', params),
         ]);
         if (cancelled) return;
-        const vals = new Set<string>();
-        for (const v of units.values ?? []) vals.add(v);
-        for (const v of filenames.values ?? []) vals.add(v);
+        const filePaths: string[] = [];
         for (const s of sources.values ?? []) {
-          if (s.startsWith('file:')) vals.add(s.slice(5));
+          if (s.startsWith('file:')) filePaths.push(s.slice(5));
         }
-        setLabelFileOptions(Array.from(vals).sort((a, b) => a.localeCompare(b)));
+        setIndexedSourceLabels({
+          units: [...(units.values ?? [])].sort((a, b) => a.localeCompare(b)),
+          filenames: [...(filenames.values ?? [])].sort((a, b) => a.localeCompare(b)),
+          filePaths: filePaths.sort((a, b) => a.localeCompare(b)),
+          containers: [...(containers.values ?? [])].sort((a, b) => a.localeCompare(b)),
+        });
       } catch {
-        if (!cancelled) setLabelFileOptions([]);
+        if (!cancelled) {
+          setIndexedSourceLabels({ units: [], filenames: [], filePaths: [], containers: [] });
+        }
       }
     })();
     return () => {
@@ -534,23 +576,65 @@ export default function LogsPage() {
     };
   }, [resolveWindow, forceTick, range, customStart, customEnd]);
 
-  // Filename autocomplete: merge Loki label index + live rows (frequency sort).
-  // `unit` (journald) and `filename` (file source) are surfaced in one
-  // list since users think in terms of "what file is this from" not
-  // "which Loki label". De-dupe + sort by frequency.
-  const filenameOptions = useMemo(() => {
-    const tally = new Map<string, number>();
-    for (const v of labelFileOptions) tally.set(v, 0);
+  const sourceOptions = useMemo((): SourceOption[] => {
+    const tally = new Map<string, { opt: SourceOption; count: number }>();
+
+    const add = (opt: SourceOption, count = 0) => {
+      const key = sourceOptionKey(opt);
+      const ex = tally.get(key);
+      if (ex) ex.count += count;
+      else tally.set(key, { opt, count });
+    };
+
+    for (const v of indexedSourceLabels.units) {
+      add({ kind: 'unit', value: v, facet: { label: 'unit', value: v, op: '=' } });
+    }
+    for (const v of indexedSourceLabels.filenames) {
+      add({ kind: 'file', value: v, facet: { label: 'filename', value: v, op: '=' } });
+    }
+    for (const v of indexedSourceLabels.filePaths) {
+      add({
+        kind: 'file',
+        value: v,
+        facet: { label: 'ongrid_source', value: `file:${v}`, op: '=' },
+      });
+    }
+    for (const v of indexedSourceLabels.containers) {
+      add({ kind: 'container', value: v, facet: { label: 'container', value: v, op: '=' } });
+    }
+
     for (const r of rows) {
       const u = r.labels.unit;
+      if (u) add({ kind: 'unit', value: u, facet: { label: 'unit', value: u, op: '=' } }, 1);
       const f = r.labels.filename;
-      if (u) tally.set(u, (tally.get(u) ?? 0) + 1);
-      if (f) tally.set(f, (tally.get(f) ?? 0) + 1);
+      if (f) add({ kind: 'file', value: f, facet: { label: 'filename', value: f, op: '=' } }, 1);
+      const os = r.labels.ongrid_source;
+      if (os?.startsWith('file:')) {
+        const path = os.slice(5);
+        add({ kind: 'file', value: path, facet: { label: 'ongrid_source', value: os, op: '=' } }, 1);
+      }
+      const c = r.labels.container;
+      if (c) add({ kind: 'container', value: c, facet: { label: 'container', value: c, op: '=' } }, 1);
     }
-    return Array.from(tally.entries())
-      .sort((a, b) => b[1] - a[1])
-      .map(([v]) => v);
-  }, [rows, labelFileOptions]);
+
+    return Array.from(tally.values())
+      .filter(({ opt }) => sourceKinds[opt.kind])
+      .sort((a, b) => b.count - a.count || a.opt.value.localeCompare(b.opt.value))
+      .map(({ opt }) => opt);
+  }, [rows, indexedSourceLabels, sourceKinds]);
+
+  const sourceOptionsByKind = useMemo(() => {
+    const out: Record<SourceKind, SourceOption[]> = { file: [], unit: [], container: [] };
+    for (const opt of sourceOptions) out[opt.kind].push(opt);
+    return out;
+  }, [sourceOptions]);
+
+  const toggleSourceKind = (kind: SourceKind, checked: boolean) => {
+    setSourceKinds((prev) => ({ ...prev, [kind]: checked }));
+    if (!checked && sourceFilterKey.startsWith(`${kind}:`)) {
+      setSourceFilterKey('');
+    }
+  };
 
   const submit = (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -742,22 +826,61 @@ export default function LogsPage() {
               ))}
             </select>
           </label>
-          {/* File / unit — native <select> for visual consistency with
-              the other dropdowns in the row. Options come from the
-              observed-label index built by the labels endpoint; users
-              who need a unit/filename that's not in the index can
-              filter it via LogQL directly. */}
-          <label className="block w-56 shrink-0">
-            <span className="mb-1 block text-[11px] text-zinc-500">{tr('文件 / unit', 'File / unit')}</span>
+          {/* File / unit / container — Loki label index + row frequency. Kind
+              checkboxes filter which option groups appear in the select. */}
+          <label className="block w-64 shrink-0">
+            <span className="mb-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-zinc-500">
+              <SourceKindCheckbox
+                checked={sourceKinds.file}
+                onChange={(c) => toggleSourceKind('file', c)}
+                label={tr('文件', 'File')}
+              />
+              <span className="text-zinc-600">/</span>
+              <SourceKindCheckbox
+                checked={sourceKinds.unit}
+                onChange={(c) => toggleSourceKind('unit', c)}
+                label={tr('unit', 'unit')}
+              />
+              <span className="text-zinc-600">/</span>
+              <SourceKindCheckbox
+                checked={sourceKinds.container}
+                onChange={(c) => toggleSourceKind('container', c)}
+                label={tr('容器', 'Container')}
+              />
+            </span>
             <select
-              value={filenameFilter}
-              onChange={(e) => setFilenameFilter(e.target.value)}
+              value={sourceFilterKey}
+              onChange={(e) => setSourceFilterKey(e.target.value)}
               className={cn(INPUT_BASE, 'font-mono')}
             >
               <option value="">{tr('不限', 'Any')}</option>
-              {filenameOptions.map((v) => (
-                <option key={v} value={v}>{v}</option>
-              ))}
+              {sourceKinds.file && sourceOptionsByKind.file.length > 0 && (
+                <optgroup label={tr('文件', 'File')}>
+                  {sourceOptionsByKind.file.map((o) => (
+                    <option key={sourceOptionKey(o)} value={sourceOptionKey(o)}>
+                      {o.value}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {sourceKinds.unit && sourceOptionsByKind.unit.length > 0 && (
+                <optgroup label={tr('unit', 'unit')}>
+                  {sourceOptionsByKind.unit.map((o) => (
+                    <option key={sourceOptionKey(o)} value={sourceOptionKey(o)}>
+                      {o.value}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {sourceKinds.container && sourceOptionsByKind.container.length > 0 && (
+                <optgroup label={tr('容器', 'Container')}>
+                  {sourceOptionsByKind.container.map((o) => (
+                    <option key={sourceOptionKey(o)} value={sourceOptionKey(o)}>
+                      {o.value}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </select>
           </label>
           <label className="block w-36 shrink-0">
@@ -1031,7 +1154,7 @@ export default function LogsPage() {
                       {tr('清空 LogQL', 'Clear LogQL')}
                     </button>
                   )}
-                  {(deviceFilter || systemFilter || roleFilter || filenameFilter) && (
+                  {(deviceFilter || systemFilter || roleFilter || sourceFilterKey) && (
                     <button
                       type="button"
                       onClick={() => {
@@ -1039,11 +1162,14 @@ export default function LogsPage() {
                         setDeviceInput('');
                         setSystemFilter('');
                         setRoleFilter('');
-                        setFilenameFilter('');
+                        setSourceFilterKey('');
                       }}
                       className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-[11px] text-zinc-300 hover:bg-zinc-800"
                     >
-                      {tr('清除筛选（系统 / 设备 / 角色 / 文件）', 'Clear filters (system / device / role / file)')}
+                      {tr(
+                        '清除筛选（系统 / 设备 / 角色 / 来源）',
+                        'Clear filters (system / device / role / source)',
+                      )}
                     </button>
                   )}
                   {(include || exclude) && (
@@ -1079,6 +1205,28 @@ export default function LogsPage() {
   );
 }
 
+
+function SourceKindCheckbox({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  onChange(checked: boolean): void;
+  label: string;
+}) {
+  return (
+    <span className="inline-flex items-center gap-0.5">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className="h-3 w-3 rounded border-zinc-600 bg-zinc-900 accent-indigo-500"
+      />
+      <span>{label}</span>
+    </span>
+  );
+}
 
 // Pick a level color from the row labels OR by sniffing keywords in the
 // line. Keeps it simple — no full log parsing.
