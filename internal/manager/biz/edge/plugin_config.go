@@ -287,14 +287,21 @@ func (uc *PluginConfigUC) FetchForEdge(ctx context.Context, edgeID uint64) (*Wir
 		model.PluginNameDatabaseMetrics,
 	}
 	out := &WireSnapshot{EdgeID: edgeID, Configs: make(map[string]WireConfig, len(knownPlugins))}
+	hostDeviceResolved := false
 	if uc.hostDevice != nil {
 		if devID, err := uc.hostDevice.LookupHostDevice(ctx, edgeID); err == nil && devID > 0 {
 			out.DeviceID = devID
+			hostDeviceResolved = true
+		} else if err != nil {
+			uc.log.Warn("FetchForEdge: host device_id lookup failed; log label falls back to edge_id",
+				slog.Uint64("edge_id", edgeID),
+				slog.Any("err", err))
 		}
 	}
 	if out.DeviceID == 0 {
 		out.DeviceID = edgeID
 	}
+	logsEndpoint := uc.resolver.Endpoint(ctx, model.PluginNameLogs)
 	enabledNames := make([]string, 0, len(knownPlugins))
 	for _, name := range knownPlugins {
 		cfg := WireConfig{
@@ -315,6 +322,9 @@ func (uc *PluginConfigUC) FetchForEdge(ctx context.Context, edgeID uint64) (*Wir
 	}
 	uc.log.Info("FetchForEdge",
 		slog.Uint64("edge_id", edgeID),
+		slog.Uint64("label_device_id", out.DeviceID),
+		slog.Bool("host_device_resolved", hostDeviceResolved),
+		slog.String("logs_push_endpoint", logsEndpoint),
 		slog.Int("rows", len(rows)),
 		slog.Int("configs_out", len(out.Configs)),
 		slog.Any("enabled", enabledNames))

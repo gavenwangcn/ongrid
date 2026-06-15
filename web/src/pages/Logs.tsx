@@ -169,10 +169,30 @@ function labelHash(labels: Record<string, string>): string {
   return keys.map((k) => `${k}=${labels[k]}`).join('|');
 }
 
-function deviceIDsFromEdges(edges: Edge[], predicate: (e: Edge) => boolean): string[] {
+func deviceIDsFromEdges(edges: Edge[], predicate: (e: Edge) => boolean): string[] {
   return edges
     .filter((e) => e.device_id != null && predicate(e))
     .map((e) => String(e.device_id));
+}
+
+// Loki `device_id` may be the host device_id (correct) or legacy edge.id
+// from older promtail configs — include both when filtering by device/system.
+function logLabelIDsFromEdges(edges: Edge[], predicate: (e: Edge) => boolean): string[] {
+  const ids = new Set<string>();
+  for (const e of edges) {
+    if (!predicate(e)) continue;
+    if (e.device_id != null) ids.add(String(e.device_id));
+    if (e.id) ids.add(String(e.id));
+  }
+  return Array.from(ids);
+}
+
+function logLabelIDsForDevice(edges: Edge[], deviceId: string): string[] {
+  const ids = new Set<string>();
+  if (deviceId) ids.add(deviceId);
+  const edge = edges.find((e) => String(e.device_id) === deviceId);
+  if (edge?.id) ids.add(String(edge.id));
+  return Array.from(ids);
 }
 
 function facetForDeviceIDs(ids: string[]): Facet {
@@ -261,9 +281,9 @@ export default function LogsPage() {
     // deviceFilter (single id) wins over systemFilter (multi-device set)
     // and roleFilter — explicit device pick is the narrowest scope.
     if (deviceFilter) {
-      out.push({ label: 'device_id', value: deviceFilter, op: '=' });
+      out.push(facetForDeviceIDs(logLabelIDsForDevice(edges, deviceFilter)));
     } else if (systemFilter || roleFilter) {
-      const ids = deviceIDsFromEdges(edges, (e) => {
+      const ids = logLabelIDsFromEdges(edges, (e) => {
         if (systemFilter && e.system_name?.trim() !== systemFilter) return false;
         if (
           roleFilter &&
@@ -946,6 +966,14 @@ export default function LogsPage() {
               <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
                 <SearchIcon size={28} className="text-zinc-600" />
                 <div className="text-sm text-zinc-500">{tr('该时间窗内没有匹配的日志', 'No logs match in this time window')}</div>
+                {deviceFilter && (
+                  <div className="max-w-md text-xs text-zinc-600">
+                    {tr(
+                      '已同时匹配 device_id 与 edge 主键（兼容旧 promtail 标签）。若仍无结果，请在 Edge 检查 promtail 是否在推送、ONGRID_PUBLIC_URL 是否可达。',
+                      'Query matches both device_id and edge PK (legacy promtail labels). If still empty, verify promtail push and ONGRID_PUBLIC_URL on the edge.',
+                    )}
+                  </div>
+                )}
                 <div className="text-xs text-zinc-600">
                   {tr('试试以下任一项 — 多数情况下是时间窗或 LogQL 收得太紧', 'Try one of the following — usually the window or LogQL is too narrow')}
                 </div>

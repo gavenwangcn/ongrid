@@ -987,10 +987,11 @@ func main() {
 	if cfg.Logs.URL != "" {
 		logsHandler = managerserverlogs.NewHandler(
 			pkglogquery.New(cfg.Logs.URL, log.With(slog.String("comp", "logquery"))),
+			log,
 		)
 	} else {
 		// Loki disabled — handler installs but every route returns 503.
-		logsHandler = managerserverlogs.NewHandler(nil)
+		logsHandler = managerserverlogs.NewHandler(nil, log)
 	}
 
 	// Tempo query proxy. Mirrors the Loki block above — same role for the

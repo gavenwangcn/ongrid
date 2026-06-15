@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/ongridio/ongrid/internal/pkg/tunnel"
@@ -106,6 +107,13 @@ func (t *TunnelConfigFetcher) Fetch(ctx context.Context) (map[string]PluginConfi
 		if _, ok := out[name]; !ok {
 			out[name] = PluginConfig{Enabled: false, EdgeID: labelDeviceID}
 		}
+	}
+	if lc, ok := out["logs"]; ok {
+		slog.Info("tunnel: plugin configs applied",
+			slog.Uint64("edge_id", edgeID),
+			slog.Uint64("label_device_id", labelDeviceID),
+			slog.Bool("logs_enabled", lc.Enabled),
+			slog.String("logs_endpoint", lc.Endpoint))
 	}
 	return out, nil
 }

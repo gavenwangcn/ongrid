@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -37,12 +38,16 @@ type Querier interface {
 // Querier; when nil the routes return 503 so the SPA can show a clear
 // "logs disabled" state instead of failing silently.
 type Handler struct {
-	q Querier
+	q   Querier
+	log *slog.Logger
 }
 
 // NewHandler builds the handler. q may be nil when Loki is disabled.
-func NewHandler(q Querier) *Handler {
-	return &Handler{q: q}
+func NewHandler(q Querier, log *slog.Logger) *Handler {
+	if log == nil {
+		log = slog.Default()
+	}
+	return &Handler{q: q, log: log.With(slog.String("comp", "logs.http"))}
 }
 
 // Register attaches routes on r. Caller must wrap r in the auth
@@ -112,9 +117,19 @@ func (h *Handler) queryRange(w http.ResponseWriter, r *http.Request) {
 		Direction: dir,
 	})
 	if err != nil {
+		h.log.Warn("query_range failed",
+			slog.String("query", q.Get("query")),
+			slog.Any("err", err))
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	streams, entries := countStreamEntries(out.ResultType, out.Result)
+	h.log.Info("query_range",
+		slog.String("query", q.Get("query")),
+		slog.String("result_type", out.ResultType),
+		slog.Int("streams", streams),
+		slog.Int("entries", entries),
+		slog.Int("limit", limit))
 	writeJSON(w, http.StatusOK, queryRangeResp{
 		ResultType: out.ResultType,
 		Result:     out.Result,
@@ -196,4 +211,21 @@ func writeJSON(w http.ResponseWriter, code int, body any) {
 
 func writeErr(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]string{"error": msg})
+}
+
+// countStreamEntries tallies Loki stream rows without logging line bodies.
+func countStreamEntries(resultType string, raw json.RawMessage) (streams, entries int) {
+	if resultType != "streams" || len(raw) == 0 {
+		return 0, 0
+	}
+	var arr []struct {
+		Values [][]string `json:"values"`
+	}
+	if err := json.Unmarshal(raw, &arr); err != nil {
+		return 0, 0
+	}
+	for _, s := range arr {
+		entries += len(s.Values)
+	}
+	return len(arr), entries
 }

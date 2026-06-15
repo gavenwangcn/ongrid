@@ -156,6 +156,11 @@ func (s *Supervisor) reconcile(ctx context.Context) {
 		slog.Int("desired_count", len(desired)),
 		slog.Int("enabled_count", len(enabledNames)),
 		slog.Any("enabled_names", enabledNames))
+	if lc, ok := desired["logs"]; ok && lc.Enabled {
+		s.log.Info("logs plugin desired",
+			slog.Uint64("label_device_id", lc.EdgeID),
+			slog.String("push_endpoint", lc.Endpoint))
+	}
 
 	s.mu.Lock()
 	plugins := make(map[string]Plugin, len(s.plugins))
