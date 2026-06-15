@@ -98,6 +98,9 @@ type Dependencies struct {
 type Config struct {
 	Version             string
 	ProbeTimeout        time.Duration
+	// DifyProbeTimeout bounds the CheryGPT / Dify chat-messages health probe.
+	// Blocking LLM calls often exceed the default 3s probe budget.
+	DifyProbeTimeout    time.Duration
 	PromEnabled         bool
 	LogsEnabled         bool
 	TracesEnabled       bool
@@ -121,6 +124,9 @@ type Service struct {
 func New(cfg Config, deps Dependencies) *Service {
 	if cfg.ProbeTimeout <= 0 {
 		cfg.ProbeTimeout = 3 * time.Second
+	}
+	if cfg.DifyProbeTimeout <= 0 {
+		cfg.DifyProbeTimeout = 15 * time.Second
 	}
 	if cfg.QdrantCollection == "" {
 		cfg.QdrantCollection = "ongrid_knowledge"
@@ -380,7 +386,7 @@ func (s *Service) checkLLM(ctx context.Context) Check {
 }
 
 func (s *Service) checkDify(ctx context.Context) Check {
-	return s.probe(ctx, "dify", "ai", "CheryGPT", func(ctx context.Context) (Status, string, map[string]any) {
+	return s.probeWithTimeout(ctx, s.cfg.DifyProbeTimeout, "dify", "ai", "CheryGPT", func(ctx context.Context) (Status, string, map[string]any) {
 		if !s.cfg.DifyConfigured {
 			return StatusDegraded, "CheryGPT is not configured", nil
 		}
@@ -410,8 +416,19 @@ func (s *Service) probe(
 	label string,
 	fn func(context.Context) (Status, string, map[string]any),
 ) Check {
+	return s.probeWithTimeout(ctx, s.cfg.ProbeTimeout, id, group, label, fn)
+}
+
+func (s *Service) probeWithTimeout(
+	ctx context.Context,
+	timeout time.Duration,
+	id string,
+	group string,
+	label string,
+	fn func(context.Context) (Status, string, map[string]any),
+) Check {
 	start := time.Now()
-	pctx, cancel := context.WithTimeout(ctx, s.cfg.ProbeTimeout)
+	pctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	status, message, details := fn(pctx)
 	if pctx.Err() == context.DeadlineExceeded && status == StatusOK {
