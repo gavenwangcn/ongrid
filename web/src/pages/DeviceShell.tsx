@@ -18,7 +18,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Power, RotateCw, Terminal as TerminalIcon } from 'lucide-react';
+import { Power, RotateCw, Send, Terminal as TerminalIcon } from 'lucide-react';
 import { Modal } from '@/components/Modal';
 import { Button } from '@/components/ui/Button';
 import { XTerminal, type XTerminalApi } from '@/components/XTerminal';
@@ -64,6 +64,15 @@ function ansiDim(s: string): string {
   return `\x1b[2m${s}\x1b[0m`;
 }
 
+/** Normalize browser paste / textarea newlines to CR for SSH stdin. */
+function toTerminalInput(text: string, appendEnter: boolean): string {
+  let out = text.replace(/\r\n/g, '\n').replace(/\n/g, '\r');
+  if (appendEnter && !out.endsWith('\r')) {
+    out += '\r';
+  }
+  return out;
+}
+
 export default function DeviceShellPage() {
   const { tr } = useI18n();
   const { canMutate } = usePermissions();
@@ -92,6 +101,8 @@ export default function DeviceShellPage() {
   const [edgeError, setEdgeError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(true);
   const [conn, setConn] = useState<ConnState>({ kind: 'idle' });
+  const [cmdInput, setCmdInput] = useState('');
+  const [cmdAppendEnter, setCmdAppendEnter] = useState(true);
 
   // The terminal API + ws live on refs — they're side-effectful and
   // outliving any single render is the whole point of this page.
@@ -351,6 +362,18 @@ export default function DeviceShellPage() {
     pumpRef.current(data);
   }, []);
 
+  const sendPastedCommand = useCallback(() => {
+    const raw = cmdInput.trim();
+    if (!raw) return;
+    if (conn.kind !== 'open') {
+      writeBanner(ansiRed(tr('请先连接 SSH 后再发送命令', 'Connect SSH before sending commands')));
+      return;
+    }
+    pumpRef.current(toTerminalInput(raw, cmdAppendEnter));
+    setCmdInput('');
+    termRef.current?.focus();
+  }, [cmdAppendEnter, cmdInput, conn.kind, writeBanner, tr]);
+
   const onTermResize = useCallback((cols: number, rows: number) => {
     sizeRef.current = { cols, rows };
     const ws = wsRef.current;
@@ -456,12 +479,68 @@ export default function DeviceShellPage() {
         </div>
       </header>
 
-      <div className="flex-1 overflow-hidden p-2">
-        <XTerminal
-          onData={onTermData}
-          onResize={onTermResize}
-          attachRef={attachTerm}
-        />
+      <div className="flex flex-1 flex-col overflow-hidden gap-2 p-2">
+        <div className="min-h-0 flex-1 overflow-hidden">
+          <XTerminal
+            onData={onTermData}
+            onResize={onTermResize}
+            attachRef={attachTerm}
+          />
+        </div>
+        <div
+          className="shrink-0 rounded-md border border-zinc-800/60 bg-zinc-900/40 px-3 py-2"
+          title={tr('在浏览器内粘贴命令并发送到远程 shell', 'Paste commands here and send to the remote shell')}
+        >
+          <div className="mb-1.5 flex items-center justify-between gap-2">
+            <span className="text-[11px] text-zinc-500">
+              {tr('命令输入（可粘贴）', 'Command input (paste-friendly)')}
+            </span>
+            <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-zinc-400">
+              <input
+                type="checkbox"
+                checked={cmdAppendEnter}
+                onChange={(e) => setCmdAppendEnter(e.target.checked)}
+                className="h-3.5 w-3.5 accent-zinc-300"
+              />
+              {tr('发送后自动回车', 'Append Enter after send')}
+            </label>
+          </div>
+          <div className="flex items-end gap-2">
+            <textarea
+              value={cmdInput}
+              onChange={(e) => setCmdInput(e.target.value)}
+              disabled={conn.kind !== 'open'}
+              rows={2}
+              placeholder={
+                conn.kind === 'open'
+                  ? tr('粘贴或输入命令，例如 journalctl -u ongrid-edge -n 50', 'Paste or type a command, e.g. journalctl -u ongrid-edge -n 50')
+                  : tr('连接成功后可用', 'Available after SSH connects')
+              }
+              className="min-h-[2.5rem] flex-1 resize-y rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1.5 font-mono text-xs text-zinc-100 placeholder:text-zinc-600 focus:border-zinc-600 focus:outline-none disabled:opacity-50"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  sendPastedCommand();
+                }
+              }}
+            />
+            <Button
+              variant="subtle"
+              onClick={sendPastedCommand}
+              disabled={conn.kind !== 'open' || !cmdInput.trim()}
+              aria-label={tr('发送命令', 'Send command')}
+            >
+              <Send size={12} />
+              {tr('发送', 'Send')}
+            </Button>
+          </div>
+          <p className="mt-1.5 text-[11px] text-zinc-600">
+            {tr(
+              'Enter 发送 · Shift+Enter 换行 · 多行粘贴会按行发送到 shell',
+              'Enter to send · Shift+Enter for newline · multi-line paste is sent line-by-line to the shell',
+            )}
+          </p>
+        </div>
       </div>
 
       <ConnectModal
