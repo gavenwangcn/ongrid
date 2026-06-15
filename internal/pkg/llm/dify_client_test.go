@@ -50,9 +50,6 @@ func TestDifyClient_Chat(t *testing.T) {
 		if body.Query != "你好" {
 			t.Fatalf("query = %q", body.Query)
 		}
-		if body.Inputs["content"] != "输入数据源" {
-			t.Fatalf("inputs.content = %q", body.Inputs["content"])
-		}
 		if body.Inputs["online"] != "1" {
 			t.Fatalf("inputs = %#v", body.Inputs)
 		}
@@ -80,17 +77,17 @@ func TestDifyClient_Chat(t *testing.T) {
 	}
 }
 
-func TestDifyClient_Chat_SystemContextInQueryNotInputs(t *testing.T) {
+func TestDifyClient_Chat_SystemContextInInputsContent(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body difyChatRequest
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		if body.Inputs["content"] != "输入数据源" {
-			t.Fatalf("inputs.content = %q, want fixed app input only", body.Inputs["content"])
+		if body.Query != "第二轮" {
+			t.Fatalf("query = %q", body.Query)
 		}
-		if !strings.Contains(body.Query, "你是 SRE") || !strings.Contains(body.Query, "第二轮") {
-			t.Fatalf("query should carry system/history context: %q", body.Query)
+		if !strings.Contains(body.Inputs["content"], "你是 SRE") || !strings.Contains(body.Inputs["content"], "第一轮") {
+			t.Fatalf("inputs.content should carry system/history: %q", body.Inputs["content"])
 		}
 		_, _ = w.Write([]byte(`{"answer":"ok","metadata":{"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}}`))
 	}))
