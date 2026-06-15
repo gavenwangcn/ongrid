@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -182,10 +183,21 @@ func (c *difyClient) Chat(ctx context.Context, req ChatReq) (*ChatResp, error) {
 
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
 		c.metrics.requestsTotal.WithLabelValues(model, "error").Inc()
-		snippet := strings.TrimSpace(string(raw))
-		if len(snippet) > 240 {
-			snippet = snippet[:240] + "..."
-		}
+		bodyStr := string(raw)
+		wafMeta := extractWAFMetadata(bodyStr, httpResp.Header)
+		c.logDifyHTTPError(
+			httpResp.StatusCode,
+			endpoint,
+			model,
+			req.UserID,
+			len(query),
+			len(inputs["content"]),
+			dur,
+			httpResp.Header,
+			wafMeta,
+			bodyStr,
+		)
+		snippet := difyErrorSnippet(httpResp.StatusCode, bodyStr, wafMeta)
 		return nil, fmt.Errorf("llm: dify: http %d: %s", httpResp.StatusCode, snippet)
 	}
 
@@ -308,6 +320,114 @@ func messagesToDifyQuery(msgs []Message) (query string, extraContent string) {
 		}
 	}
 	return query, extraContent
+}
+
+// wafEventIDPatterns extract CloudWAF / vendor block-page identifiers
+// (CheryGPT 418 pages expose an event id for WAF console lookup).
+var wafEventIDPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)event[_-]?id['"\s:=：]+([A-Za-z0-9][A-Za-z0-9._-]{7,})`),
+	regexp.MustCompile(`(?i)事件[_\s]*id['"\s:：]+([A-Za-z0-9][A-Za-z0-9._-]+)`),
+	regexp.MustCompile(`(?i)eventId\s*[=:]\s*['"]([^'"]+)['"]`),
+	regexp.MustCompile(`(?i)name=['"]eventId['"][^>]*value=['"]([^'"]+)['"]`),
+	regexp.MustCompile(`(?i)trace[_-]?id['"\s:=：]+([A-Za-z0-9][A-Za-z0-9._-]{8,})`),
+	regexp.MustCompile(`(?i)request[_-]?id['"\s:=：]+([A-Za-z0-9][A-Za-z0-9._-]{8,})`),
+}
+
+var wafResponseHeaderKeys = []string{
+	"Server",
+	"X-Request-Id",
+	"X-Event-Id",
+	"X-Waf-Event-Id",
+	"X-Waf-Id",
+	"X-Trace-Id",
+	"Trace-Id",
+	"Via",
+	"X-Cache",
+}
+
+func extractWAFMetadata(body string, hdr http.Header) map[string]string {
+	out := make(map[string]string)
+	for _, k := range wafResponseHeaderKeys {
+		if v := strings.TrimSpace(hdr.Get(k)); v != "" {
+			out["header_"+strings.ToLower(k)] = v
+		}
+	}
+	for _, re := range wafEventIDPatterns {
+		if m := re.FindStringSubmatch(body); len(m) > 1 {
+			id := strings.TrimSpace(m[1])
+			if id != "" {
+				out["event_id"] = id
+				break
+			}
+		}
+	}
+	if strings.Contains(body, "CloudWAF") || strings.Contains(body, "访问被拦截") {
+		out["waf_vendor"] = "CloudWAF"
+	}
+	return out
+}
+
+func difyErrorSnippet(status int, body string, wafMeta map[string]string) string {
+	if eid := wafMeta["event_id"]; eid != "" {
+		return fmt.Sprintf("waf_event_id=%s (status=%d)", eid, status)
+	}
+	snippet := strings.TrimSpace(body)
+	if len(snippet) > 512 {
+		snippet = snippet[:512] + "..."
+	}
+	return snippet
+}
+
+func truncateForLog(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
+}
+
+func (c *difyClient) logDifyHTTPError(
+	status int,
+	endpoint string,
+	model string,
+	userID uint64,
+	queryLen int,
+	inputsContentLen int,
+	dur time.Duration,
+	hdr http.Header,
+	wafMeta map[string]string,
+	body string,
+) {
+	attrs := []any{
+		slog.Int("status", status),
+		slog.String("endpoint", endpoint),
+		slog.String("model", model),
+		slog.Uint64("user_id", userID),
+		slog.Int("query_len", queryLen),
+		slog.Int("inputs_content_len", inputsContentLen),
+		slog.Duration("duration", dur),
+		slog.Int("response_body_len", len(body)),
+		slog.Any("response_headers", responseHeadersForLog(hdr)),
+		slog.Any("waf", wafMeta),
+		slog.String("response_body", truncateForLog(body, 8192)),
+	}
+	if eid := wafMeta["event_id"]; eid != "" {
+		attrs = append(attrs, slog.String("waf_event_id", eid))
+	}
+	c.log.Warn("dify: request blocked or failed — include waf_event_id when opening a WAF ticket", attrs...)
+}
+
+func responseHeadersForLog(hdr http.Header) map[string]string {
+	if hdr == nil {
+		return nil
+	}
+	out := make(map[string]string, len(wafResponseHeaderKeys))
+	for _, k := range wafResponseHeaderKeys {
+		if v := strings.TrimSpace(hdr.Get(k)); v != "" {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 func firstNonEmpty(vals ...string) string {

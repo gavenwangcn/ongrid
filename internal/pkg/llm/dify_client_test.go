@@ -130,3 +130,58 @@ func TestDifyClient_APIErrorJSON(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestExtractWAFMetadata(t *testing.T) {
+	body := `<!DOCTYPE html><html><head><meta http-equiv="Server" content="CloudWAF" />
+<title>访问被拦截！</title></head><body>
+<script>var eventId = "evt-abc123def456";</script>
+<p>事件ID：WAF-20260615-001</p></body></html>`
+	hdr := http.Header{}
+	hdr.Set("Server", "CloudWAF")
+	hdr.Set("X-Request-Id", "req-trace-99")
+
+	meta := extractWAFMetadata(body, hdr)
+	if meta["event_id"] != "evt-abc123def456" {
+		t.Fatalf("event_id = %q, want evt-abc123def456", meta["event_id"])
+	}
+	if meta["waf_vendor"] != "CloudWAF" {
+		t.Fatalf("waf_vendor = %q", meta["waf_vendor"])
+	}
+	if meta["header_server"] != "CloudWAF" {
+		t.Fatalf("header_server = %q", meta["header_server"])
+	}
+	if meta["header_x-request-id"] != "req-trace-99" {
+		t.Fatalf("header_x-request-id = %q", meta["header_x-request-id"])
+	}
+}
+
+func TestDifyClient_WAF418_EventIDInError(t *testing.T) {
+	wafBody := `<!DOCTYPE html><html><head><meta http-equiv="Server" content="CloudWAF" />
+<title>访问被拦截！</title></head><body onload="block()">
+<input type="hidden" name="eventId" value="waf-event-7f3a2b1c"/></body></html>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Server", "CloudWAF")
+		w.WriteHeader(http.StatusTeapot) // 418
+		_, _ = w.Write([]byte(wafBody))
+	}))
+	defer srv.Close()
+
+	c := NewDifyClient(DifyConfig{
+		APIKey:  "app-test",
+		BaseURL: srv.URL + "/v1",
+	}, nil, nil)
+
+	_, err := c.Chat(context.Background(), ChatReq{
+		Messages: []Message{{Role: "user", Content: "hi"}},
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "418") {
+		t.Fatalf("err should mention 418: %v", err)
+	}
+	if !strings.Contains(err.Error(), "waf_event_id=waf-event-7f3a2b1c") {
+		t.Fatalf("err should include waf_event_id: %v", err)
+	}
+}
