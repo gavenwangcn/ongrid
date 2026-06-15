@@ -1,5 +1,5 @@
 # Loki single-node config for ongrid (ADR-012).
-# Filesystem backend; default 30d retention via compactor.
+# Filesystem backend; default 3d retention via compactor.
 
 auth_enabled: false
 
@@ -29,14 +29,14 @@ schema_config:
         period: 24h
 
 limits_config:
-  retention_period: 720h            # 30 天
+  retention_period: 72h             # 3 天
   max_global_streams_per_user: 10000  # cardinality 守门 (ADR-012 §决策第 10 条)
   ingestion_rate_mb: 8
   ingestion_burst_size_mb: 16
   reject_old_samples: true
-  reject_old_samples_max_age: 168h
+  reject_old_samples_max_age: 72h
   max_query_series: 10000
-  max_query_lookback: 720h
+  max_query_lookback: 72h
 
 compactor:
   working_directory: /loki/compactor

@@ -1,5 +1,5 @@
 # Tempo single-binary config for ongrid (ADR-013).
-# Filesystem backend; default 7d retention via compactor; spanmetrics +
+# Filesystem backend; default 3d retention via compactor; spanmetrics +
 # service-graph generators remote_write to Prometheus so trace_latency /
 # trace_error_rate evaluators reuse the existing Prom query path.
 
@@ -22,7 +22,7 @@ ingester:
 
 compactor:
   compaction:
-    block_retention: 168h            # 7 days (ADR-013 §决策第 4 条)
+    block_retention: 72h             # 3 days (ADR-013 §决策第 4 条)
     compacted_block_retention: 1h
     compaction_window: 1h
     max_block_bytes: 100_000_000     # ~100 MB blocks
