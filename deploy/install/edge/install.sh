@@ -346,9 +346,10 @@ Wants=network-online.target
 Type=simple
 EnvironmentFile=/etc/ongrid-edge/ongrid-edge.env
 # ADR-024 ExecStartPre — applies a staged whole-bundle upgrade then
-# rolls back on next boot if no healthy_marker landed. `+` runs as
-# root regardless of User=; `-` lets a missing/failing script exit 0
-# without blocking the unit so the pre-upgrade binary still starts.
+# rolls back on next boot if no healthy_marker landed. The leading plus
+# runs as root regardless of User=; the leading minus lets a missing or
+# failing script exit 0 without blocking the unit so the pre-upgrade binary
+# still starts.
 ExecStartPre=-+/usr/local/lib/ongrid-edge/apply-pending-upgrade.sh
 ExecStart=/usr/local/bin/ongrid-edge
 Restart=always
