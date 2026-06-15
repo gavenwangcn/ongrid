@@ -295,18 +295,21 @@ func (d *dockerCollector) streamContainerLogs(ctx context.Context, client *http.
 	pusher := newLokiPusher(d.endpoint, d.authUser, d.authPass)
 	batcher := newLogBatcher(pusher, dockerPushBatchWait, dockerPushBatchMax)
 
+	// Periodic flush while docker logs follow keeps the HTTP body open — without
+	// this, batches sit in memory until 200 lines or the connection drops.
+	flushCtx, flushCancel := context.WithCancel(ctx)
+	defer flushCancel()
+	go batcher.runPeriodicFlush(flushCtx)
+
 	err = readDockerMultiplexedLogs(resp.Body, func(stream string, ts time.Time, line string) error {
 		if line == "" {
 			return nil
 		}
 		d.updateSince(c.ID, ts)
 		labels := d.baseLabels(c, stream)
-		batcher.add(labels, ts, line)
-		if batcher.shouldFlush() {
-			return batcher.flush(ctx)
-		}
-		return nil
+		return batcher.add(ctx, labels, ts, line)
 	})
+	flushCancel()
 	if err != nil {
 		return err
 	}
@@ -412,6 +415,7 @@ func parseDockerTimestampLine(line string) (time.Time, string) {
 }
 
 type logBatcher struct {
+	mu       sync.Mutex
 	pusher   *lokiPusher
 	wait     time.Duration
 	maxLines int
@@ -426,10 +430,13 @@ func newLogBatcher(p *lokiPusher, wait time.Duration, max int) *logBatcher {
 		wait:     wait,
 		maxLines: max,
 		streams:  map[string]*lokiStream{},
+		lastPush: time.Now(),
 	}
 }
 
-func (b *logBatcher) add(labels map[string]string, ts time.Time, line string) error {
+func (b *logBatcher) add(ctx context.Context, labels map[string]string, ts time.Time, line string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	key := labelsKey(labels)
 	st, ok := b.streams[key]
 	if !ok {
@@ -441,14 +448,47 @@ func (b *logBatcher) add(labels map[string]string, ts time.Time, line string) er
 		line,
 	})
 	b.count++
+	if b.shouldFlushLocked() {
+		return b.flushLocked(ctx)
+	}
 	return nil
 }
 
-func (b *logBatcher) shouldFlush() bool {
-	return b.count >= b.maxLines
+func (b *logBatcher) shouldFlushLocked() bool {
+	if b.count >= b.maxLines {
+		return true
+	}
+	if b.count > 0 && time.Since(b.lastPush) >= b.wait {
+		return true
+	}
+	return false
+}
+
+func (b *logBatcher) runPeriodicFlush(ctx context.Context) {
+	ticker := time.NewTicker(b.wait)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			b.mu.Lock()
+			if b.count > 0 && time.Since(b.lastPush) >= b.wait {
+				// Best-effort: push errors surface on the next read callback flush.
+				_ = b.flushLocked(ctx)
+			}
+			b.mu.Unlock()
+		}
+	}
 }
 
 func (b *logBatcher) flush(ctx context.Context) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.flushLocked(ctx)
+}
+
+func (b *logBatcher) flushLocked(ctx context.Context) error {
 	if len(b.streams) == 0 {
 		return nil
 	}
