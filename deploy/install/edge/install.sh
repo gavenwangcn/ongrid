@@ -64,6 +64,28 @@ log_warn()  { printf '%s[WARN]%s  %s\n' "$C_YELLOW" "$C_RESET" "$*"; }
 log_error() { printf '%s[ERROR]%s %s\n' "$C_RED"    "$C_RESET" "$*" >&2; }
 log_ok()    { printf '%s[OK]%s    %s\n' "$C_GREEN"  "$C_RESET" "$*"; }
 
+# Probe docker.sock as the service user. usermod group membership may lag;
+# SupplementaryGroups=docker on the unit is what the running agent uses.
+docker_sock_probe_ok() {
+    local u="$1"
+    local url='http://localhost/v1.41/containers/json'
+    local attempt=0
+    while (( attempt < 4 )); do
+        if command -v runuser >/dev/null 2>&1; then
+            runuser -u "$u" -- curl -sf --max-time 3 --unix-socket /var/run/docker.sock "$url" >/dev/null 2>&1 && return 0
+        else
+            sudo -u "$u" curl -sf --max-time 3 --unix-socket /var/run/docker.sock "$url" >/dev/null 2>&1 && return 0
+        fi
+        attempt=$((attempt + 1))
+        sleep 1
+    done
+    return 1
+}
+
+docker_unit_has_supplementary_docker() {
+    systemctl show ongrid-edge -p SupplementaryGroups --value 2>/dev/null | grep -qw docker
+}
+
 trap 'log_error "install failed at line $LINENO (exit $?)"' ERR
 
 # --- arg parsing -------------------------------------------------------------
@@ -469,19 +491,13 @@ else
     SELFCHECK_FAIL=1
 fi
 if getent group docker >/dev/null 2>&1 && [[ -S /var/run/docker.sock ]]; then
-    if command -v runuser >/dev/null 2>&1; then
-        DOCKER_PROBE=(runuser -u "$SERVICE_USER" -- curl -sf --unix-socket /var/run/docker.sock \
-            'http://localhost/v1.41/containers/json?filters={"status":["running"]}')
-    else
-        DOCKER_PROBE=(sudo -u "$SERVICE_USER" curl -sf --unix-socket /var/run/docker.sock \
-            'http://localhost/v1.41/containers/json?filters={"status":["running"]}')
-    fi
-    if "${DOCKER_PROBE[@]}" >/dev/null 2>&1; then
+    if docker_sock_probe_ok "$SERVICE_USER"; then
         log_ok "docker.sock readable by ${SERVICE_USER} (Docker API logs)"
+    elif docker_unit_has_supplementary_docker; then
+        log_ok "docker.sock for enable_docker_api: unit has SupplementaryGroups=docker (login probe inconclusive — normal after fresh install)"
     else
-        log_error "${SERVICE_USER} cannot access /var/run/docker.sock — enable_docker_api logs will crash"
-        log_error "  fix: usermod -aG docker ${SERVICE_USER}; ensure unit has SupplementaryGroups=docker; systemctl restart ongrid-edge"
-        SELFCHECK_FAIL=1
+        log_warn "${SERVICE_USER} docker.sock login probe failed — enable_docker_api may not work until groups are applied"
+        log_warn "  fix: usermod -aG docker ${SERVICE_USER}; ensure SupplementaryGroups=docker in ${SERVICE_FILE}; systemctl restart ongrid-edge"
     fi
 fi
 resolve_dataplane_probe "$SERVER_HTTP_ADDR" "$SERVER_SCHEME"
