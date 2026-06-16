@@ -16,12 +16,15 @@
 package dbx
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	gormmysql "gorm.io/driver/mysql"
@@ -31,12 +34,103 @@ import (
 	"github.com/ongridio/ongrid/internal/pkg/config"
 )
 
+// slogGormLogger implements gorm's logger.Interface on slog. SQL errors
+// surface at Warn; expected absent rows (ErrRecordNotFound) log at Debug
+// so optional system_settings lookups stay quiet unless LOG_LEVEL=debug.
+type slogGormLogger struct {
+	log           *slog.Logger
+	level         logger.LogLevel
+	slowThreshold time.Duration
+}
+
+func newSlogGormLogger(slogLog *slog.Logger) logger.Interface {
+	if slogLog == nil {
+		slogLog = slog.Default()
+	}
+	return &slogGormLogger{
+		log:           slogLog.With(slog.String("comp", "gorm")),
+		level:         logger.Warn,
+		slowThreshold: 200 * time.Millisecond,
+	}
+}
+
+func (l *slogGormLogger) LogMode(level logger.LogLevel) logger.Interface {
+	dup := *l
+	dup.level = level
+	return &dup
+}
+
+func (l *slogGormLogger) Info(ctx context.Context, msg string, data ...interface{}) {
+	if l.level >= logger.Info {
+		l.logMsg(ctx, slog.LevelInfo, msg, data...)
+	}
+}
+
+func (l *slogGormLogger) Warn(ctx context.Context, msg string, data ...interface{}) {
+	if l.level >= logger.Warn {
+		l.logMsg(ctx, slog.LevelWarn, msg, data...)
+	}
+}
+
+func (l *slogGormLogger) Error(ctx context.Context, msg string, data ...interface{}) {
+	if l.level >= logger.Error {
+		l.logMsg(ctx, slog.LevelError, msg, data...)
+	}
+}
+
+func (l *slogGormLogger) logMsg(ctx context.Context, level slog.Level, msg string, data ...interface{}) {
+	if len(data) == 0 {
+		l.log.Log(ctx, level, msg)
+		return
+	}
+	l.log.Log(ctx, level, fmt.Sprintf(msg, data...))
+}
+
+func (l *slogGormLogger) Trace(ctx context.Context, begin time.Time, fc func() (string, int64), err error) {
+	if l.level <= logger.Silent {
+		return
+	}
+	elapsed := time.Since(begin)
+	sql, rows := fc()
+
+	switch {
+	case err != nil && errors.Is(err, gorm.ErrRecordNotFound):
+		l.log.Log(ctx, slog.LevelDebug, "gorm record not found",
+			slog.Duration("elapsed", elapsed),
+			slog.Int64("rows", rows),
+			slog.String("sql", sql),
+		)
+	case err != nil && l.level >= logger.Warn:
+		l.log.Log(ctx, slog.LevelWarn, "gorm query error",
+			slog.Any("err", err),
+			slog.Duration("elapsed", elapsed),
+			slog.Int64("rows", rows),
+			slog.String("sql", sql),
+		)
+	case l.slowThreshold != 0 && elapsed > l.slowThreshold && l.level >= logger.Warn:
+		l.log.Log(ctx, slog.LevelWarn, "gorm slow query",
+			slog.Duration("elapsed", elapsed),
+			slog.Int64("rows", rows),
+			slog.String("sql", sql),
+		)
+	case l.level >= logger.Info:
+		l.log.Log(ctx, slog.LevelInfo, "gorm query",
+			slog.Duration("elapsed", elapsed),
+			slog.Int64("rows", rows),
+			slog.String("sql", sql),
+		)
+	}
+}
+
+func gormLogger(slogLog *slog.Logger) logger.Interface {
+	return newSlogGormLogger(slogLog)
+}
+
 // Open opens the configured database backend. Dialect selects MySQL (default)
 // or SQLite; an empty dialect is treated as MySQL for defensive defaults.
 //
-// The returned *gorm.DB uses a Warn-level logger so the normal query stream
-// stays out of the application log. Callers that want query logs should wrap
-// with db.Session(&gorm.Session{Logger: ...}) at call sites.
+// The returned *gorm.DB uses a Warn-level GORM logger: slow queries and
+// real SQL errors appear at Warn; ErrRecordNotFound is Debug-only.
 func Open(cfg config.DBConfig, log *slog.Logger) (*gorm.DB, error) {
 	switch cfg.Dialect {
 	case "", "mysql":
@@ -56,7 +150,7 @@ func openMySQL(dsn string, log *slog.Logger) (*gorm.DB, error) {
 	}
 
 	gdb, err := gorm.Open(gormmysql.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
+		Logger: gormLogger(log),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("dbx: mysql open: %w", err)
@@ -99,7 +193,7 @@ func openSQLite(path string, log *slog.Logger) (*gorm.DB, error) {
 	dsn := buildSQLiteDSN(path)
 
 	gdb, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
+		Logger: gormLogger(log),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("dbx: sqlite open %q: %w", path, err)

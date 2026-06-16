@@ -80,6 +80,12 @@ func (s *Scheduler) fireOne(ctx context.Context, sched *model.ReportSchedule, no
 		}
 	}()
 
+	s.log.Info("report schedule fire start",
+		slog.Uint64("schedule_id", sched.ID),
+		slog.String("kind", sched.Kind),
+		slog.String("scope", sched.ScopeJSON),
+	)
+
 	loc, err := loadLocation(sched.Timezone)
 	if err != nil {
 		s.log.Warn("bad schedule timezone — disabling",
@@ -98,7 +104,9 @@ func (s *Scheduler) fireOne(ctx context.Context, sched *model.ReportSchedule, no
 		// FireSchedule already re-armed where it could; log and move on.
 		s.log.Warn("fire schedule failed",
 			slog.Uint64("schedule_id", sched.ID), slog.Any("err", err))
+		return
 	}
+	s.log.Info("report schedule fire done", slog.Uint64("schedule_id", sched.ID))
 }
 
 // disable parks a schedule whose config can no longer be fired (bad tz /

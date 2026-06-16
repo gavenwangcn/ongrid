@@ -3,6 +3,7 @@ package callbacks
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,6 +24,14 @@ type AuditDeps struct {
 	Logger    *slog.Logger
 	SessionID string
 	UserID    uint64
+	// TraceKind labels correlated runs (e.g. "report").
+	TraceKind string
+	// TraceID is the owning entity id (e.g. report UUID).
+	TraceID string
+	// LogToolArgsPreview logs a truncated args JSON on tool start when
+	// true — intended for read-only report workers where operators need
+	// to debug which filters were passed to query_systems / query_log_sources.
+	LogToolArgsPreview bool
 }
 
 // AuditHandler emits structured slog INFO records for every stage of
@@ -90,6 +99,7 @@ func (h *AuditHandler) OnStart(ctx context.Context, info *callbacks.RunInfo, inp
 		}
 		turn := h.chatTurn.Add(1)
 		h.deps.Logger.Info("graph stage start",
+			h.traceAttrs(),
 			slog.String("session_id", h.deps.SessionID),
 			slog.Uint64("user_id", h.deps.UserID),
 			slog.String("kind", "chat_model"),
@@ -107,12 +117,14 @@ func (h *AuditHandler) OnStart(ctx context.Context, info *callbacks.RunInfo, inp
 		// authored text (PromQL / LogQL queries) that
 		// forbids us from logging in cleartext.
 		h.deps.Logger.Info("graph stage start",
+			h.traceAttrs(),
 			slog.String("session_id", h.deps.SessionID),
 			slog.Uint64("user_id", h.deps.UserID),
 			slog.String("kind", "tool"),
 			slog.String("name", info.Name),
 			slog.String("tool_call_id", entry.toolCallID),
 			slog.Int("args_bytes", len(args)),
+			h.toolArgsPreviewAttr(args),
 		)
 	}
 	h.startsMu.Lock()
@@ -159,6 +171,7 @@ func (h *AuditHandler) OnEnd(ctx context.Context, info *callbacks.RunInfo, outpu
 			}
 		}
 		h.deps.Logger.Info("graph stage end",
+			h.traceAttrs(),
 			slog.String("session_id", h.deps.SessionID),
 			slog.Uint64("user_id", h.deps.UserID),
 			slog.String("kind", "chat_model"),
@@ -174,6 +187,7 @@ func (h *AuditHandler) OnEnd(ctx context.Context, info *callbacks.RunInfo, outpu
 			body = tout.Response
 		}
 		h.deps.Logger.Info("graph stage end",
+			h.traceAttrs(),
 			slog.String("session_id", h.deps.SessionID),
 			slog.Uint64("user_id", h.deps.UserID),
 			slog.String("kind", "tool"),
@@ -182,6 +196,7 @@ func (h *AuditHandler) OnEnd(ctx context.Context, info *callbacks.RunInfo, outpu
 			slog.Int64("duration_ms", dur.Milliseconds()),
 			slog.Int("result_bytes", len(body)),
 			slog.String("status", "success"),
+			h.toolResultPreviewAttr(body),
 		)
 	}
 	return ctx
@@ -205,6 +220,7 @@ func (h *AuditHandler) OnError(ctx context.Context, info *callbacks.RunInfo, err
 		status = "timeout"
 	}
 	h.deps.Logger.Warn("graph stage end",
+		h.traceAttrs(),
 		slog.String("session_id", h.deps.SessionID),
 		slog.Uint64("user_id", h.deps.UserID),
 		slog.String("kind", componentKind(info.Component)),
@@ -279,6 +295,45 @@ func stageKey(ctx context.Context, info *callbacks.RunInfo) string {
 		return string(info.Component) + "|" + info.Name + "|" + v
 	}
 	return string(info.Component) + "|" + info.Name
+}
+
+func (h *AuditHandler) traceAttrs() slog.Attr {
+	if h == nil {
+		return slog.Attr{}
+	}
+	attrs := make([]any, 0, 2)
+	if k := strings.TrimSpace(h.deps.TraceKind); k != "" {
+		attrs = append(attrs, slog.String("trace_kind", k))
+	}
+	if id := strings.TrimSpace(h.deps.TraceID); id != "" {
+		attrs = append(attrs, slog.String("trace_id", id))
+	}
+	if len(attrs) == 0 {
+		return slog.Attr{}
+	}
+	return slog.Group("trace", attrs...)
+}
+
+func (h *AuditHandler) toolArgsPreviewAttr(args string) slog.Attr {
+	if h == nil || !h.deps.LogToolArgsPreview || strings.TrimSpace(args) == "" {
+		return slog.Attr{}
+	}
+	return slog.String("args_preview", truncateAuditText(args, 400))
+}
+
+func (h *AuditHandler) toolResultPreviewAttr(body string) slog.Attr {
+	if h == nil || !h.deps.LogToolArgsPreview || strings.TrimSpace(body) == "" {
+		return slog.Attr{}
+	}
+	return slog.String("result_preview", truncateAuditText(body, 400))
+}
+
+func truncateAuditText(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
 }
 
 // Compile-time checks.

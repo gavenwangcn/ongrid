@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"gorm.io/gorm/logger"
 
 	bizreport "github.com/ongridio/ongrid/internal/manager/biz/report"
+	"github.com/ongridio/ongrid/internal/pkg/promquery"
 )
 
 // The facts collector queries tables owned by other domains by name.
@@ -93,7 +95,7 @@ func TestFactsCollector_Collect(t *testing.T) {
 
 	// prom=nil → Resource.Available=false → hero falls back to
 	// devices/incidents/actions/online.
-	fc := NewFactsCollector(db, nil)
+	fc := NewFactsCollector(db, nil, nil)
 	facts, err := fc.Collect(ctx, period, prev, bizreport.Scope{})
 	if err != nil {
 		t.Fatal(err)
@@ -168,7 +170,7 @@ func TestFactsCollector_SystemScopeFilter(t *testing.T) {
 		(1,'A','warning','resolved',7,'2026-06-02T10:00:00Z','2026-06-02T10:30:00Z',NULL),
 		(2,'B','warning','resolved',9,'2026-06-03T10:00:00Z','2026-06-03T10:30:00Z',NULL)`)
 
-	fc := NewFactsCollector(db, nil)
+	fc := NewFactsCollector(db, nil, nil)
 	facts, err := fc.Collect(ctx, period, period, bizreport.Scope{SystemName: "prod-a"})
 	if err != nil {
 		t.Fatal(err)
@@ -192,7 +194,7 @@ func TestFactsCollector_EdgeScopeFilter(t *testing.T) {
 		(1,'A','warning','resolved',7,'2026-06-02T10:00:00Z','2026-06-02T10:30:00Z',NULL),
 		(2,'B','warning','resolved',9,'2026-06-03T10:00:00Z','2026-06-03T10:30:00Z',NULL)`)
 
-	fc := NewFactsCollector(db, nil)
+	fc := NewFactsCollector(db, nil, nil)
 	// Scope to device 7 only.
 	facts, err := fc.Collect(ctx, period, period, bizreport.Scope{EdgeIDs: []uint64{7}})
 	if err != nil {
@@ -215,7 +217,7 @@ func TestFactsCollector_SeverityScopeFilter(t *testing.T) {
 		(2,'B','warning','resolved',7,'2026-06-03T10:00:00Z','2026-06-03T10:30:00Z',NULL),
 		(3,'C','critical','resolved',7,'2026-06-04T10:00:00Z','2026-06-04T10:30:00Z',NULL)`)
 
-	fc := NewFactsCollector(db, nil)
+	fc := NewFactsCollector(db, nil, nil)
 	// severity_min=warning → drop the info incident.
 	facts, _ := fc.Collect(ctx, period, period, bizreport.Scope{SeverityMin: "warning"})
 	if len(facts.Incidents) != 2 {
@@ -231,7 +233,7 @@ func TestFactsCollector_EmptyPeriodNoError(t *testing.T) {
 		End:   mustParse(t, "2026-06-08T00:00:00Z"),
 	}
 	// No data at all — a calm report's facts. Must not error.
-	fc := NewFactsCollector(db, nil)
+	fc := NewFactsCollector(db, nil, nil)
 	facts, err := fc.Collect(ctx, period, period, bizreport.Scope{})
 	if err != nil {
 		t.Fatalf("empty period should not error: %v", err)
@@ -242,5 +244,60 @@ func TestFactsCollector_EmptyPeriodNoError(t *testing.T) {
 	// Hero still present (all zeros), so the calm report renders cards.
 	if len(facts.Hero) != 4 {
 		t.Errorf("hero cards = %d, want 4 even when empty", len(facts.Hero))
+	}
+}
+
+// fakeReportProm stubs Prometheus for resource trend tests.
+type fakeReportProm struct {
+	queryFn      func(ctx context.Context, expr string, ts time.Time) (*promquery.InstantResult, error)
+	queryRangeFn func(ctx context.Context, expr string, start, end time.Time, step time.Duration) (*promquery.InstantResult, error)
+}
+
+func (f *fakeReportProm) Query(ctx context.Context, expr string, ts time.Time) (*promquery.InstantResult, error) {
+	if f.queryFn != nil {
+		return f.queryFn(ctx, expr, ts)
+	}
+	return nil, nil
+}
+
+func (f *fakeReportProm) QueryRange(ctx context.Context, expr string, start, end time.Time, step time.Duration) (*promquery.InstantResult, error) {
+	if f.queryRangeFn != nil {
+		return f.queryRangeFn(ctx, expr, start, end, step)
+	}
+	return nil, nil
+}
+
+func TestFactsCollector_ResourceQueryRangeFallback(t *testing.T) {
+	db := newFactsDB(t)
+	ctx := context.Background()
+	db.Exec(`INSERT INTO devices VALUES (1,1,1,'人力资源-EHR系统',NULL)`)
+
+	period := bizreport.Period{
+		Start: mustParse(t, "2026-06-08T00:00:00Z"),
+		End:   mustParse(t, "2026-06-15T00:00:00Z"),
+	}
+	matrix := []byte(`[{"metric":{"device_id":"1"},"values":[[1,"2.5"],[2,"3.0"],[3,"4.0"]]}]`)
+	prom := &fakeReportProm{
+		queryFn: func(_ context.Context, _ string, _ time.Time) (*promquery.InstantResult, error) {
+			return nil, fmt.Errorf("subquery timeout")
+		},
+		queryRangeFn: func(_ context.Context, _ string, _, _ time.Time, _ time.Duration) (*promquery.InstantResult, error) {
+			return &promquery.InstantResult{ResultType: "matrix", Result: matrix}, nil
+		},
+	}
+	fc := NewFactsCollector(db, prom, nil)
+	facts, err := fc.Collect(ctx, period, period, bizreport.Scope{SystemName: "人力资源-EHR系统"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !facts.Resource.Available {
+		t.Fatalf("resource.available = false, want true via query_range fallback")
+	}
+	// avg of 2.5,3,4 = 3.166...; peak = 4
+	if facts.Resource.CPUAvg < 3.1 || facts.Resource.CPUAvg > 3.2 {
+		t.Errorf("cpu avg = %v, want ~3.17", facts.Resource.CPUAvg)
+	}
+	if facts.Resource.CPUPeak != 4 {
+		t.Errorf("cpu peak = %v, want 4", facts.Resource.CPUPeak)
 	}
 }

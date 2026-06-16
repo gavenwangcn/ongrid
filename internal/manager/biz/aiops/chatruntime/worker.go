@@ -46,6 +46,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -167,6 +168,10 @@ type SpawnRequest struct {
 	// uses whatever the routing default is.
 	Provider string
 	Model    string
+	// TraceKind correlates worker audit logs (e.g. "report").
+	TraceKind string
+	// TraceID is the owning entity id (e.g. report UUID).
+	TraceID string
 }
 
 // TaskNotification is the payload of a task_notification streaming
@@ -358,7 +363,11 @@ func (rt *Runtime) SpawnWorker(ctx context.Context, req SpawnRequest) (*Worker, 
 		// coordinator. SendToWorker's runWorker callsite uses ctx as-is
 		// because SendTo inherits the coordinator's ctx directly.
 		workerCtx = basetool.WithLLMChoice(workerCtx, req.Provider, req.Model)
-		result, err := rt.runWorker(workerCtx, agentDef, sessID, req.Prompt, req.Locale)
+		result, err := rt.runWorker(workerCtx, agentDef, sessID, req.Prompt, req.Locale, req)
+
+		if req.SessionKind == "report" {
+			rt.logReportAgentSummary(context.WithoutCancel(workerCtx), sessID, req, agentDef.Name)
+		}
 
 		w.mu.Lock()
 		end := time.Now().UTC()
@@ -464,7 +473,7 @@ func (rt *Runtime) SendToWorker(ctx context.Context, workerID, message string) e
 
 	// SendToWorker has no SpawnRequest; inherit locale from ctx
 	// (chat coordinator threads it via basetool.WithLocale).
-	result, err := rt.runWorker(ctx, agentDef, sessID, message, basetool.LocaleFromContext(ctx))
+	result, err := rt.runWorker(ctx, agentDef, sessID, message, basetool.LocaleFromContext(ctx), SpawnRequest{})
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -537,7 +546,7 @@ func (rt *Runtime) GetWorker(workerID string) (*Worker, bool) {
 // coordinator's). The user-role prompt is persisted up-front here,
 // matching Handle()'s "user message lands on disk before the LLM call"
 // invariant — same survival semantics on a graph crash.
-func (rt *Runtime) runWorker(ctx context.Context, agentDef *Agent, sessID, userText, locale string) (string, error) {
+func (rt *Runtime) runWorker(ctx context.Context, agentDef *Agent, sessID, userText, locale string, req SpawnRequest) (string, error) {
 	workerTools := filterToolsForAgent(rt.cfg.ToolBag, agentDef, false)
 
 	systemPrompt := ComposeSystemPrompt(rt.cfg.BasePrompt, nil, agentDef)
@@ -606,6 +615,24 @@ func (rt *Runtime) runWorker(ctx context.Context, agentDef *Agent, sessID, userT
 		// Workers don't stream to the parent SSE channel directly; their
 		// terminal status fans back through req.ParentEmit's task_notification.
 		deps.SSE = nil
+		if req.SessionKind == "report" || strings.TrimSpace(req.TraceKind) != "" {
+			deps.Audit.SessionID = sessID
+			if tk := strings.TrimSpace(req.TraceKind); tk != "" {
+				deps.Audit.TraceKind = tk
+			} else if req.SessionKind == "report" {
+				deps.Audit.TraceKind = "report"
+			}
+			deps.Audit.TraceID = strings.TrimSpace(req.TraceID)
+			if req.SessionKind == "report" {
+				deps.Audit.LogToolArgsPreview = true
+			}
+			if deps.Audit.Logger != nil {
+				deps.Audit.Logger = deps.Audit.Logger.With(
+					slog.String("comp", "report-agent"),
+					slog.String("agent", agentDef.Name),
+				)
+			}
+		}
 		handlers = callbacks.NewDefaultHandlers(deps)
 	}
 
@@ -906,6 +933,103 @@ func (rt *Runtime) prologueKBLookup(ctx context.Context, bag []basetool.BaseTool
 	}
 	b.WriteString("\n\n请基于这份 playbook 推进诊断；末尾在答案里标注 `（参考 KB: " + top.Title + "）`。如果 playbook 不适用，可以忽略并自由发挥。")
 	return b.String()
+}
+
+// logReportAgentSummary emits a post-run digest of every tool the
+// reporter worker planned and executed. Facts collection (Prometheus /
+// SQL) is not agent-driven — only this phase uses tools/skills.
+func (rt *Runtime) logReportAgentSummary(ctx context.Context, sessID string, req SpawnRequest, agentName string) {
+	if rt.log == nil {
+		return
+	}
+	log := rt.log.With(
+		slog.String("comp", "report-agent"),
+		slog.String("trace_kind", firstNonEmpty(strings.TrimSpace(req.TraceKind), "report")),
+		slog.String("trace_id", strings.TrimSpace(req.TraceID)),
+		slog.String("agent", agentName),
+		slog.String("session_id", sessID),
+	)
+	if rt.cfg.Sessions == nil || sessID == "" {
+		log.Warn("report agent summary skipped: no session repo")
+		return
+	}
+	msgs, err := rt.cfg.Sessions.ListMessages(ctx, sessID, 0)
+	if err != nil {
+		log.Warn("report agent summary: list messages failed", slog.Any("err", err))
+		return
+	}
+	var planned, executed int
+	for _, m := range msgs {
+		if m == nil {
+			continue
+		}
+		switch m.Role {
+		case aiopsmodel.RoleAssistant:
+			for _, tc := range m.ToolCalls {
+				planned++
+				toolKind := "tool"
+				if strings.HasSuffix(tc.ToolName, "_skill") || tc.ToolName == "execute_skill" {
+					toolKind = "skill"
+				}
+				llmID := tc.ID
+				if tc.LLMCallID != nil && strings.TrimSpace(*tc.LLMCallID) != "" {
+					llmID = *tc.LLMCallID
+				}
+				log.Info("report agent tool planned",
+					slog.String("invocation_kind", toolKind),
+					slog.String("tool", tc.ToolName),
+					slog.String("tool_call_id", llmID),
+					slog.String("status", tc.Status),
+					slog.String("args_preview", truncateReportAgentText(tc.ArgumentsJSON, 400)),
+				)
+			}
+		case aiopsmodel.RoleTool:
+			executed++
+			name := ""
+			if m.ToolName != nil {
+				name = *m.ToolName
+			}
+			body := ""
+			if m.Content != nil {
+				body = *m.Content
+			}
+			tcID := ""
+			if m.ToolCallID != nil {
+				tcID = *m.ToolCallID
+			}
+			toolKind := "tool"
+			if strings.HasSuffix(name, "_skill") || name == "execute_skill" {
+				toolKind = "skill"
+			}
+			log.Info("report agent tool executed",
+				slog.String("invocation_kind", toolKind),
+				slog.String("tool", name),
+				slog.String("tool_call_id", tcID),
+				slog.Int("result_bytes", len(body)),
+				slog.String("result_preview", truncateReportAgentText(body, 400)),
+			)
+		}
+	}
+	log.Info("report agent execution summary",
+		slog.Int("messages", len(msgs)),
+		slog.Int("tools_planned", planned),
+		slog.Int("tools_executed", executed),
+	)
+}
+
+func truncateReportAgentText(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
+}
+
+func firstNonEmpty(a, b string) string {
+	if strings.TrimSpace(a) != "" {
+		return strings.TrimSpace(a)
+	}
+	return strings.TrimSpace(b)
 }
 
 // workerChatModelOpts mirrors chatModelOpts but reads the (provider,

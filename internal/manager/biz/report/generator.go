@@ -103,13 +103,19 @@ func (g *workerGenerator) Ready(ctx context.Context) error {
 // terminal state (ready/failed) — a panic or early return that left the
 // row "generating" would strand it in the UI.
 func (g *workerGenerator) Generate(ctx context.Context, reportID string) {
+	start := time.Now()
+	g.log.Info("report generate start", slog.String("report_id", reportID))
+
 	rpt, err := g.repo.GetReport(ctx, reportID)
 	if err != nil {
 		g.log.Warn("load report failed", slog.String("report_id", reportID), slog.Any("err", err))
 		return
 	}
 	if rpt.Status != model.StatusPending {
-		// Already handled (double-fire, restart re-attach). No-op.
+		g.log.Info("report generate skipped: not pending",
+			slog.String("report_id", reportID),
+			slog.String("status", rpt.Status),
+		)
 		return
 	}
 
@@ -121,10 +127,16 @@ func (g *workerGenerator) Generate(ctx context.Context, reportID string) {
 
 	if err := g.generate(ctx, rpt); err != nil {
 		g.fail(ctx, rpt, err.Error())
+		return
 	}
+	g.log.Info("report generate finished",
+		slog.String("report_id", reportID),
+		slog.Duration("duration", time.Since(start)),
+	)
 }
 
 func (g *workerGenerator) generate(ctx context.Context, rpt *model.Report) error {
+	genStart := time.Now()
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), g.cfg.Timeout)
 	defer cancel()
 
@@ -132,17 +144,46 @@ func (g *workerGenerator) generate(ctx context.Context, rpt *model.Report) error
 	prev := previousPeriod(period)
 	scope := ParseScope(rpt.ScopeJSON)
 
+	g.log.Info("report pipeline facts",
+		slog.String("report_id", rpt.ID),
+		slog.String("title", rpt.Title),
+		slog.String("kind", rpt.Kind),
+		slog.Time("period_start", period.Start),
+		slog.Time("period_end", period.End),
+		slog.String("scope_system", strings.TrimSpace(scope.SystemName)),
+		slog.String("locale", g.localeFor(rpt)),
+		slog.Duration("timeout", g.cfg.Timeout),
+	)
+
+	factsStart := time.Now()
 	facts, err := g.facts.Collect(ctx, period, prev, scope)
 	if err != nil {
 		return fmt.Errorf("collect facts: %w", err)
 	}
+	g.log.Info("report pipeline facts done",
+		slog.String("report_id", rpt.ID),
+		slog.Duration("duration", time.Since(factsStart)),
+		slog.Bool("resource_available", facts.Resource.Available),
+		slog.Int("fleet_total", facts.Fleet.Total),
+		slog.Int("incidents", len(facts.Incidents)),
+	)
 
 	prompt := g.buildPrompt(rpt, facts)
+	g.log.Info("report pipeline spawn reporter agent",
+		slog.String("report_id", rpt.ID),
+		slog.String("persona", g.cfg.Persona),
+		slog.Int("prompt_bytes", len(prompt)),
+		slog.String("note", "facts already collected without agent; agent phase writes narrative and may call query_systems/query_log_sources"),
+	)
+
+	workerStart := time.Now()
 	worker, err := g.spawner.SpawnWorker(ctx, chatruntime.SpawnRequest{
 		AgentName:   g.cfg.Persona,
 		Prompt:      prompt,
 		Background:  false, // sync — this goroutine owns the lifecycle
 		SessionKind: "report",
+		TraceKind:   "report",
+		TraceID:     rpt.ID,
 		OwnerUserID: rpt.CreatedBy,
 		Locale:      g.localeFor(rpt),
 	})
@@ -158,12 +199,36 @@ func (g *workerGenerator) generate(ctx context.Context, rpt *model.Report) error
 	if wid := worker.ID; wid != "" {
 		rpt.WorkerID = &wid
 	}
+	g.log.Info("report pipeline worker done",
+		slog.String("report_id", rpt.ID),
+		slog.String("worker_id", worker.ID),
+		slog.String("session_id", worker.SessionID),
+		slog.String("status", string(worker.Status)),
+		slog.Int("result_bytes", len(worker.Result)),
+		slog.Duration("duration", time.Since(workerStart)),
+	)
 	if werr := strings.TrimSpace(worker.Err); werr != "" {
+		g.log.Warn("report pipeline worker error",
+			slog.String("report_id", rpt.ID),
+			slog.String("worker_id", worker.ID),
+			slog.String("err", werr),
+		)
 		return fmt.Errorf("worker: %s", werr)
 	}
 
-	content, err := ParseContent(extractJSON(worker.Result))
+	rawJSON := extractJSON(worker.Result)
+	content, err := ParseContent(rawJSON)
 	if err != nil {
+		g.log.Warn("report pipeline parse content failed",
+			slog.String("report_id", rpt.ID),
+			slog.String("worker_id", worker.ID),
+			slog.String("session_id", worker.SessionID),
+			slog.Int("raw_result_bytes", len(worker.Result)),
+			slog.Int("extracted_json_bytes", len(rawJSON)),
+			slog.String("result_preview", truncate(worker.Result, 400)),
+			slog.String("extracted_preview", truncate(rawJSON, 400)),
+			slog.Any("err", err),
+		)
 		return fmt.Errorf("parse content: %w", err)
 	}
 
@@ -197,7 +262,10 @@ func (g *workerGenerator) generate(ctx context.Context, rpt *model.Report) error
 	}
 	g.log.Info("report ready",
 		slog.String("report_id", rpt.ID),
-		slog.Int("incidents", len(facts.Incidents)))
+		slog.Int("incidents", len(facts.Incidents)),
+		slog.Bool("resource_available", facts.Resource.Available),
+		slog.Duration("total_duration", time.Since(genStart)),
+	)
 
 	// Deliver to IM channels (ready reports only — the locked decision).
 	// Best-effort: a delivery failure is recorded in delivery_json, not

@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"gorm.io/gorm"
@@ -30,12 +29,13 @@ func (r *Repo) Get(ctx context.Context, category, key string) (*model.Setting, e
 	var s model.Setting
 	err := r.db.WithContext(ctx).
 		Where("category = ? AND `key` = ?", category, key).
-		First(&s).Error
+		Limit(1).
+		Find(&s).Error
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, errs.ErrNotFound
-		}
 		return nil, err
+	}
+	if s.ID == 0 {
+		return nil, errs.ErrNotFound
 	}
 	return &s, nil
 }

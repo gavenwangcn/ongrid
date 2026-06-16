@@ -1568,7 +1568,7 @@ func main() {
 		}
 		reportGen = managerbizreport.NewWorkerGenerator(
 			reportRepo,
-			managerreportdata.NewFactsCollector(db, reportProm),
+			managerreportdata.NewFactsCollector(db, reportProm, log.With(slog.String("comp", "report-facts"))),
 			reportRT,
 			managerbizreport.GeneratorConfig{
 				DefaultLocale: firstNonEmpty(os.Getenv("ONGRID_DEFAULT_LOCALE"), "en"),

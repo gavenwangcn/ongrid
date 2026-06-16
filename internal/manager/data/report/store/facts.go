@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -27,6 +28,7 @@ import (
 type FactsCollector struct {
 	db   *gorm.DB
 	prom PromQuerier
+	log  *slog.Logger
 }
 
 // PromQuerier is the narrow Prometheus surface. Implemented by
@@ -34,10 +36,18 @@ type FactsCollector struct {
 // renders the SQL-derived sections).
 type PromQuerier interface {
 	Query(ctx context.Context, expr string, ts time.Time) (*promquery.InstantResult, error)
+	QueryRange(ctx context.Context, expr string, start, end time.Time, step time.Duration) (*promquery.InstantResult, error)
 }
 
-func NewFactsCollector(db *gorm.DB, prom PromQuerier) *FactsCollector {
-	return &FactsCollector{db: db, prom: prom}
+func NewFactsCollector(db *gorm.DB, prom PromQuerier, log *slog.Logger) *FactsCollector {
+	if log == nil {
+		log = slog.Default()
+	}
+	return &FactsCollector{
+		db:   db,
+		prom: prom,
+		log:  log.With(slog.String("comp", "report-facts")),
+	}
 }
 
 var _ bizreport.FactsCollector = (*FactsCollector)(nil)
@@ -45,10 +55,25 @@ var _ bizreport.FactsCollector = (*FactsCollector)(nil)
 var severityRank = map[string]int{"info": 0, "warning": 1, "critical": 2}
 
 func (c *FactsCollector) Collect(ctx context.Context, period, prev bizreport.Period, scope bizreport.Scope) (*bizreport.ReportFacts, error) {
+	start := time.Now()
+	c.log.Info("report facts collect start",
+		slog.Time("period_start", period.Start),
+		slog.Time("period_end", period.End),
+		slog.String("system_name", strings.TrimSpace(scope.SystemName)),
+		slog.Bool("prom_wired", c.prom != nil),
+	)
+
 	scope, err := c.resolveScope(ctx, scope)
 	if err != nil {
+		c.log.Error("report facts scope resolve failed", slog.Any("err", err))
 		return nil, err
 	}
+	c.log.Info("report facts scope resolved",
+		slog.String("system_name", strings.TrimSpace(scope.SystemName)),
+		slog.Any("device_ids", scopedDeviceIDs(scope)),
+		slog.Bool("scoped_empty", scopedEmpty(scope)),
+	)
+
 	facts := &bizreport.ReportFacts{
 		Period:      period,
 		PrevPeriod:  prev,
@@ -57,6 +82,7 @@ func (c *FactsCollector) Collect(ctx context.Context, period, prev bizreport.Per
 
 	incidents, err := c.collectIncidents(ctx, period, scope)
 	if err != nil {
+		c.log.Error("report facts incidents failed", slog.Any("err", err))
 		return nil, err
 	}
 	facts.Incidents = incidents
@@ -68,97 +94,323 @@ func (c *FactsCollector) Collect(ctx context.Context, period, prev bizreport.Per
 	facts.Usage = c.collectUsage(ctx, period)
 	facts.Resource = c.collectResource(ctx, period, scope)
 	facts.Hero = c.buildHero(period, prev, scope, incidents, facts.Actions, facts.Fleet, facts.Resource, c.countIncidents(ctx, prev, scope))
+
+	c.log.Info("report facts collect done",
+		slog.Duration("duration", time.Since(start)),
+		slog.Int("incidents", len(facts.Incidents)),
+		slog.Int("fleet_total", facts.Fleet.Total),
+		slog.Int("fleet_online", facts.Fleet.Online),
+		slog.Bool("resource_available", facts.Resource.Available),
+		slog.Float64("cpu_avg", facts.Resource.CPUAvg),
+		slog.Float64("cpu_peak", facts.Resource.CPUPeak),
+		slog.Float64("mem_avg", facts.Resource.MemAvg),
+		slog.Float64("mem_peak", facts.Resource.MemPeak),
+		slog.Float64("disk_avg", facts.Resource.DiskAvg),
+		slog.Float64("disk_peak", facts.Resource.DiskPeak),
+	)
 	return facts, nil
 }
 
 // --- resource trends (Prometheus period avg/peak) ---
 
-// resourceExprs are the per-metric fleet-aggregate expressions. We reuse
-// the same node_* expressions the Monitor page renders (so the series
-// definitely exist), wrapped in a subquery over the period to get the
-// fleet avg and peak. avgExpr → fleet mean over the window; peakExpr →
-// fleet max over the window.
-type resourceExpr struct {
+// resourceMetricExprs holds the inner PromQL (per-device utilization) and
+// subquery-wrapped fleet aggregates used for period avg/peak.
+type resourceMetricExprs struct {
+	inner    string
 	avgExpr  string
 	peakExpr string
 }
 
-func resourceExprs(durStr string, deviceIDs []uint64) map[string]resourceExpr {
+func buildResourceExprs(durStr string, deviceIDs []uint64) map[string]resourceMetricExprs {
 	devSel := promDeviceIDSelector(deviceIDs)
 	devLabels := promDeviceIDLabels(deviceIDs)
 	cpu := `(100 * (1 - avg by (device_id) (rate(node_cpu_seconds_total{mode="idle"` + devSel + `}[5m]))))`
 	mem := `(100 * (1 - (sum by (device_id) (node_memory_MemAvailable_bytes{` + devLabels + `}) / sum by (device_id) (node_memory_MemTotal_bytes{` + devLabels + `}))))`
 	disk := `(100 - 100 * (sum by (device_id) (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"` + devSel + `}) / sum by (device_id) (node_filesystem_size_bytes{fstype!~"tmpfs|overlay"` + devSel + `})))`
-	mk := func(e string) resourceExpr {
-		return resourceExpr{
-			avgExpr:  "avg(avg_over_time(" + e + "[" + durStr + ":5m]))",
-			peakExpr: "max(max_over_time(" + e + "[" + durStr + ":5m]))",
+	mk := func(inner string) resourceMetricExprs {
+		return resourceMetricExprs{
+			inner:    inner,
+			avgExpr:  "avg(avg_over_time(" + inner + "[" + durStr + ":5m]))",
+			peakExpr: "max(max_over_time(" + inner + "[" + durStr + ":5m]))",
 		}
 	}
-	return map[string]resourceExpr{"cpu": mk(cpu), "mem": mk(mem), "disk": mk(disk)}
+	return map[string]resourceMetricExprs{
+		"cpu":  mk(cpu),
+		"mem":  mk(mem),
+		"disk": mk(disk),
+	}
 }
 
 func (c *FactsCollector) collectResource(ctx context.Context, p bizreport.Period, scope bizreport.Scope) bizreport.ResourceFacts {
+	start := time.Now()
 	var r bizreport.ResourceFacts
 	if c.prom == nil {
+		c.log.Warn("report resource skipped: prometheus client not configured")
 		return r
 	}
 	if scopedEmpty(scope) {
+		c.log.Warn("report resource skipped: system scope matched no devices",
+			slog.String("system_name", strings.TrimSpace(scope.SystemName)),
+		)
 		return r
 	}
 	deviceIDs := scopedDeviceIDs(scope)
-	// Subquery window = period length, capped at 30d so a long custom
-	// range doesn't ask Prometheus for an unbounded subquery.
 	dur := p.End.Sub(p.Start)
 	if dur <= 0 || dur > 30*24*time.Hour {
 		dur = 7 * 24 * time.Hour
 	}
 	durStr := strconv.FormatInt(int64(dur.Hours()), 10) + "h"
-	exprs := resourceExprs(durStr, deviceIDs)
+	exprs := buildResourceExprs(durStr, deviceIDs)
+
+	c.log.Info("report resource collect start",
+		slog.Time("period_start", p.Start),
+		slog.Time("period_end", p.End),
+		slog.String("subquery_window", durStr),
+		slog.Any("device_ids", deviceIDs),
+		slog.String("system_name", strings.TrimSpace(scope.SystemName)),
+	)
+
 	any := false
-	get := func(key string) (avg, peak float64, ok bool) {
-		e := exprs[key]
-		a, aok := c.scalarAt(ctx, e.avgExpr, p.End)
-		pk, pok := c.scalarAt(ctx, e.peakExpr, p.End)
-		return a, pk, aok || pok
+	collectMetric := func(key string, e resourceMetricExprs) {
+		a, aok := c.scalarAt(ctx, key, "avg_subquery", e.avgExpr, p.End)
+		pk, pok := c.scalarAt(ctx, key, "peak_subquery", e.peakExpr, p.End)
+		if !aok && !pok {
+			c.log.Warn("report resource subquery failed, trying query_range fallback",
+				slog.String("metric", key),
+				slog.String("inner_expr", truncateLogExpr(e.inner)),
+			)
+			ra, rp, rok := c.fleetAvgPeakFromRange(ctx, key, e.inner, p.Start, p.End)
+			if rok {
+				a, pk, aok, pok = ra, rp, true, true
+				c.log.Info("report resource query_range fallback ok",
+					slog.String("metric", key),
+					slog.Float64("avg", ra),
+					slog.Float64("peak", rp),
+				)
+			} else {
+				c.log.Warn("report resource query_range fallback failed",
+					slog.String("metric", key),
+					slog.String("inner_expr", truncateLogExpr(e.inner)),
+				)
+			}
+		}
+		if aok || pok {
+			any = true
+		}
+		switch key {
+		case "cpu":
+			if aok {
+				r.CPUAvg = a
+			}
+			if pok {
+				r.CPUPeak = pk
+			}
+		case "mem":
+			if aok {
+				r.MemAvg = a
+			}
+			if pok {
+				r.MemPeak = pk
+			}
+		case "disk":
+			if aok {
+				r.DiskAvg = a
+			}
+			if pok {
+				r.DiskPeak = pk
+			}
+		}
+		c.log.Info("report resource metric",
+			slog.String("metric", key),
+			slog.Bool("avg_ok", aok),
+			slog.Bool("peak_ok", pok),
+			slog.Float64("avg", a),
+			slog.Float64("peak", pk),
+		)
 	}
-	if a, pk, ok := get("cpu"); ok {
-		r.CPUAvg, r.CPUPeak, any = a, pk, true
-	}
-	if a, pk, ok := get("mem"); ok {
-		r.MemAvg, r.MemPeak, any = a, pk, true
-	}
-	if a, pk, ok := get("disk"); ok {
-		r.DiskAvg, r.DiskPeak, any = a, pk, true
+	for key, e := range exprs {
+		collectMetric(key, e)
 	}
 	r.Available = any
+	c.log.Info("report resource collect done",
+		slog.Bool("available", r.Available),
+		slog.Duration("duration", time.Since(start)),
+	)
 	return r
+}
+
+// fleetAvgPeakFromRange mirrors avg(avg_over_time(...)) / max(max_over_time(...))
+// by computing per-series avg/peak over the range matrix, then aggregating
+// across device_id series. Used when Prometheus subquery instant queries fail
+// (timeout / unsupported) while Monitor-style query_range still works.
+func (c *FactsCollector) fleetAvgPeakFromRange(ctx context.Context, metric, innerExpr string, start, end time.Time) (avg, peak float64, ok bool) {
+	step := 5 * time.Minute
+	c.log.Debug("report resource query_range",
+		slog.String("metric", metric),
+		slog.Time("start", start),
+		slog.Time("end", end),
+		slog.String("step", step.String()),
+		slog.String("expr", truncateLogExpr(innerExpr)),
+	)
+	res, err := c.prom.QueryRange(ctx, innerExpr, start, end, step)
+	if err != nil {
+		c.log.Warn("report resource query_range error",
+			slog.String("metric", metric),
+			slog.Any("err", err),
+			slog.String("expr", truncateLogExpr(innerExpr)),
+		)
+		return 0, 0, false
+	}
+	if res == nil {
+		c.log.Warn("report resource query_range nil result",
+			slog.String("metric", metric),
+		)
+		return 0, 0, false
+	}
+	if res.ResultType != "matrix" {
+		c.log.Warn("report resource query_range unexpected result type",
+			slog.String("metric", metric),
+			slog.String("result_type", res.ResultType),
+			slog.String("result_preview", truncateLogExpr(string(res.Result))),
+		)
+		return 0, 0, false
+	}
+	var series []struct {
+		Metric map[string]string   `json:"metric"`
+		Values [][]json.RawMessage `json:"values"`
+	}
+	if err := json.Unmarshal(res.Result, &series); err != nil {
+		c.log.Warn("report resource query_range decode failed",
+			slog.String("metric", metric),
+			slog.Any("err", err),
+		)
+		return 0, 0, false
+	}
+	if len(series) == 0 {
+		c.log.Warn("report resource query_range empty matrix",
+			slog.String("metric", metric),
+		)
+		return 0, 0, false
+	}
+	var deviceAvgs, devicePeaks []float64
+	for _, s := range series {
+		var sum float64
+		var count int
+		var maxV float64
+		for _, v := range s.Values {
+			f, parsed := decodePromSampleValue(v)
+			if !parsed {
+				continue
+			}
+			sum += f
+			count++
+			if count == 1 || f > maxV {
+				maxV = f
+			}
+		}
+		if count == 0 {
+			continue
+		}
+		deviceAvgs = append(deviceAvgs, sum/float64(count))
+		devicePeaks = append(devicePeaks, maxV)
+	}
+	if len(deviceAvgs) == 0 {
+		c.log.Warn("report resource query_range no parseable samples",
+			slog.String("metric", metric),
+			slog.Int("series", len(series)),
+		)
+		return 0, 0, false
+	}
+	var avgSum float64
+	for _, v := range deviceAvgs {
+		avgSum += v
+	}
+	fleetAvg := avgSum / float64(len(deviceAvgs))
+	fleetPeak := devicePeaks[0]
+	for _, v := range devicePeaks[1:] {
+		if v > fleetPeak {
+			fleetPeak = v
+		}
+	}
+	return fleetAvg, fleetPeak, true
+}
+
+func decodePromSampleValue(v []json.RawMessage) (float64, bool) {
+	if len(v) != 2 {
+		return 0, false
+	}
+	return parseQuotedFloat(v[1])
 }
 
 // scalarAt runs an instant query and extracts the single numeric value
 // from a scalar or single-element vector result. Returns ok=false on
 // error / empty / unparseable so the caller degrades gracefully.
-func (c *FactsCollector) scalarAt(ctx context.Context, expr string, ts time.Time) (float64, bool) {
+func (c *FactsCollector) scalarAt(ctx context.Context, metric, kind, expr string, ts time.Time) (float64, bool) {
+	c.log.Debug("report resource instant query",
+		slog.String("metric", metric),
+		slog.String("kind", kind),
+		slog.Time("at", ts),
+		slog.String("expr", truncateLogExpr(expr)),
+	)
 	res, err := c.prom.Query(ctx, expr, ts)
-	if err != nil || res == nil {
+	if err != nil {
+		c.log.Warn("report resource instant query error",
+			slog.String("metric", metric),
+			slog.String("kind", kind),
+			slog.Any("err", err),
+			slog.String("expr", truncateLogExpr(expr)),
+		)
+		return 0, false
+	}
+	if res == nil {
+		c.log.Warn("report resource instant query nil result",
+			slog.String("metric", metric),
+			slog.String("kind", kind),
+		)
 		return 0, false
 	}
 	switch res.ResultType {
 	case "scalar":
-		// [ <ts>, "<value>" ]
 		var pair []json.RawMessage
 		if json.Unmarshal(res.Result, &pair) == nil && len(pair) == 2 {
-			return parseQuotedFloat(pair[1])
+			if f, ok := parseQuotedFloat(pair[1]); ok {
+				return f, true
+			}
 		}
 	case "vector":
 		var vec []struct {
 			Value []json.RawMessage `json:"value"`
 		}
 		if json.Unmarshal(res.Result, &vec) == nil && len(vec) > 0 && len(vec[0].Value) == 2 {
-			return parseQuotedFloat(vec[0].Value[1])
+			if f, ok := parseQuotedFloat(vec[0].Value[1]); ok {
+				return f, true
+			}
+		}
+		if len(vec) == 0 {
+			c.log.Warn("report resource instant query empty vector",
+				slog.String("metric", metric),
+				slog.String("kind", kind),
+				slog.String("expr", truncateLogExpr(expr)),
+			)
+			return 0, false
 		}
 	}
+	c.log.Warn("report resource instant query unparseable",
+		slog.String("metric", metric),
+		slog.String("kind", kind),
+		slog.String("result_type", res.ResultType),
+		slog.String("result_preview", truncateLogExpr(string(res.Result))),
+	)
 	return 0, false
+}
+
+func truncateLogExpr(s string) string {
+	const max = 280
+	s = strings.TrimSpace(s)
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
 }
 
 func parseQuotedFloat(raw json.RawMessage) (float64, bool) {
