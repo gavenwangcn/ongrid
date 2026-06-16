@@ -126,7 +126,10 @@ export type LogErrorSource = {
   device_name?: string;
   kind: string;
   name: string;
+  display_name?: string;
+  ongrid_source?: string;
   count: number;
+  sample_line?: string;
 };
 
 export type LogFacts = {

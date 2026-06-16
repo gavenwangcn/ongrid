@@ -203,16 +203,59 @@ function ChangeRow({ c }: { c: ChangeFact }) {
 
 const LOG_KIND_ZH: Record<string, string> = { container: '容器', unit: 'Unit', file: '文件', other: '其他' };
 const LOG_KIND_EN: Record<string, string> = { container: 'Container', unit: 'Unit', file: 'File', other: 'Other' };
+const LOG_KIND_ORDER = ['container', 'unit', 'file', 'other'] as const;
+
+function groupLogSourcesByKind(sources: LogErrorSource[]): Map<string, LogErrorSource[]> {
+  const grouped = new Map<string, LogErrorSource[]>();
+  for (const s of sources) {
+    const list = grouped.get(s.kind) ?? [];
+    list.push(s);
+    grouped.set(s.kind, list);
+  }
+  return grouped;
+}
 
 function LogSourceRow({ s, tr }: { s: LogErrorSource; tr: (zh: string, en: string) => string }) {
-  const kind = tr(LOG_KIND_ZH[s.kind] ?? s.kind, LOG_KIND_EN[s.kind] ?? s.kind);
+  const title = s.display_name || s.name;
   const device = s.device_name || (s.device_id ? `#${s.device_id}` : '');
   return (
-    <div className="flex items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-sm">
-      <span className="shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-[11px] text-zinc-400">{kind}</span>
-      <span className="truncate font-medium text-zinc-200">{s.name}</span>
-      {device && <span className="truncate text-xs text-zinc-500">{device}</span>}
-      <span className="ml-auto shrink-0 tabular-nums text-rose-300">{s.count}</span>
+    <div className="rounded-md border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-sm">
+      <div className="flex items-center gap-2">
+        <span className="truncate font-medium text-zinc-200">{title}</span>
+        {s.ongrid_source && (
+          <span className="shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-500">{s.ongrid_source}</span>
+        )}
+        {device && <span className="truncate text-xs text-zinc-500">{device}</span>}
+        <span className="ml-auto shrink-0 tabular-nums text-rose-300">{s.count}</span>
+      </div>
+      {s.sample_line && (
+        <p className="mt-1 truncate text-xs text-zinc-500" title={s.sample_line}>
+          {tr('样例', 'Sample')}: {s.sample_line}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function LogSourcesGrouped({ sources, tr }: { sources: LogErrorSource[]; tr: (zh: string, en: string) => string }) {
+  const grouped = groupLogSourcesByKind(sources);
+  return (
+    <div className="mt-2 space-y-3">
+      {LOG_KIND_ORDER.map((kind) => {
+        const items = grouped.get(kind);
+        if (!items?.length) return null;
+        const kindLabel = tr(LOG_KIND_ZH[kind] ?? kind, LOG_KIND_EN[kind] ?? kind);
+        return (
+          <div key={kind}>
+            <div className="text-[11px] text-zinc-500">
+              {kindLabel} ({items.length})
+            </div>
+            <div className="mt-1 space-y-1.5">
+              {items.map((s, i) => <LogSourceRow key={`${kind}-${s.name}-${i}`} s={s} tr={tr} />)}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -304,9 +347,9 @@ export function ReportContentView({ content }: { content: ReportContentT }) {
             )}
           </div>
           {logs.top_sources && logs.top_sources.length > 0 && (
-            <div className="mt-2 space-y-1.5">
+            <div>
               <div className="text-[11px] text-zinc-500">{tr('错误来源 Top', 'Top error sources')}</div>
-              {logs.top_sources.map((s, i) => <LogSourceRow key={`${s.kind}-${s.name}-${i}`} s={s} tr={tr} />)}
+              <LogSourcesGrouped sources={logs.top_sources} tr={tr} />
             </div>
           )}
         </Row>

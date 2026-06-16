@@ -17,6 +17,12 @@ import (
 // logErrorLineFilter matches the Logs UI shortcut「潜在错误」.
 const logErrorLineFilter = "|~ \"(?i)(error|panic|fatal)\""
 
+// logTopPerKind caps top sources per kind so one noisy exporter cannot
+// fill the entire report list.
+const logTopPerKind = 3
+
+const logSampleLineMaxLen = 240
+
 // LogQuerier is the narrow Loki surface for report log facts.
 type LogQuerier interface {
 	QueryRange(ctx context.Context, opts logquery.QueryRangeOptions) (*logquery.QueryRangeResult, error)
@@ -48,21 +54,14 @@ func (c *FactsCollector) collectLogs(ctx context.Context, period, prev bizreport
 	if periodDur < time.Hour {
 		periodDur = time.Hour
 	}
-	bucket, window := logErrorAggWindow(periodDur)
+	countWindow := logErrorCountWindow(periodDur)
 
-	totalExpr := fmt.Sprintf(
-		`sum(sum_over_time(count_over_time(%s %s [%s])[%s:%s]))`,
-		selector, logErrorLineFilter, bucket, window, bucket,
-	)
+	totalExpr := logErrorCountExpr(selector, countWindow)
 	prevDur := prev.End.Sub(prev.Start)
 	if prevDur < time.Hour {
 		prevDur = time.Hour
 	}
-	prevBucket, prevWindow := logErrorAggWindow(prevDur)
-	prevExpr := fmt.Sprintf(
-		`sum(sum_over_time(count_over_time(%s %s [%s])[%s:%s]))`,
-		selector, logErrorLineFilter, prevBucket, prevWindow, prevBucket,
-	)
+	prevExpr := logErrorCountExpr(selector, logErrorCountWindow(prevDur))
 
 	start := time.Now()
 	total, err := c.lokiScalarAt(ctx, totalExpr, period.End)
@@ -78,23 +77,16 @@ func (c *FactsCollector) collectLogs(ctx context.Context, period, prev bizreport
 
 	sparkStep := logSparklineStep(periodDur)
 	sparkWindow := formatLogQLDuration(sparkStep)
-	sparkExpr := fmt.Sprintf(`sum(count_over_time(%s %s [%s]))`, selector, logErrorLineFilter, sparkWindow)
+	sparkExpr := logErrorCountExpr(selector, sparkWindow)
 	sparkline, serr := c.lokiSparkline(ctx, sparkExpr, period.Start, period.End, sparkStep)
 	if serr != nil {
 		c.log.Warn("report logs sparkline query failed", slog.Any("err", serr))
 	}
 
-	topExpr := fmt.Sprintf(
-		`topk(10, sum by (device_id, container, unit, ongrid_source) (sum_over_time(count_over_time(%s %s [1h])[%s:1h])))`,
-		selector, logErrorLineFilter, window,
-	)
-	topEntries, terr := c.lokiVectorAt(ctx, topExpr, period.End)
+	topSources, terr := c.collectLogTopSources(ctx, selector, countWindow, period)
 	if terr != nil {
 		c.log.Warn("report logs top sources query failed", slog.Any("err", terr))
 	}
-
-	nameByID := c.deviceNamesForLogEntries(ctx, topEntries)
-	topSources := buildLogTopSources(topEntries, nameByID)
 
 	out.Available = true
 	out.TotalErrors = int(total)
@@ -129,23 +121,65 @@ func joinDeviceIDs(ids []uint64) string {
 	return strings.Join(parts, "|")
 }
 
-func logErrorAggWindow(periodDur time.Duration) (bucket, window string) {
+func logErrorCountExpr(selector, window string) string {
+	return fmt.Sprintf(`sum(count_over_time(%s %s [%s]))`, selector, logErrorLineFilter, window)
+}
+
+func logErrorTopByKindExpr(selector, window string, topN int) string {
+	inner := fmt.Sprintf(
+		`sum by (device_id, container, unit, ongrid_source, service_name) (count_over_time(%s %s [%s]))`,
+		selector, logErrorLineFilter, window,
+	)
+	return fmt.Sprintf(`topk(%d, %s)`, topN, inner)
+}
+
+func logErrorKindSelector(baseSelector, kind string) string {
+	inner := strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(baseSelector), "{"), "}")
+	switch kind {
+	case "container":
+		return fmt.Sprintf("{%s,container=~\".+\"}", inner)
+	case "unit":
+		return fmt.Sprintf("{%s,unit=~\".+\",container!~\".+\"}", inner)
+	case "file":
+		return fmt.Sprintf("{%s,ongrid_source=~\"file:.*\"}", inner)
+	case "other":
+		// Streams with ongrid_source but no container/unit labels (e.g. legacy sources).
+		return fmt.Sprintf("{%s,ongrid_source=~\".+\",container!~\".+\",unit!~\".+\",ongrid_source!~\"file:.*\"}", inner)
+	default:
+		return baseSelector
+	}
+}
+
+func (c *FactsCollector) collectLogTopSources(ctx context.Context, baseSelector, window string, period bizreport.Period) ([]bizreport.LogErrorSource, error) {
+	kinds := []string{"container", "unit", "file", "other"}
+	var entries []lokiVectorEntry
+	for _, kind := range kinds {
+		sel := logErrorKindSelector(baseSelector, kind)
+		expr := logErrorTopByKindExpr(sel, window, logTopPerKind)
+		part, err := c.lokiVectorAt(ctx, expr, period.End)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, part...)
+	}
+	nameByID := c.deviceNamesForLogEntries(ctx, entries)
+	built := buildLogTopSources(entries, nameByID)
+	return c.enrichLogSourcesWithSamples(ctx, period, built), nil
+}
+
+// logErrorCountWindow is the lookback for a single count_over_time covering
+// the whole report period. Loki does not support Prom-style
+// sum_over_time(count_over_time(...)[range:step]) subqueries.
+func logErrorCountWindow(periodDur time.Duration) string {
 	periodDur = periodDur.Round(time.Hour)
 	if periodDur < time.Hour {
 		periodDur = time.Hour
 	}
-	switch {
-	case periodDur <= 48*time.Hour:
-		return "1h", formatLogQLDuration(periodDur)
-	case periodDur <= 8*24*time.Hour:
-		b := 6 * time.Hour
-		if periodDur%b != 0 {
-			b = time.Hour
-		}
-		return formatLogQLDuration(b), formatLogQLDuration(periodDur)
-	default:
-		return "24h", formatLogQLDuration(periodDur)
+	const max = 31 * 24 * time.Hour
+	if periodDur > max {
+		periodDur = max
 	}
+	return formatLogQLDuration(periodDur)
 }
 
 func logSparklineStep(periodDur time.Duration) time.Duration {
@@ -322,24 +356,40 @@ func buildLogTopSources(entries []lokiVectorEntry, nameByID map[uint64]string) [
 		if idStr := strings.TrimSpace(e.Labels["device_id"]); idStr != "" {
 			deviceID, _ = strconv.ParseUint(idStr, 10, 64)
 		}
+		ongridSource := strings.TrimSpace(e.Labels["ongrid_source"])
 		out = append(out, bizreport.LogErrorSource{
-			DeviceID:   deviceID,
-			DeviceName: nameByID[deviceID],
-			Kind:       kind,
-			Name:       name,
-			Count:      int(e.Value),
+			DeviceID:     deviceID,
+			DeviceName:   nameByID[deviceID],
+			Kind:         kind,
+			Name:         name,
+			DisplayName:  logSourceDisplayName(e.Labels, kind, name),
+			OngridSource: ongridSource,
+			Count:        int(e.Value),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {
+		if out[i].Kind != out[j].Kind {
+			return logSourceKindOrder(out[i].Kind) < logSourceKindOrder(out[j].Kind)
+		}
 		if out[i].Count != out[j].Count {
 			return out[i].Count > out[j].Count
 		}
 		return out[i].Name < out[j].Name
 	})
-	if len(out) > 10 {
-		out = out[:10]
-	}
 	return out
+}
+
+func logSourceKindOrder(kind string) int {
+	switch kind {
+	case "container":
+		return 0
+	case "unit":
+		return 1
+	case "file":
+		return 2
+	default:
+		return 3
+	}
 }
 
 func logSourceKindName(labels map[string]string) (kind, name string) {
@@ -356,6 +406,157 @@ func logSourceKindName(labels map[string]string) (kind, name string) {
 		return "other", src
 	}
 	return "other", "unknown"
+}
+
+func logSourceDisplayName(labels map[string]string, kind, canonical string) string {
+	svc := strings.TrimSpace(labels["service_name"])
+	if svc != "" && svc != "unknown_service" {
+		if short := shortenK8sLogName(svc); short != "" && short != canonical {
+			return short
+		}
+		if svc != canonical {
+			return svc
+		}
+	}
+	if kind == "container" {
+		if short := shortenK8sLogName(canonical); short != "" {
+			return short
+		}
+	}
+	return canonical
+}
+
+func shortenK8sLogName(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if strings.HasPrefix(s, "k8s_") {
+		parts := strings.SplitN(s, "_", 3)
+		if len(parts) >= 2 && parts[1] != "" {
+			return truncateLogSample(parts[1], 64)
+		}
+	}
+	if len(s) > 64 {
+		return s[:64] + "…"
+	}
+	return s
+}
+
+func (c *FactsCollector) enrichLogSourcesWithSamples(ctx context.Context, period bizreport.Period, sources []bizreport.LogErrorSource) []bizreport.LogErrorSource {
+	if len(sources) == 0 {
+		return sources
+	}
+	for i := range sources {
+		labels := logLabelsForSource(sources[i])
+		if len(labels) == 0 {
+			continue
+		}
+		line, err := c.lokiSampleLine(ctx, logStreamSelector(labels), period.Start, period.End)
+		if err != nil {
+			c.log.Warn("report logs sample query failed",
+				slog.Any("err", err),
+				slog.String("kind", sources[i].Kind),
+				slog.String("name", sources[i].Name),
+			)
+			continue
+		}
+		sources[i].SampleLine = line
+	}
+	return sources
+}
+
+func logLabelsForSource(s bizreport.LogErrorSource) map[string]string {
+	labels := make(map[string]string)
+	if s.DeviceID != 0 {
+		labels["device_id"] = strconv.FormatUint(s.DeviceID, 10)
+	}
+	switch s.Kind {
+	case "container":
+		labels["container"] = s.Name
+	case "unit":
+		labels["unit"] = s.Name
+	}
+	if src := strings.TrimSpace(s.OngridSource); src != "" {
+		labels["ongrid_source"] = src
+	} else if s.Kind == "file" {
+		labels["ongrid_source"] = "file:" + s.Name
+	}
+	return labels
+}
+
+func logStreamSelector(labels map[string]string) string {
+	var pairs []string
+	if id := strings.TrimSpace(labels["device_id"]); id != "" {
+		pairs = append(pairs, fmt.Sprintf("device_id=\"%s\"", escapeLogQLLabel(id)))
+	}
+	if c := strings.TrimSpace(labels["container"]); c != "" {
+		pairs = append(pairs, fmt.Sprintf("container=\"%s\"", escapeLogQLLabel(c)))
+	}
+	if u := strings.TrimSpace(labels["unit"]); u != "" {
+		pairs = append(pairs, fmt.Sprintf("unit=\"%s\"", escapeLogQLLabel(u)))
+	}
+	if src := strings.TrimSpace(labels["ongrid_source"]); src != "" {
+		pairs = append(pairs, fmt.Sprintf("ongrid_source=\"%s\"", escapeLogQLLabel(src)))
+	}
+	if len(pairs) == 0 {
+		return "{ongrid_source=~\".+\"}"
+	}
+	return "{" + strings.Join(pairs, ",") + "}"
+}
+
+func escapeLogQLLabel(s string) string {
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	return strings.ReplaceAll(s, "\"", "\\\"")
+}
+
+func (c *FactsCollector) lokiSampleLine(ctx context.Context, selector string, start, end time.Time) (string, error) {
+	res, err := c.loki.QueryRange(ctx, logquery.QueryRangeOptions{
+		Query:     selector + " " + logErrorLineFilter,
+		Start:     start,
+		End:       end,
+		Limit:     1,
+		Direction: "backward",
+	})
+	if err != nil {
+		return "", err
+	}
+	return decodeLokiFirstLine(res), nil
+}
+
+func decodeLokiFirstLine(res *logquery.QueryRangeResult) string {
+	if res == nil || res.ResultType != "streams" {
+		return ""
+	}
+	type stream struct {
+		Values [][]json.RawMessage `json:"values"`
+	}
+	var raw []stream
+	if err := json.Unmarshal(res.Result, &raw); err != nil || len(raw) == 0 {
+		return ""
+	}
+	for _, s := range raw {
+		if len(s.Values) == 0 {
+			continue
+		}
+		last := s.Values[0]
+		if len(last) < 2 {
+			continue
+		}
+		var line string
+		if err := json.Unmarshal(last[1], &line); err != nil {
+			continue
+		}
+		return truncateLogSample(strings.TrimSpace(line), logSampleLineMaxLen)
+	}
+	return ""
+}
+
+func truncateLogSample(s string, max int) string {
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
 }
 
 func (c *FactsCollector) deviceNamesForLogEntries(ctx context.Context, entries []lokiVectorEntry) map[uint64]string {

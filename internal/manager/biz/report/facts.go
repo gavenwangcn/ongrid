@@ -71,11 +71,14 @@ type LogFacts struct {
 
 // LogErrorSource is one high-volume error log stream in the period.
 type LogErrorSource struct {
-	DeviceID   uint64 `json:"device_id,omitempty"`
-	DeviceName string `json:"device_name,omitempty"`
-	Kind       string `json:"kind"` // container | unit | file | other
-	Name       string `json:"name"`
-	Count      int    `json:"count"`
+	DeviceID     uint64 `json:"device_id,omitempty"`
+	DeviceName   string `json:"device_name,omitempty"`
+	Kind         string `json:"kind"` // container | unit | file | other
+	Name         string `json:"name"`
+	DisplayName  string `json:"display_name,omitempty"`
+	OngridSource string `json:"ongrid_source,omitempty"`
+	Count        int    `json:"count"`
+	SampleLine   string `json:"sample_line,omitempty"`
 }
 
 // AssetFacts counts platform assets created within the period.

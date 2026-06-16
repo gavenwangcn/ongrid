@@ -215,12 +215,27 @@ func (c *Content) RenderMarkdown(title, locale string) string {
 		}
 		if len(c.Logs.TopSources) > 0 {
 			b.WriteString("- " + mtr("主要来源", "Top sources") + ":\n")
+			curKind := ""
 			for _, s := range c.Logs.TopSources {
-				name := s.Name
-				if s.DeviceName != "" {
-					name = s.DeviceName + "/" + name
+				if s.Kind != curKind {
+					curKind = s.Kind
+					b.WriteString(fmt.Sprintf("  [%s]\n", logSourceKindLabel(curKind, mtr)))
 				}
-				b.WriteString(fmt.Sprintf("  - %s: %d\n", name, s.Count))
+				label := s.DisplayName
+				if label == "" {
+					label = s.Name
+				}
+				if s.DeviceName != "" {
+					label = s.DeviceName + "/" + label
+				}
+				detail := fmt.Sprintf("%d", s.Count)
+				if s.OngridSource != "" {
+					detail += " · " + s.OngridSource
+				}
+				if s.SampleLine != "" {
+					detail += " · " + truncateReportSample(s.SampleLine, 120)
+				}
+				b.WriteString(fmt.Sprintf("  - %s: %s\n", label, detail))
 			}
 		}
 		b.WriteString("\n")
@@ -254,6 +269,26 @@ func (c *Content) RenderMarkdown(title, locale string) string {
 	}
 
 	return b.String()
+}
+
+func logSourceKindLabel(kind string, mtr func(zh, en string) string) string {
+	switch kind {
+	case "container":
+		return mtr("容器", "Container")
+	case "unit":
+		return mtr("Unit", "Unit")
+	case "file":
+		return mtr("文件", "File")
+	default:
+		return mtr("其他", "Other")
+	}
+}
+
+func truncateReportSample(s string, max int) string {
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
 }
 
 // formatNum prints an integer without trailing .0, else a 1-decimal.

@@ -32,7 +32,8 @@ max_turns: 12
 ReportFacts 里有这些数据供你叙事：
 - `resource`：CPU / 内存 / 磁盘的周期 **均值与峰值**（百分比）。`available=false` 时说明无监控数据，别编。
 - `logs`：Loki **潜在错误**统计（与 Logs 页「潜在错误」快捷查询一致：`error|panic|fatal`）。
-  `total_errors` / `daily_sparkline` / `top_sources`（按 container/unit/文件）已由 Facts 算好；
+  `total_errors` / `daily_sparkline` / `top_sources`（按 container/unit/文件/other 每类 Top 3；
+  含 `display_name`、`ongrid_source`、样例日志行）已由 Facts 算好；
   `available=false` 时说明 Loki 未接入或本 scope 无设备。scope 带 `system_name` 时仅统计该系统设备。
 - `fleet`：监控了几台设备、在线几台、角色分布。
 - `incidents` / `actions`：告警与 agent 处置（有才写，没有别强调）。
