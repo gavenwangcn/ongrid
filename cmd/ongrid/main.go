@@ -169,7 +169,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	log := logger.WithService(logger.New(slog.LevelInfo), "ongrid")
+	log := logger.WithService(logger.NewFromEnv(), "ongrid")
 	log.Info("configuration loaded",
 		slog.String("http_addr", cfg.HTTPAddr),
 		slog.String("metrics_addr", cfg.MetricsAddr),

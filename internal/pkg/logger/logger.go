@@ -8,6 +8,7 @@ package logger
 import (
 	"log/slog"
 	"os"
+	"strings"
 )
 
 // New returns a *slog.Logger that writes JSON lines to stderr at the given
@@ -17,6 +18,26 @@ func New(level slog.Level) *slog.Logger {
 		Level: level,
 	})
 	return slog.New(h)
+}
+
+// NewFromEnv returns a logger whose minimum level comes from ONGRID_LOG_LEVEL
+// (debug | info | warn | error). Empty or unknown values default to info.
+func NewFromEnv() *slog.Logger {
+	return New(ParseLevel(os.Getenv("ONGRID_LOG_LEVEL")))
+}
+
+// ParseLevel maps a string to slog.Level. Empty → info.
+func ParseLevel(s string) slog.Level {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }
 
 // WithService returns a logger decorated with a "service" attribute.

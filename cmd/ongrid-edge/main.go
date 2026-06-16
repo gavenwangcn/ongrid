@@ -76,7 +76,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	log := logger.WithService(logger.New(slog.LevelInfo), "ongrid-edge")
+	log := logger.WithService(logger.NewFromEnv(), "ongrid-edge")
 	log.Info("configuration loaded",
 		slog.String("cloud_addr", cfg.Edge.CloudAddr),
 		slog.String("collector_mode", cfg.Edge.CollectorMode),

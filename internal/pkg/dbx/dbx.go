@@ -36,7 +36,7 @@ import (
 
 // slogGormLogger implements gorm's logger.Interface on slog. SQL errors
 // surface at Warn; expected absent rows (ErrRecordNotFound) log at Debug
-// so optional system_settings lookups stay quiet unless LOG_LEVEL=debug.
+// so optional system_settings lookups stay quiet unless ONGRID_LOG_LEVEL=debug.
 type slogGormLogger struct {
 	log           *slog.Logger
 	level         logger.LogLevel
