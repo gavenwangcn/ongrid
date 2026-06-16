@@ -363,7 +363,7 @@ ADR-009 之后 Prometheus 升级为**核心服务**。默认随 `install.sh` / `
 1. **被动接收 manager remote_write**：edge 通过 `push_prom_samples` 把开集 series 推到 manager，manager 自动加 `edge_id` + `ongrid_source` label 后转发到 prometheus 的 remote_write 接收口（CLI flag `--web.enable-remote-write-receiver` 已开）。
 2. **服务 AI agent 的 `query_promql` 工具**：aiops tool registry 在 `cfg.Prom.Enabled=true` 时注册该工具，让 LLM 通过 `/api/v1/query_range` 跑任意 PromQL（30s 超时硬约束）。
 
-数据保留：默认 90 天 / 20GB cap，由 docker-compose 中的 `--storage.tsdb.retention.time=90d` 和 `--storage.tsdb.retention.size=20GB` flag 控制。要调整，编辑 `/opt/ongrid/docker-compose.yml` 后 `docker compose up -d` 重起 prometheus 服务。
+数据保留：默认 7 天 / 100GB cap，由 docker-compose 中的 `--storage.tsdb.retention.time=7d` 和 `--storage.tsdb.retention.size=100GB` flag 控制。要调整，编辑 `/opt/ongrid/docker-compose.yml` 后 `docker compose up -d` 重起 prometheus 服务。
 
 **关闭** AI PromQL 链路（保留容器但 manager 不转发）：
 
