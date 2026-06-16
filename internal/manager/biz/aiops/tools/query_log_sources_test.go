@@ -63,7 +63,7 @@ func (r *logSourcesDeviceRepo) UpdateRoles(context.Context, uint64, uint8) error
 func (r *logSourcesDeviceRepo) UpdateNameDescription(context.Context, uint64, string, string) error {
 	return errs.ErrNotWiredYet
 }
-func (r *logSourcesDeviceRepo) UpdateOperatorMeta(context.Context, uint64, string, string) error {
+func (r *logSourcesDeviceRepo) UpdateOperatorMeta(context.Context, uint64, string, string, string) error {
 	return errs.ErrNotWiredYet
 }
 func (r *logSourcesDeviceRepo) SetNodeID(context.Context, uint64, uint64) error { return errs.ErrNotWiredYet }

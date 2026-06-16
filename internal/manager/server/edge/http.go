@@ -43,7 +43,7 @@ type EdgeService interface {
 	List(ctx context.Context, f biz.ListFilter) ([]*model.Edge, error)
 	Get(ctx context.Context, id uint64) (*model.Edge, error)
 	Delete(ctx context.Context, id uint64) error
-	UpdateOperatorMeta(ctx context.Context, id uint64, systemName, deviceIP string) error
+	UpdateOperatorMeta(ctx context.Context, id uint64, systemName, deviceIP, environmentTag string) error
 	RotateSecret(ctx context.Context, id uint64) (string, error)
 	UpgradeAgent(ctx context.Context, edgeID uint64, url, sha256 string) (tunnel.AgentUpgradeResponse, error)
 	FetchPackage(ctx context.Context, edgeID uint64, url, sha256, version string) (tunnel.FetchPackageResponse, error)
@@ -323,9 +323,10 @@ func (h *Handler) requireAdmin(next http.Handler) http.Handler {
 // --------- DTOs ---------
 
 type createReq struct {
-	Name       string `json:"name"`
-	SystemName string `json:"system_name"`
-	DeviceIP   string `json:"device_ip"`
+	Name           string `json:"name"`
+	SystemName     string `json:"system_name"`
+	DeviceIP       string `json:"device_ip"`
+	EnvironmentTag string `json:"environment_tag"`
 }
 
 type createResp struct {
@@ -354,10 +355,11 @@ type listItem struct {
 	Status string `json:"status"`
 	// Roles is denormalised from the linked Device for legacy UI compat
 	// — empty array means 未分类 OR no host device linked yet.
-	Roles       []string   `json:"roles"`
-	SystemName  string     `json:"system_name,omitempty"`
-	DeviceIP    string     `json:"device_ip,omitempty"`
-	LastSeenAt  *time.Time `json:"last_seen_at"`
+	Roles          []string   `json:"roles"`
+	SystemName     string     `json:"system_name,omitempty"`
+	DeviceIP       string     `json:"device_ip,omitempty"`
+	EnvironmentTag string     `json:"environment_tag,omitempty"`
+	LastSeenAt     *time.Time `json:"last_seen_at"`
 	AccessKeyID string     `json:"access_key_id"`
 	// AgentVersion = self-reported on register_edge (optional). Empty
 	// for edges that registered with a pre-introduction binary.
@@ -372,13 +374,14 @@ type listResp struct {
 }
 
 type getResp struct {
-	ID           uint64       `json:"id"`
-	Name         string       `json:"name"`
-	Status       string       `json:"status"`
-	Roles        []string     `json:"roles"`
-	SystemName   string       `json:"system_name,omitempty"`
-	DeviceIP     string       `json:"device_ip,omitempty"`
-	AccessKeyID  string       `json:"access_key_id"`
+	ID             uint64       `json:"id"`
+	Name           string       `json:"name"`
+	Status         string       `json:"status"`
+	Roles          []string     `json:"roles"`
+	SystemName     string       `json:"system_name,omitempty"`
+	DeviceIP       string       `json:"device_ip,omitempty"`
+	EnvironmentTag string       `json:"environment_tag,omitempty"`
+	AccessKeyID    string       `json:"access_key_id"`
 	LastSeenAt   *time.Time   `json:"last_seen_at"`
 	CreatedAt    time.Time    `json:"created_at"`
 	UpdatedAt    time.Time    `json:"updated_at"`
@@ -388,8 +391,9 @@ type getResp struct {
 }
 
 type patchEdgeReq struct {
-	SystemName *string `json:"system_name,omitempty"`
-	DeviceIP   *string `json:"device_ip,omitempty"`
+	SystemName     *string `json:"system_name,omitempty"`
+	DeviceIP       *string `json:"device_ip,omitempty"`
+	EnvironmentTag *string `json:"environment_tag,omitempty"`
 }
 
 type rotateResp struct {
@@ -411,9 +415,10 @@ func (h *Handler) createEdge(w http.ResponseWriter, r *http.Request) {
 	}
 	uid := t.UserID
 	res, err := h.svc.Create(r.Context(), biz.CreateParams{
-		Name:       req.Name,
-		SystemName: req.SystemName,
-		DeviceIP:   req.DeviceIP,
+		Name:           req.Name,
+		SystemName:     req.SystemName,
+		DeviceIP:       req.DeviceIP,
+		EnvironmentTag: req.EnvironmentTag,
 	}, &uid)
 	if err != nil {
 		writeErr(w, err)
@@ -459,13 +464,14 @@ func (h *Handler) listEdges(w http.ResponseWriter, r *http.Request) {
 	for _, e := range edges {
 		dev := lookupDevice(devicesByID, e.DeviceID)
 		items = append(items, listItem{
-			ID:           e.ID,
-			Name:         e.Name,
-			Status:       e.Status,
-			Roles:        deviceRoles(dev),
-			SystemName:   deviceSystemName(dev, e),
-			DeviceIP:     deviceIP(dev, e),
-			LastSeenAt:   e.LastSeenAt,
+			ID:             e.ID,
+			Name:           e.Name,
+			Status:         e.Status,
+			Roles:          deviceRoles(dev),
+			SystemName:     deviceSystemName(dev, e),
+			DeviceIP:       deviceIP(dev, e),
+			EnvironmentTag: deviceEnvironmentTag(dev, e),
+			LastSeenAt:     e.LastSeenAt,
 			AccessKeyID:  e.AccessKeyID,
 			AgentVersion: e.AgentVersion,
 			DeviceID:     e.DeviceID,
@@ -492,13 +498,14 @@ func (h *Handler) getEdge(w http.ResponseWriter, r *http.Request) {
 	}
 	dev := h.loadDevice(r.Context(), e.DeviceID)
 	writeJSON(w, http.StatusOK, getResp{
-		ID:           e.ID,
-		Name:         e.Name,
-		Status:       e.Status,
-		Roles:        deviceRoles(dev),
-		SystemName:   deviceSystemName(dev, e),
-		DeviceIP:     deviceIP(dev, e),
-		AccessKeyID:  e.AccessKeyID,
+		ID:             e.ID,
+		Name:           e.Name,
+		Status:         e.Status,
+		Roles:          deviceRoles(dev),
+		SystemName:     deviceSystemName(dev, e),
+		DeviceIP:       deviceIP(dev, e),
+		EnvironmentTag: deviceEnvironmentTag(dev, e),
+		AccessKeyID:    e.AccessKeyID,
 		LastSeenAt:   e.LastSeenAt,
 		CreatedAt:    e.CreatedAt,
 		UpdatedAt:    e.UpdatedAt,
@@ -526,13 +533,17 @@ func (h *Handler) patchEdge(w http.ResponseWriter, r *http.Request) {
 	}
 	systemName := e.SystemName
 	deviceIPVal := e.DeviceIP
+	environmentTag := e.EnvironmentTag
 	if req.SystemName != nil {
 		systemName = *req.SystemName
 	}
 	if req.DeviceIP != nil {
 		deviceIPVal = *req.DeviceIP
 	}
-	if err := h.svc.UpdateOperatorMeta(r.Context(), id, systemName, deviceIPVal); err != nil {
+	if req.EnvironmentTag != nil {
+		environmentTag = *req.EnvironmentTag
+	}
+	if err := h.svc.UpdateOperatorMeta(r.Context(), id, systemName, deviceIPVal, environmentTag); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -845,6 +856,16 @@ func deviceIP(d *devicemodel.Device, e *model.Edge) string {
 	}
 	if e != nil {
 		return e.DeviceIP
+	}
+	return ""
+}
+
+func deviceEnvironmentTag(d *devicemodel.Device, e *model.Edge) string {
+	if d != nil && strings.TrimSpace(d.EnvironmentTag) != "" {
+		return d.EnvironmentTag
+	}
+	if e != nil {
+		return e.EnvironmentTag
 	}
 	return ""
 }

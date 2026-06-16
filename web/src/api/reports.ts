@@ -4,11 +4,14 @@ import { request } from './client';
 // + manual generate + schedule CRUD. Backend routes under /v1/reports
 // and /v1/report-schedules.
 
+import type { EnvironmentTag } from './environment';
+
 export type ReportStatus = 'pending' | 'generating' | 'ready' | 'failed';
 export type ReportKind = 'daily' | 'weekly' | 'monthly' | 'custom';
 
 export type ReportScope = {
   system_name?: string;
+  environment_tag?: EnvironmentTag | '';
 };
 
 export function parseReportScope(json?: string): ReportScope {
@@ -22,9 +25,13 @@ export function parseReportScope(json?: string): ReportScope {
 }
 
 export function formatReportScope(scope: ReportScope): string {
+  const out: ReportScope = {};
   const name = scope.system_name?.trim();
-  if (!name) return '{}';
-  return JSON.stringify({ system_name: name });
+  const env = scope.environment_tag?.trim();
+  if (name) out.system_name = name;
+  if (env) out.environment_tag = env as EnvironmentTag;
+  if (!out.system_name && !out.environment_tag) return '{}';
+  return JSON.stringify(out);
 }
 
 export function uniqueSystemNames(items: { system_name?: string }[]): string[] {

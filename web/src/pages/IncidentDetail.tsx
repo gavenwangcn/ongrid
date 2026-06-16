@@ -42,6 +42,7 @@ import {
   type InvestigationReport,
   type InvestigationStatus,
 } from '@/api/alerts';
+import { environmentTagLabel } from '@/api/environment';
 import {
   createSession,
   getMessages,
@@ -267,6 +268,15 @@ function Header({
                     <>
                       {tr('系统：', 'System: ')}
                       <span className="text-zinc-300">{incident.target_system_name}</span>
+                      {' · '}
+                    </>
+                  )}
+                  {incident.target_environment_tag && (
+                    <>
+                      {tr('环境：', 'Environment: ')}
+                      <span className="text-zinc-300">
+                        {environmentTagLabel(incident.target_environment_tag, tr)}
+                      </span>
                       {' · '}
                     </>
                   )}

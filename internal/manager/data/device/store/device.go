@@ -155,10 +155,11 @@ func (r *Repo) SetNodeID(ctx context.Context, id, nodeID uint64) error {
 }
 
 // UpdateOperatorMeta writes system_name / device_ip.
-func (r *Repo) UpdateOperatorMeta(ctx context.Context, id uint64, systemName, deviceIP string) error {
+func (r *Repo) UpdateOperatorMeta(ctx context.Context, id uint64, systemName, deviceIP, environmentTag string) error {
 	res := r.db.WithContext(ctx).Model(&model.Device{}).Where("id = ?", id).Updates(map[string]any{
-		"system_name": strings.TrimSpace(systemName),
-		"device_ip":   strings.TrimSpace(deviceIP),
+		"system_name":     strings.TrimSpace(systemName),
+		"device_ip":       strings.TrimSpace(deviceIP),
+		"environment_tag": strings.TrimSpace(environmentTag),
 	})
 	if res.Error != nil {
 		return res.Error

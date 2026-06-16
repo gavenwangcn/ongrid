@@ -37,6 +37,12 @@ import {
   type PromMatrixSeries,
 } from '@/api/edges';
 import {
+  ENVIRONMENT_TAGS,
+  ENVIRONMENT_TAG_LABELS,
+  ENVIRONMENT_TAG_LABELS_EN,
+  type EnvironmentTag,
+} from '@/api/environment';
+import {
   listEdgePlugins,
   setEdgePlugin,
   type PluginTargetHealth,
@@ -400,11 +406,12 @@ function EdgeMetaPanel({
   onSaved,
 }: {
   edge: Edge;
-  onSaved(patch: Pick<Edge, 'system_name' | 'device_ip'>): void;
+  onSaved(patch: Pick<Edge, 'system_name' | 'device_ip' | 'environment_tag'>): void;
 }) {
   const { tr } = useI18n();
   const [systemName, setSystemName] = useState(edge.system_name ?? '');
   const [deviceIP, setDeviceIP] = useState(edge.device_ip ?? '');
+  const [environmentTag, setEnvironmentTag] = useState<EnvironmentTag | ''>(edge.environment_tag ?? '');
   const [pending, setPending] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [ok, setOk] = useState(false);
@@ -412,7 +419,8 @@ function EdgeMetaPanel({
   useEffect(() => {
     setSystemName(edge.system_name ?? '');
     setDeviceIP(edge.device_ip ?? '');
-  }, [edge.id, edge.system_name, edge.device_ip]);
+    setEnvironmentTag(edge.environment_tag ?? '');
+  }, [edge.id, edge.system_name, edge.device_ip, edge.environment_tag]);
 
   async function save() {
     setPending(true);
@@ -422,8 +430,13 @@ function EdgeMetaPanel({
       await updateEdgeMeta(edge.id, {
         system_name: systemName.trim(),
         device_ip: deviceIP.trim(),
+        environment_tag: environmentTag,
       });
-      onSaved({ system_name: systemName.trim(), device_ip: deviceIP.trim() });
+      onSaved({
+        system_name: systemName.trim(),
+        device_ip: deviceIP.trim(),
+        environment_tag: environmentTag,
+      });
       setOk(true);
     } catch (e) {
       setErr((e as Error).message || tr('保存失败', 'Save failed'));
@@ -436,7 +449,10 @@ function EdgeMetaPanel({
     <div className="max-w-lg rounded-xl border border-zinc-800/60 bg-zinc-900/40 p-4">
       <h2 className="text-sm font-medium text-zinc-100">{tr('归属信息', 'Attribution')}</h2>
       <p className="mt-1 text-[11px] text-zinc-500">
-        {tr('系统名称与设备 IP 用于告警展示、AI 按系统维度巡检。', 'System name and IP feed alerts and system-scoped AI checks.')}
+        {tr(
+          '系统名称、环境标签与设备 IP 用于告警展示、报告范围筛选与 AI 按系统维度巡检。',
+          'System name, environment tag, and IP feed alerts, report scoping, and system-scoped AI checks.',
+        )}
       </p>
       <label className="mb-1 mt-4 block text-[11px] text-zinc-500">{tr('系统名称', 'System name')}</label>
       <input
@@ -444,6 +460,19 @@ function EdgeMetaPanel({
         onChange={(e) => setSystemName(e.target.value)}
         className="w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-100 focus:border-zinc-600 focus:outline-none"
       />
+      <label className="mb-1 mt-3 block text-[11px] text-zinc-500">{tr('环境标签', 'Environment tag')}</label>
+      <select
+        value={environmentTag}
+        onChange={(e) => setEnvironmentTag(e.target.value as EnvironmentTag | '')}
+        className="w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-100 focus:border-zinc-600 focus:outline-none"
+      >
+        <option value="">{tr('未设置', 'Unset')}</option>
+        {ENVIRONMENT_TAGS.map((tag) => (
+          <option key={tag} value={tag}>
+            {tr(ENVIRONMENT_TAG_LABELS[tag], ENVIRONMENT_TAG_LABELS_EN[tag])}
+          </option>
+        ))}
+      </select>
       <label className="mb-1 mt-3 block text-[11px] text-zinc-500">{tr('设备 IP', 'Device IP')}</label>
       <input
         value={deviceIP}

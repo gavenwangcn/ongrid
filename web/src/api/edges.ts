@@ -1,4 +1,5 @@
 import { request } from './client';
+import type { EnvironmentTag } from './environment';
 
 export type EdgeStatus = 'online' | 'offline' | 'unknown';
 
@@ -30,6 +31,7 @@ export type Edge = {
   status: EdgeStatus;
   system_name?: string;
   device_ip?: string;
+  environment_tag?: EnvironmentTag | '';
   // roles is always present (empty array == 未分类). Coding-wise prefer
   // checking includes() rather than .length so the intent reads cleanly.
   roles: EdgeRole[];
@@ -143,11 +145,19 @@ export function getEdge(id: string | number) {
   return request<Edge>('GET', `/edges/${encodeURIComponent(String(id))}`);
 }
 
-export function createEdge(input: { name: string; system_name?: string; device_ip?: string }) {
+export function createEdge(input: {
+  name: string;
+  system_name?: string;
+  device_ip?: string;
+  environment_tag?: EnvironmentTag | '';
+}) {
   return request<CreateEdgeResponse>('POST', '/edges', input);
 }
 
-export function updateEdgeMeta(id: string | number, input: { system_name?: string; device_ip?: string }) {
+export function updateEdgeMeta(
+  id: string | number,
+  input: { system_name?: string; device_ip?: string; environment_tag?: EnvironmentTag | '' },
+) {
   return request<void>('PATCH', `/edges/${encodeURIComponent(String(id))}`, input);
 }
 

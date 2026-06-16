@@ -43,8 +43,9 @@ type Incident struct {
 	TargetType     string            `json:"target_type"`
 	TargetID       string            `json:"target_id,omitempty"`
 	TargetName     string            `json:"target_name,omitempty"`
-	TargetSystemName string          `json:"target_system_name,omitempty"`
-	TargetDeviceIP   string          `json:"target_device_ip,omitempty"`
+	TargetSystemName     string            `json:"target_system_name,omitempty"`
+	TargetDeviceIP       string            `json:"target_device_ip,omitempty"`
+	TargetEnvironmentTag string            `json:"target_environment_tag,omitempty"`
 	RunbookURL     string            `json:"runbook_url,omitempty"`
 	DedupeKey      string            `json:"dedupe_key,omitempty"`
 	Labels         map[string]string `json:"labels,omitempty"`
@@ -862,6 +863,9 @@ func (s *Service) enrichIncidentTargets(ctx context.Context, items []*Incident) 
 		}
 		if strings.TrimSpace(d.SystemName) != "" {
 			inc.TargetSystemName = d.SystemName
+		}
+		if strings.TrimSpace(d.EnvironmentTag) != "" {
+			inc.TargetEnvironmentTag = d.EnvironmentTag
 		}
 		if strings.TrimSpace(d.DeviceIP) != "" {
 			inc.TargetDeviceIP = d.DeviceIP

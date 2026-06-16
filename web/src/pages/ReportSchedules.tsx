@@ -10,6 +10,13 @@ import { ApiError } from '@/api/client';
 import { listChannels, type Channel } from '@/api/alerts';
 import { listDevices } from '@/api/devices';
 import {
+  ENVIRONMENT_TAGS,
+  ENVIRONMENT_TAG_LABELS,
+  ENVIRONMENT_TAG_LABELS_EN,
+  environmentTagLabel,
+  type EnvironmentTag,
+} from '@/api/environment';
+import {
   createSchedule,
   deleteSchedule,
   formatReportScope,
@@ -159,10 +166,21 @@ export default function ReportSchedulesPage() {
                 <div className="mt-1 font-mono text-xs text-zinc-500">
                   {s.cron_spec} · {s.timezone}
                 </div>
-                {parseReportScope(s.scope_json).system_name && (
+                {(parseReportScope(s.scope_json).system_name || parseReportScope(s.scope_json).environment_tag) && (
                   <div className="mt-0.5 text-xs text-zinc-500">
-                    {tr('系统：', 'System: ')}
-                    {parseReportScope(s.scope_json).system_name}
+                    {parseReportScope(s.scope_json).system_name && (
+                      <>
+                        {tr('系统：', 'System: ')}
+                        {parseReportScope(s.scope_json).system_name}
+                      </>
+                    )}
+                    {parseReportScope(s.scope_json).system_name && parseReportScope(s.scope_json).environment_tag && ' · '}
+                    {parseReportScope(s.scope_json).environment_tag && (
+                      <>
+                        {tr('环境：', 'Environment: ')}
+                        {environmentTagLabel(parseReportScope(s.scope_json).environment_tag, tr)}
+                      </>
+                    )}
                   </div>
                 )}
                 {s.next_fire_at && (
@@ -249,6 +267,9 @@ function ScheduleForm({
   const [chanIDs, setChanIDs] = useState<number[]>(initial?.channel_ids ?? []);
   const [promptOverride, setPromptOverride] = useState(initial?.prompt_override ?? '');
   const [systemName, setSystemName] = useState(parseReportScope(initial?.scope_json).system_name ?? '');
+  const [environmentTag, setEnvironmentTag] = useState<EnvironmentTag | ''>(
+    parseReportScope(initial?.scope_json).environment_tag ?? '',
+  );
   const [systemNames, setSystemNames] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -274,7 +295,7 @@ function ScheduleForm({
       name,
       kind,
       timezone: tz,
-      scope_json: formatReportScope({ system_name: systemName }),
+      scope_json: formatReportScope({ system_name: systemName, environment_tag: environmentTag }),
       channel_ids: chanIDs,
       prompt_override: promptOverride || undefined,
       // For custom kind the cron is required; for presets it's optional
@@ -290,7 +311,7 @@ function ScheduleForm({
     } finally {
       setSaving(false);
     }
-  }, [name, kind, tz, cron, chanIDs, promptOverride, systemName, initial, onSaved, tr]);
+  }, [name, kind, tz, cron, chanIDs, promptOverride, systemName, environmentTag, initial, onSaved, tr]);
 
   return (
     <Modal
@@ -369,7 +390,7 @@ function ScheduleForm({
             onChange={(e) => setSystemName(e.target.value)}
             className={cn(inputCls, 'text-sm')}
           >
-            <option value="">{tr('全部设备', 'All devices')}</option>
+            <option value="">{tr('全部系统', 'All systems')}</option>
             {systemNames.map((name) => (
               <option key={name} value={name}>{name}</option>
             ))}
@@ -379,6 +400,21 @@ function ScheduleForm({
               {tr('未找到已填系统名称的设备。', 'No devices with a system name yet.')}
             </p>
           )}
+        </Field>
+
+        <Field label={tr('环境标签', 'Environment tag')}>
+          <select
+            value={environmentTag}
+            onChange={(e) => setEnvironmentTag(e.target.value as EnvironmentTag | '')}
+            className={cn(inputCls, 'text-sm')}
+          >
+            <option value="">{tr('全部环境', 'All environments')}</option>
+            {ENVIRONMENT_TAGS.map((tag) => (
+              <option key={tag} value={tag}>
+                {tr(ENVIRONMENT_TAG_LABELS[tag], ENVIRONMENT_TAG_LABELS_EN[tag])}
+              </option>
+            ))}
+          </select>
         </Field>
 
         <Field label={tr('投递渠道', 'Delivery channels')}>

@@ -705,11 +705,13 @@ func (c *FactsCollector) buildHero(p, prev bizreport.Period, scope bizreport.Sco
 // --- scope resolution (system_name → device ids) ---
 
 func (c *FactsCollector) resolveScope(ctx context.Context, scope bizreport.Scope) (bizreport.Scope, error) {
-	name := strings.TrimSpace(scope.SystemName)
-	if name == "" || len(scope.EdgeIDs) > 0 {
+	if len(scope.EdgeIDs) > 0 {
 		return scope, nil
 	}
-	ids, err := c.deviceIDsForSystem(ctx, name)
+	if !scopeHasDeviceFilter(scope) {
+		return scope, nil
+	}
+	ids, err := c.deviceIDsForScope(ctx, scope)
 	if err != nil {
 		return scope, err
 	}
@@ -717,17 +719,25 @@ func (c *FactsCollector) resolveScope(ctx context.Context, scope bizreport.Scope
 	return scope, nil
 }
 
-func (c *FactsCollector) deviceIDsForSystem(ctx context.Context, name string) ([]uint64, error) {
+func scopeHasDeviceFilter(scope bizreport.Scope) bool {
+	return strings.TrimSpace(scope.SystemName) != "" || strings.TrimSpace(scope.EnvironmentTag) != ""
+}
+
+func (c *FactsCollector) deviceIDsForScope(ctx context.Context, scope bizreport.Scope) ([]uint64, error) {
 	type idRow struct {
 		ID uint64
 	}
 	var rows []idRow
-	err := c.db.WithContext(ctx).Table("devices").
+	q := c.db.WithContext(ctx).Table("devices").
 		Select("id").
-		Where("deleted_at IS NULL").
-		Where("system_name = ?", name).
-		Find(&rows).Error
-	if err != nil {
+		Where("deleted_at IS NULL")
+	if name := strings.TrimSpace(scope.SystemName); name != "" {
+		q = q.Where("system_name = ?", name)
+	}
+	if env := strings.TrimSpace(scope.EnvironmentTag); env != "" {
+		q = q.Where("environment_tag = ?", env)
+	}
+	if err := q.Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	out := make([]uint64, 0, len(rows))
@@ -742,7 +752,7 @@ func scopedDeviceIDs(scope bizreport.Scope) []uint64 {
 }
 
 func scopedEmpty(scope bizreport.Scope) bool {
-	return strings.TrimSpace(scope.SystemName) != "" && len(scope.EdgeIDs) == 0
+	return scopeHasDeviceFilter(scope) && len(scope.EdgeIDs) == 0
 }
 
 func promDeviceIDSelector(ids []uint64) string {

@@ -139,13 +139,14 @@ type ChangeFact struct {
 }
 
 // Scope is the parsed ReportSchedule.ScopeJSON. v1 honours EdgeIDs,
-// SystemName, and SeverityMin; FleetTags is parsed but a no-op until
+// SystemName, EnvironmentTag, and SeverityMin; FleetTags is parsed but a no-op until
 // G.2.6 edge tags.
 type Scope struct {
-	FleetTags   []string `json:"fleet_tags,omitempty"`
-	EdgeIDs     []uint64 `json:"edge_ids,omitempty"`
-	SystemName  string   `json:"system_name,omitempty"`
-	SeverityMin string   `json:"severity_min,omitempty"`
+	FleetTags      []string `json:"fleet_tags,omitempty"`
+	EdgeIDs        []uint64 `json:"edge_ids,omitempty"`
+	SystemName     string   `json:"system_name,omitempty"`
+	EnvironmentTag string   `json:"environment_tag,omitempty"`
+	SeverityMin    string   `json:"severity_min,omitempty"`
 }
 
 // ParseScope reads a ScopeJSON blob. Empty / "{}" / invalid → zero

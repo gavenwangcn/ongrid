@@ -1,4 +1,5 @@
 import { request } from './client';
+import type { EnvironmentTag } from './environment';
 
 export type DeviceRole = 'host' | 'discovered';
 
@@ -9,6 +10,7 @@ export type Device = {
   description?: string;
   system_name?: string;
   device_ip?: string;
+  environment_tag?: EnvironmentTag | '';
   roles?: string[];
   scope: DeviceRole;
   online?: boolean;
@@ -30,7 +32,13 @@ export function getDevice(id: string | number) {
 
 export function updateDevice(
   id: string | number,
-  input: { name?: string; description?: string; system_name?: string; device_ip?: string },
+  input: {
+    name?: string;
+    description?: string;
+    system_name?: string;
+    device_ip?: string;
+    environment_tag?: EnvironmentTag | '';
+  },
 ) {
   return request<void>('PATCH', `/devices/${encodeURIComponent(String(id))}`, input);
 }

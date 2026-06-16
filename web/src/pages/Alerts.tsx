@@ -14,6 +14,7 @@ import {
   type IncidentSeverity,
   type IncidentStatus,
 } from '@/api/alerts';
+import { environmentTagLabel } from '@/api/environment';
 import { ApiError } from '@/api/client';
 import { useIncidentBadge } from '@/store/incidentBadge';
 import { usePermissions } from '@/store/me';
@@ -178,6 +179,7 @@ export default function AlertsPage() {
                   <th className="px-4 py-2 font-medium">{tr('规则', 'Rule')}</th>
                   <th className="px-4 py-2 font-medium">{tr('摘要', 'Summary')}</th>
                   <th className="px-4 py-2 font-medium">{tr('系统', 'System')}</th>
+                  <th className="px-4 py-2 font-medium">{tr('环境', 'Environment')}</th>
                   <th className="px-4 py-2 font-medium">{tr('目标', 'Target')}</th>
                   <th className="px-4 py-2 font-medium">{tr('状态', 'Status')}</th>
                   <th className="px-4 py-2 font-medium">{tr('触发', 'Fired')}</th>
@@ -307,6 +309,9 @@ function IncidentRow({
       </td>
       <td className="whitespace-nowrap px-4 py-2.5 text-zinc-400">
         {incidentSystemName(incident) || '—'}
+      </td>
+      <td className="whitespace-nowrap px-4 py-2.5 text-zinc-400">
+        {environmentTagLabel(incident.target_environment_tag, tr)}
       </td>
       <td className="whitespace-nowrap px-4 py-2.5 text-zinc-400">
         {incidentTargetLabel(incident, tr)}

@@ -15,9 +15,10 @@ import {
 import { queryLogsRange, listLogLabels, listLogLabelValues, type LokiStream } from '@/api/logs';
 import { ApiError } from '@/api/client';
 import { listEdges, type Edge, type EdgeRole } from '@/api/edges';
+import { matchesEnvironmentFilter, type EnvironmentFilterValue } from '@/api/environment';
 import { onDevicesChanged } from '@/lib/events';
 import { Link } from 'react-router-dom';
-import { RoleSelect } from '@/components/ui';
+import { EnvironmentSelect, RoleSelect } from '@/components/ui';
 import { NLQueryHelper } from '@/components/NLQueryHelper';
 import { useObservability } from '@/store/observability';
 import { openObservabilityUrl, buildExploreUrl } from '@/lib/drilldown';
@@ -282,6 +283,7 @@ export default function LogsPage() {
   // input doesn't disagree with what the user typed when no edge match.
   const [deviceInput, setDeviceInput] = useState('');
   const [systemFilter, setSystemFilter] = useState('');
+  const [environmentFilter, setEnvironmentFilter] = useState<EnvironmentFilterValue>('');
   const [roleFilter, setRoleFilter] = useState<'' | EdgeRole>('');
   const [sourceFilterKey, setSourceFilterKey] = useState('');
   const [sourceKinds, setSourceKinds] = useState<Record<SourceKind, boolean>>({
@@ -327,9 +329,10 @@ export default function LogsPage() {
     // and roleFilter — explicit device pick is the narrowest scope.
     if (deviceFilter) {
       out.push(facetForDeviceIDs(logLabelIDsForDevice(edges, deviceFilter)));
-    } else if (systemFilter || roleFilter) {
+    } else if (systemFilter || environmentFilter || roleFilter) {
       const ids = logLabelIDsFromEdges(edges, (e) => {
         if (systemFilter && e.system_name?.trim() !== systemFilter) return false;
+        if (!matchesEnvironmentFilter(e.environment_tag, environmentFilter)) return false;
         if (
           roleFilter &&
           !(Array.isArray(e.roles) && (e.roles as string[]).includes(roleFilter))
@@ -345,7 +348,7 @@ export default function LogsPage() {
       if (parsed) out.push(parsed.facet);
     }
     return out;
-  }, [deviceFilter, systemFilter, roleFilter, sourceFilterKey, edges]);
+  }, [deviceFilter, systemFilter, environmentFilter, roleFilter, sourceFilterKey, edges]);
 
   const systemNames = useMemo(() => {
     const set = new Set<string>();
@@ -361,13 +364,16 @@ export default function LogsPage() {
     if (systemFilter) {
       list = list.filter((d) => d.system_name?.trim() === systemFilter);
     }
+    if (environmentFilter) {
+      list = list.filter((d) => matchesEnvironmentFilter(d.environment_tag, environmentFilter));
+    }
     if (roleFilter) {
       list = list.filter(
         (d) => Array.isArray(d.roles) && (d.roles as string[]).includes(roleFilter),
       );
     }
     return list;
-  }, [edges, systemFilter, roleFilter]);
+  }, [edges, systemFilter, environmentFilter, roleFilter]);
 
   const effectiveQuery = useMemo(
     () => buildEffectiveQuery(committedQuery, topbarFacets, include, exclude),
@@ -473,6 +479,7 @@ export default function LogsPage() {
     committedQuery,
     deviceFilter,
     systemFilter,
+    environmentFilter,
     roleFilter,
     sourceFilterKey,
     include,
@@ -780,9 +787,12 @@ export default function LogsPage() {
               onChange={(e) => {
                 const v = e.target.value;
                 setSystemFilter(v);
-                if (deviceFilter && v) {
+                if (deviceFilter && (v || environmentFilter)) {
                   const stillValid = edges.some(
-                    (d) => String(d.device_id) === deviceFilter && d.system_name?.trim() === v,
+                    (d) =>
+                      String(d.device_id) === deviceFilter &&
+                      (!v || d.system_name?.trim() === v) &&
+                      matchesEnvironmentFilter(d.environment_tag, environmentFilter),
                   );
                   if (!stillValid) {
                     setDeviceFilter('');
@@ -798,6 +808,26 @@ export default function LogsPage() {
               ))}
             </select>
           </label>
+          <EnvironmentSelect
+            variant="block"
+            className="w-36 shrink-0"
+            value={environmentFilter}
+            onChange={(v) => {
+              setEnvironmentFilter(v);
+              if (deviceFilter && v) {
+                const stillValid = edges.some(
+                  (d) =>
+                    String(d.device_id) === deviceFilter &&
+                    matchesEnvironmentFilter(d.environment_tag, v) &&
+                    (!systemFilter || d.system_name?.trim() === systemFilter),
+                );
+                if (!stillValid) {
+                  setDeviceFilter('');
+                  setDeviceInput('');
+                }
+              }
+            }}
+          />
           {/* Device — native <select> so it visually reads as a dropdown.
               The free-form 'paste a device_id' case (rare) is preserved
               via the ?device= URL param + the deviceInput state that
@@ -926,6 +956,7 @@ export default function LogsPage() {
                 context={{
                   range,
                   system_name: systemFilter || undefined,
+                  environment_tag: environmentFilter || undefined,
                   device_id: deviceFilter || undefined,
                   role: roleFilter || undefined,
                 }}
@@ -1154,21 +1185,22 @@ export default function LogsPage() {
                       {tr('清空 LogQL', 'Clear LogQL')}
                     </button>
                   )}
-                  {(deviceFilter || systemFilter || roleFilter || sourceFilterKey) && (
+                  {(deviceFilter || systemFilter || environmentFilter || roleFilter || sourceFilterKey) && (
                     <button
                       type="button"
                       onClick={() => {
                         setDeviceFilter('');
                         setDeviceInput('');
                         setSystemFilter('');
+                        setEnvironmentFilter('');
                         setRoleFilter('');
                         setSourceFilterKey('');
                       }}
                       className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-[11px] text-zinc-300 hover:bg-zinc-800"
                     >
                       {tr(
-                        '清除筛选（系统 / 设备 / 角色 / 来源）',
-                        'Clear filters (system / device / role / source)',
+                        '清除筛选（系统 / 环境 / 设备 / 角色 / 来源）',
+                        'Clear filters (system / environment / device / role / source)',
                       )}
                     </button>
                   )}

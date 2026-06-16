@@ -50,6 +50,10 @@ type Device struct {
 	// DeviceIP is the operator-assigned management / service IP for this
 	// host. May differ from scrape addresses or reported hostname.
 	DeviceIP string `gorm:"size:64;not null;default:'';column:device_ip"`
+	// EnvironmentTag is the operator-assigned deployment environment
+	// (dev / test / prod). Used with SystemName for report scoping and
+	// fleet grouping.
+	EnvironmentTag string `gorm:"size:16;not null;default:'';index:idx_devices_environment_tag;column:environment_tag"`
 
 	Hostname      string `gorm:"size:255;not null"`
 	OS            string `gorm:"size:64;not null"`
@@ -103,6 +107,24 @@ type Device struct {
 
 // TableName pins the table.
 func (Device) TableName() string { return "devices" }
+
+// Environment tag constants. Wire / UI uses these values; empty means unset.
+const (
+	EnvDev  = "dev"
+	EnvTest = "test"
+	EnvProd = "prod"
+)
+
+// IsValidEnvironmentTag reports whether s is a recognized environment tag.
+// Empty string is valid (unset).
+func IsValidEnvironmentTag(s string) bool {
+	switch s {
+	case "", EnvDev, EnvTest, EnvProd:
+		return true
+	default:
+		return false
+	}
+}
 
 // Role bit constants. Aligned with the sidebar 设备 sub-menu; AI prompt
 // routing in aiops uses these values verbatim. Storage layout: 1 byte,

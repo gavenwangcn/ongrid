@@ -156,14 +156,14 @@ func (d *fakeDeviceRepo) UpdateNameDescription(_ context.Context, id uint64, nam
 	return nil
 }
 
-func (d *fakeDeviceRepo) UpdateOperatorMeta(_ context.Context, id uint64, systemName, deviceIP string) error {
+func (d *fakeDeviceRepo) UpdateOperatorMeta(_ context.Context, id uint64, systemName, deviceIP, environmentTag string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	dev, ok := d.byID[id]
 	if !ok {
 		return errs.ErrNotFound
 	}
-	dev.SystemName, dev.DeviceIP = systemName, deviceIP
+	dev.SystemName, dev.DeviceIP, dev.EnvironmentTag = systemName, deviceIP, environmentTag
 	return nil
 }
 
@@ -416,14 +416,14 @@ func (r *fakeRepo) UpdateName(_ context.Context, id uint64, name string) error {
 	return nil
 }
 
-func (r *fakeRepo) UpdateOperatorMeta(_ context.Context, id uint64, systemName, deviceIP string) error {
+func (r *fakeRepo) UpdateOperatorMeta(_ context.Context, id uint64, systemName, deviceIP, environmentTag string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	e, ok := r.byID[id]
 	if !ok || e.DeletedAt.Valid {
 		return errs.ErrNotFound
 	}
-	e.SystemName, e.DeviceIP = systemName, deviceIP
+	e.SystemName, e.DeviceIP, e.EnvironmentTag = systemName, deviceIP, environmentTag
 	return nil
 }
 

@@ -21,7 +21,8 @@ import { useObservability } from '@/store/observability';
 import { listEdges, type Edge, type EdgeRole } from '@/api/edges';
 import { onDevicesChanged } from '@/lib/events';
 import { injectDeviceIDFilter } from '@/lib/promql';
-import { RoleSelect, type RoleFilterValue } from '@/components/ui';
+import { environmentTagLabel, matchesEnvironmentFilter, type EnvironmentFilterValue } from '@/api/environment';
+import { RoleSelect, EnvironmentSelect, type RoleFilterValue } from '@/components/ui';
 import { useI18n, tr } from '@/i18n/locale';
 
 // Monitor renders the nine core fleet panels natively — no iframe, no
@@ -279,6 +280,7 @@ export default function MonitorPage() {
   const range = searchParams.get('range') || DEFAULT_RANGE;
   const roleFilter = (searchParams.get('role') || '') as RoleFilterValue;
   const systemFilter = searchParams.get('system') || '';
+  const environmentFilter = (searchParams.get('environment') || '') as EnvironmentFilterValue;
   // device filter overrides role/system aggregation when set — drill
   // from "all servers in system X" down to one host without losing system
   // context in the URL.
@@ -344,10 +346,11 @@ export default function MonitorPage() {
       const n = Number(deviceFilter);
       return Number.isFinite(n) ? [n] : [];
     }
-    if (!systemFilter && !roleFilter) return null;
+    if (!systemFilter && !roleFilter && !environmentFilter) return null;
     const matched = edges.filter((e) => {
       if (typeof e.device_id !== 'number') return false;
       if (systemFilter && e.system_name?.trim() !== systemFilter) return false;
+      if (!matchesEnvironmentFilter(e.environment_tag, environmentFilter)) return false;
       if (roleFilter === 'unknown') return !e.roles || e.roles.length === 0;
       if (roleFilter) {
         return Array.isArray(e.roles) && (e.roles as EdgeRole[]).includes(roleFilter as EdgeRole);
@@ -355,7 +358,7 @@ export default function MonitorPage() {
       return true;
     });
     return matched.map((e) => e.device_id as number);
-  }, [edges, roleFilter, deviceFilter, systemFilter]);
+  }, [edges, roleFilter, deviceFilter, systemFilter, environmentFilter]);
 
   const systemNames = useMemo(() => {
     const set = new Set<string>();
@@ -371,6 +374,9 @@ export default function MonitorPage() {
     if (systemFilter) {
       list = list.filter((e) => e.system_name?.trim() === systemFilter);
     }
+    if (environmentFilter) {
+      list = list.filter((e) => matchesEnvironmentFilter(e.environment_tag, environmentFilter));
+    }
     if (roleFilter === 'unknown') {
       list = list.filter((e) => !e.roles || e.roles.length === 0);
     } else if (roleFilter) {
@@ -379,7 +385,7 @@ export default function MonitorPage() {
       );
     }
     return list;
-  }, [edges, systemFilter, roleFilter]);
+  }, [edges, systemFilter, environmentFilter, roleFilter]);
 
   const panels = useMemo<GrafanaPanel[]>(() => {
     const base = buildMonitorPanels();
@@ -580,9 +586,28 @@ export default function MonitorPage() {
             ]}
             onChange={(v) => {
               const patch: Record<string, string> = { system: v };
+              if (deviceFilter && (v || environmentFilter)) {
+                const stillValid = edges.some(
+                  (e) =>
+                    String(e.device_id) === deviceFilter &&
+                    (!v || e.system_name?.trim() === v) &&
+                    matchesEnvironmentFilter(e.environment_tag, environmentFilter),
+                );
+                if (!stillValid) patch.device = '';
+              }
+              updateParams(patch);
+            }}
+          />
+          <EnvironmentSelect
+            value={environmentFilter}
+            onChange={(v) => {
+              const patch: Record<string, string> = { environment: v };
               if (deviceFilter && v) {
                 const stillValid = edges.some(
-                  (e) => String(e.device_id) === deviceFilter && e.system_name?.trim() === v,
+                  (e) =>
+                    String(e.device_id) === deviceFilter &&
+                    matchesEnvironmentFilter(e.environment_tag, v) &&
+                    (!systemFilter || e.system_name?.trim() === systemFilter),
                 );
                 if (!stillValid) patch.device = '';
               }
@@ -601,18 +626,28 @@ export default function MonitorPage() {
             ]}
             onChange={(v) => updateParams({ device: v, role: '' })}
           />
-          {(roleFilter || systemFilter || deviceFilter) && filteredDeviceIDs !== null && (
+          {(roleFilter || systemFilter || environmentFilter || deviceFilter) && filteredDeviceIDs !== null && (
             <span className="text-[11px] text-zinc-500">
               {filteredDeviceIDs.length === 0
                 ? tr('无匹配设备', 'No matching device')
                 : deviceFilter
                   ? tr(`单设备视图 (#${deviceFilter})`, `Single device view (#${deviceFilter})`)
-                  : systemFilter
+                  : systemFilter && environmentFilter
                     ? tr(
-                        `系统「${systemFilter}」· ${filteredDeviceIDs.length} 台`,
-                        `System “${systemFilter}” · ${filteredDeviceIDs.length} device(s)`,
+                        `系统「${systemFilter}」· ${environmentTagLabel(environmentFilter, tr)} · ${filteredDeviceIDs.length} 台`,
+                        `System “${systemFilter}” · ${environmentTagLabel(environmentFilter, tr)} · ${filteredDeviceIDs.length} device(s)`,
                       )
-                    : tr(`匹配 ${filteredDeviceIDs.length} 台`, `${filteredDeviceIDs.length} device(s) matched`)}
+                    : systemFilter
+                      ? tr(
+                          `系统「${systemFilter}」· ${filteredDeviceIDs.length} 台`,
+                          `System “${systemFilter}” · ${filteredDeviceIDs.length} device(s)`,
+                        )
+                      : environmentFilter
+                        ? tr(
+                            `环境「${environmentTagLabel(environmentFilter, tr)}」· ${filteredDeviceIDs.length} 台`,
+                            `Environment “${environmentTagLabel(environmentFilter, tr)}” · ${filteredDeviceIDs.length} device(s)`,
+                          )
+                        : tr(`匹配 ${filteredDeviceIDs.length} 台`, `${filteredDeviceIDs.length} device(s) matched`)}
             </span>
           )}
         </div>

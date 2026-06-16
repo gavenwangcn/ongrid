@@ -10,6 +10,12 @@ import { useI18n } from '@/i18n/locale';
 import { ApiError } from '@/api/client';
 import { listDevices } from '@/api/devices';
 import {
+  ENVIRONMENT_TAGS,
+  ENVIRONMENT_TAG_LABELS,
+  ENVIRONMENT_TAG_LABELS_EN,
+  type EnvironmentTag,
+} from '@/api/environment';
+import {
   formatReportScope,
   generateNow,
   listReports,
@@ -143,13 +149,16 @@ export default function ReportsPage() {
   }, [generateOpen]);
 
   const onGenerate = useCallback(
-    async (kind: ReportKind, systemName: string) => {
+    async (kind: ReportKind, systemName: string, environmentTag: EnvironmentTag | '') => {
       setGenerating(true);
       setErr(null);
       try {
         const rpt = await generateNow({
           kind,
-          scope_json: formatReportScope({ system_name: systemName }),
+          scope_json: formatReportScope({
+            system_name: systemName,
+            environment_tag: environmentTag,
+          }),
         });
         setGenerateOpen(false);
         await load();
@@ -312,7 +321,7 @@ export default function ReportsPage() {
           systemNames={systemNames}
           generating={generating}
           onClose={() => setGenerateOpen(false)}
-          onGenerate={(kind, systemName) => void onGenerate(kind, systemName)}
+          onGenerate={(kind, systemName, environmentTag) => void onGenerate(kind, systemName, environmentTag)}
           tr={tr}
         />
       )}
@@ -330,11 +339,12 @@ function GenerateReportModal({
   systemNames: string[];
   generating: boolean;
   onClose(): void;
-  onGenerate(kind: ReportKind, systemName: string): void;
+  onGenerate(kind: ReportKind, systemName: string, environmentTag: EnvironmentTag | ''): void;
   tr: (zh: string, en: string) => string;
 }) {
   const [kind, setKind] = useState<ReportKind>('weekly');
   const [systemName, setSystemName] = useState('');
+  const [environmentTag, setEnvironmentTag] = useState<EnvironmentTag | ''>('');
   const hint = GENERATE_KIND_HINT[kind];
   const action = GENERATE_KIND_ACTION[kind];
 
@@ -355,7 +365,7 @@ function GenerateReportModal({
           </button>
           <button
             type="button"
-            onClick={() => onGenerate(kind, systemName)}
+            onClick={() => onGenerate(kind, systemName, environmentTag)}
             disabled={generating}
             className="rounded-md border border-indigo-600 bg-indigo-600/20 px-3 py-1.5 text-xs text-indigo-200 hover:bg-indigo-600/30 disabled:opacity-50"
           >
@@ -387,7 +397,7 @@ function GenerateReportModal({
         </div>
         <p className="text-xs text-zinc-500">
           {tr(hint.zh, hint.en)}
-          {tr(' 可选择仅统计某一系统下的设备。', ' Optionally narrow to one system.')}
+          {tr(' 可选择系统与环境标签，仅统计匹配的设备。', ' Optionally narrow by system and environment tag.')}
         </p>
         <label className="block text-xs text-zinc-400">
           {tr('系统范围', 'System scope')}
@@ -396,9 +406,24 @@ function GenerateReportModal({
             onChange={(e) => setSystemName(e.target.value)}
             className="mt-1.5 w-full rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-2 text-sm text-zinc-100"
           >
-            <option value="">{tr('全部设备', 'All devices')}</option>
+            <option value="">{tr('全部系统', 'All systems')}</option>
             {systemNames.map((name) => (
               <option key={name} value={name}>{name}</option>
+            ))}
+          </select>
+        </label>
+        <label className="block text-xs text-zinc-400">
+          {tr('环境标签', 'Environment tag')}
+          <select
+            value={environmentTag}
+            onChange={(e) => setEnvironmentTag(e.target.value as EnvironmentTag | '')}
+            className="mt-1.5 w-full rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-2 text-sm text-zinc-100"
+          >
+            <option value="">{tr('全部环境', 'All environments')}</option>
+            {ENVIRONMENT_TAGS.map((tag) => (
+              <option key={tag} value={tag}>
+                {tr(ENVIRONMENT_TAG_LABELS[tag], ENVIRONMENT_TAG_LABELS_EN[tag])}
+              </option>
             ))}
           </select>
         </label>

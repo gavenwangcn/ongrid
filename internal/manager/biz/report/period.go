@@ -100,12 +100,33 @@ func TitleFor(kind string, p Period, locale string) string {
 	}
 }
 
-// TitleWithScope appends a system label when scope_json narrows coverage.
+// TitleWithScope appends system / environment labels when scope_json narrows coverage.
 func TitleWithScope(base, scopeJSON string) string {
-	if s := strings.TrimSpace(ParseScope(scopeJSON).SystemName); s != "" {
-		return base + " · " + s
+	s := ParseScope(scopeJSON)
+	var parts []string
+	if sys := strings.TrimSpace(s.SystemName); sys != "" {
+		parts = append(parts, sys)
 	}
-	return base
+	if env := strings.TrimSpace(s.EnvironmentTag); env != "" {
+		parts = append(parts, environmentScopeLabel(env))
+	}
+	if len(parts) == 0 {
+		return base
+	}
+	return base + " · " + strings.Join(parts, " / ")
+}
+
+func environmentScopeLabel(tag string) string {
+	switch tag {
+	case "dev":
+		return "开发"
+	case "test":
+		return "测试"
+	case "prod":
+		return "生产"
+	default:
+		return tag
+	}
 }
 
 func startOfDay(t time.Time) time.Time {

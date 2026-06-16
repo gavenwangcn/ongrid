@@ -15,6 +15,7 @@ export type Incident = {
   target_name?: string;
   target_system_name?: string;
   target_device_ip?: string;
+  target_environment_tag?: string;
   runbook_url?: string;
   dedupe_key?: string;
   labels?: Record<string, string>;

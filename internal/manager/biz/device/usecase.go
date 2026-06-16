@@ -88,12 +88,16 @@ func (u *Usecase) UpdateNameDescription(ctx context.Context, id uint64, name, de
 	return u.repo.UpdateNameDescription(ctx, id, strings.TrimSpace(name), strings.TrimSpace(description))
 }
 
-// UpdateOperatorMeta updates operator-assigned system name and device IP.
-func (u *Usecase) UpdateOperatorMeta(ctx context.Context, id uint64, systemName, deviceIP string) error {
+// UpdateOperatorMeta updates operator-assigned system name, device IP, and environment tag.
+func (u *Usecase) UpdateOperatorMeta(ctx context.Context, id uint64, systemName, deviceIP, environmentTag string) error {
 	if u.repo == nil {
 		return errs.ErrNotWiredYet
 	}
-	return u.repo.UpdateOperatorMeta(ctx, id, systemName, deviceIP)
+	environmentTag = strings.TrimSpace(environmentTag)
+	if !model.IsValidEnvironmentTag(environmentTag) {
+		return fmt.Errorf("%w: invalid environment_tag %q", errs.ErrInvalid, environmentTag)
+	}
+	return u.repo.UpdateOperatorMeta(ctx, id, systemName, deviceIP, environmentTag)
 }
 
 // Delete hard-deletes a device. Junction rows are NOT auto-removed —

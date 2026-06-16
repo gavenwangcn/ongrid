@@ -78,6 +78,7 @@ type deviceItem struct {
 	Description    string     `json:"description,omitempty"`
 	SystemName     string     `json:"system_name,omitempty"`
 	DeviceIP       string     `json:"device_ip,omitempty"`
+	EnvironmentTag string     `json:"environment_tag,omitempty"`
 	Hostname       string     `json:"hostname,omitempty"`
 	OS             string     `json:"os,omitempty"`
 	OSVersion      string     `json:"os_version,omitempty"`
@@ -108,8 +109,9 @@ type listResp struct {
 type updateReq struct {
 	Name        *string `json:"name,omitempty"`
 	Description *string `json:"description,omitempty"`
-	SystemName  *string `json:"system_name,omitempty"`
-	DeviceIP    *string `json:"device_ip,omitempty"`
+	SystemName     *string `json:"system_name,omitempty"`
+	DeviceIP       *string `json:"device_ip,omitempty"`
+	EnvironmentTag *string `json:"environment_tag,omitempty"`
 }
 
 type updateRolesReq struct {
@@ -232,6 +234,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	desc := d.Description
 	systemName := d.SystemName
 	deviceIP := d.DeviceIP
+	environmentTag := d.EnvironmentTag
 	if in.Name != nil {
 		name = *in.Name
 	}
@@ -244,11 +247,14 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	if in.DeviceIP != nil {
 		deviceIP = *in.DeviceIP
 	}
+	if in.EnvironmentTag != nil {
+		environmentTag = *in.EnvironmentTag
+	}
 	if err := h.uc.UpdateNameDescription(r.Context(), id, name, desc); err != nil {
 		writeErr(w, err)
 		return
 	}
-	if err := h.uc.UpdateOperatorMeta(r.Context(), id, systemName, deviceIP); err != nil {
+	if err := h.uc.UpdateOperatorMeta(r.Context(), id, systemName, deviceIP, environmentTag); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -327,6 +333,7 @@ func devToItem(d *devicemodel.Device) deviceItem {
 		Description:    d.Description,
 		SystemName:     d.SystemName,
 		DeviceIP:       d.DeviceIP,
+		EnvironmentTag: d.EnvironmentTag,
 		Hostname:       d.Hostname,
 		OS:             d.OS,
 		OSVersion:      d.OSVersion,

@@ -25,6 +25,7 @@ import {
   upgradeEdgeAgent,
   upgradeEdgePackage,
 } from '@/api/edges';
+import { environmentTagLabel } from '@/api/environment';
 import { getManagerVersion } from '@/api/version';
 import { usePermissions } from '@/store/me';
 import { notifyDevicesChanged } from '@/lib/events';
@@ -236,6 +237,7 @@ export default function EdgesPage() {
                   <th className="px-4 py-2.5 text-left">ID</th>
                   <th className="px-4 py-2.5 text-left">{tr('名称', 'Name')}</th>
                   <th className="px-4 py-2.5 text-left">{tr('系统名称', 'System')}</th>
+                  <th className="px-4 py-2.5 text-left">{tr('环境标签', 'Environment')}</th>
                   <th className="px-4 py-2.5 text-left">{tr('设备 IP', 'Device IP')}</th>
                   <th className="px-4 py-2.5 text-left">{tr('主机名', 'Hostname')}</th>
                   <th className="px-4 py-2.5 text-left">{tr('角色', 'Roles')}</th>
@@ -249,13 +251,13 @@ export default function EdgesPage() {
               <tbody className="divide-y divide-zinc-800/40">
                 {loading && edges.length === 0 ? (
                   <tr>
-                    <td colSpan={11} className="px-4 py-10 text-center text-zinc-500">
+                    <td colSpan={12} className="px-4 py-10 text-center text-zinc-500">
                       {tr('加载中…', 'Loading…')}
                     </td>
                   </tr>
                 ) : edges.length === 0 ? (
                   <tr>
-                    <td colSpan={11} className="px-4 py-10 text-center text-zinc-500">
+                    <td colSpan={12} className="px-4 py-10 text-center text-zinc-500">
                       {rolesFilter
                         ? tr(
                             `没有 ${ROLE_FILTER_TITLES[rolesFilter]?.[0] ?? rolesFilter} 设备。点设备名打开详情后可在右上角分配角色。`,
@@ -290,6 +292,9 @@ export default function EdgesPage() {
                       </td>
                       <td className="whitespace-nowrap px-4 py-2.5 text-zinc-400">
                         {e.system_name?.trim() ? e.system_name : '—'}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-2.5 text-zinc-400">
+                        {environmentTagLabel(e.environment_tag, tr)}
                       </td>
                       <td className="whitespace-nowrap px-4 py-2.5 font-mono text-xs text-zinc-400">
                         {e.device_ip?.trim() ? e.device_ip : '—'}

@@ -64,7 +64,7 @@ func (d *fakeDeviceRepo) UpdateRoles(context.Context, uint64, uint8) error      
 func (d *fakeDeviceRepo) UpdateNameDescription(context.Context, uint64, string, string) error {
 	return nil
 }
-func (d *fakeDeviceRepo) UpdateOperatorMeta(context.Context, uint64, string, string) error {
+func (d *fakeDeviceRepo) UpdateOperatorMeta(context.Context, uint64, string, string, string) error {
 	return nil
 }
 func (d *fakeDeviceRepo) SetNodeID(context.Context, uint64, uint64) error { return nil }
@@ -128,7 +128,7 @@ func (f *fakeSvc) Delete(_ context.Context, id uint64) error {
 	f.lastDeleteID = id
 	return f.deleteErr
 }
-func (f *fakeSvc) UpdateOperatorMeta(_ context.Context, _ uint64, _, _ string) error { return nil }
+func (f *fakeSvc) UpdateOperatorMeta(_ context.Context, _ uint64, _, _, _ string) error { return nil }
 func (f *fakeSvc) RotateSecret(_ context.Context, id uint64) (string, error) {
 	f.lastRotateID = id
 	return f.rotateResp, f.rotateErr

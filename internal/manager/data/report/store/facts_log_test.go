@@ -33,7 +33,7 @@ func TestFactsCollector_Logs_SystemScope(t *testing.T) {
 		Start: mustParse(t, "2026-05-25T00:00:00Z"),
 		End:   mustParse(t, "2026-06-01T00:00:00Z"),
 	}
-	db.Exec(`INSERT INTO devices VALUES (7, true, 1, 'prod-a', NULL), (9, false, 2, 'prod-b', NULL)`)
+	db.Exec(`INSERT INTO devices VALUES (7, true, 1, 'prod-a', NULL, NULL), (9, false, 2, 'prod-b', NULL, NULL)`)
 
 	vector := func(v float64) *logquery.QueryRangeResult {
 		raw, _ := json.Marshal([]map[string]interface{}{

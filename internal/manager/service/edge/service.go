@@ -67,8 +67,8 @@ func (s *Service) Delete(ctx context.Context, id uint64) error {
 	return s.uc.Delete(ctx, id)
 }
 
-func (s *Service) UpdateOperatorMeta(ctx context.Context, id uint64, systemName, deviceIP string) error {
-	return s.uc.UpdateOperatorMeta(ctx, id, systemName, deviceIP)
+func (s *Service) UpdateOperatorMeta(ctx context.Context, id uint64, systemName, deviceIP, environmentTag string) error {
+	return s.uc.UpdateOperatorMeta(ctx, id, systemName, deviceIP, environmentTag)
 }
 
 // RotateSecret generates + stores a new hash, returns plaintext ONCE.

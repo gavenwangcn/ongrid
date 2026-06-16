@@ -37,11 +37,12 @@ type Edge struct {
 	SecretKeyHash string `gorm:"size:512;not null;column:secret_key_hash"` // argon2id
 	Status        string `gorm:"size:16;default:offline;check:status IN ('online','offline')"` // online | offline
 	Description   string `gorm:"size:255;not null;default:''"`
-	// SystemName / DeviceIP are operator metadata captured at edge create
-	// (before the host device row exists) and copied to the linked Device
-	// on first register_edge.
-	SystemName string `gorm:"size:128;not null;default:'';column:system_name"`
-	DeviceIP   string `gorm:"size:64;not null;default:'';column:device_ip"`
+	// SystemName / DeviceIP / EnvironmentTag are operator metadata captured
+	// at edge create (before the host device row exists) and copied to the
+	// linked Device on first register_edge.
+	SystemName     string `gorm:"size:128;not null;default:'';column:system_name"`
+	DeviceIP       string `gorm:"size:64;not null;default:'';column:device_ip"`
+	EnvironmentTag string `gorm:"size:16;not null;default:'';column:environment_tag"`
 
 	LastSeenAt *time.Time `gorm:"column:last_seen_at"`
 	// AgentVersion is the binary semver the edge agent self-reported on

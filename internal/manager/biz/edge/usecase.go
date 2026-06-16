@@ -106,9 +106,10 @@ type CreateResult struct {
 
 // CreateParams is the operator input for registering a new edge agent.
 type CreateParams struct {
-	Name       string
-	SystemName string
-	DeviceIP   string
+	Name           string
+	SystemName     string
+	DeviceIP       string
+	EnvironmentTag string
 }
 
 // Create registers a new edge. It generates a 24-char URL-safe AccessKeyID,
@@ -121,6 +122,10 @@ func (u *Usecase) Create(ctx context.Context, p CreateParams, createdBy *uint64)
 	name := strings.TrimSpace(p.Name)
 	systemName := strings.TrimSpace(p.SystemName)
 	deviceIP := strings.TrimSpace(p.DeviceIP)
+	environmentTag := strings.TrimSpace(p.EnvironmentTag)
+	if environmentTag != "" && !devicemodel.IsValidEnvironmentTag(environmentTag) {
+		return nil, fmt.Errorf("%w: invalid environment_tag %q", errs.ErrInvalid, environmentTag)
+	}
 	// Empty is allowed — edge.HandleRegister back-fills the name with
 	// the host's reported hostname on first tunnel handshake. The SPA
 	// shows "(待主机上线)" placeholder for blank names in the meantime.
@@ -139,10 +144,11 @@ func (u *Usecase) Create(ctx context.Context, p CreateParams, createdBy *uint64)
 	}
 
 	e := &model.Edge{
-		Name:          name,
-		SystemName:    systemName,
-		DeviceIP:      deviceIP,
-		AccessKeyID:   ak,
+		Name:           name,
+		SystemName:     systemName,
+		DeviceIP:       deviceIP,
+		EnvironmentTag: environmentTag,
+		AccessKeyID:    ak,
 		SecretKeyHash: hash,
 		Status:        model.StatusOffline,
 		CreatedBy:     createdBy,
@@ -288,13 +294,17 @@ func collectDeviceIDsForEdge(edge *model.Edge, links devicebiz.EdgeDeviceRepo, c
 
 // UpdateOperatorMeta updates pending system/IP metadata on the edge row.
 // When a host device is already linked, the same values are written to Device.
-func (u *Usecase) UpdateOperatorMeta(ctx context.Context, edgeID uint64, systemName, deviceIP string) error {
+func (u *Usecase) UpdateOperatorMeta(ctx context.Context, edgeID uint64, systemName, deviceIP, environmentTag string) error {
 	if u.repo == nil {
 		return errs.ErrNotWiredYet
 	}
 	systemName = strings.TrimSpace(systemName)
 	deviceIP = strings.TrimSpace(deviceIP)
-	if err := u.repo.UpdateOperatorMeta(ctx, edgeID, systemName, deviceIP); err != nil {
+	environmentTag = strings.TrimSpace(environmentTag)
+	if !devicemodel.IsValidEnvironmentTag(environmentTag) {
+		return fmt.Errorf("%w: invalid environment_tag %q", errs.ErrInvalid, environmentTag)
+	}
+	if err := u.repo.UpdateOperatorMeta(ctx, edgeID, systemName, deviceIP, environmentTag); err != nil {
 		return err
 	}
 	edge, err := u.repo.GetByID(ctx, edgeID)
@@ -302,7 +312,7 @@ func (u *Usecase) UpdateOperatorMeta(ctx context.Context, edgeID uint64, systemN
 		return err
 	}
 	if edge.DeviceID != nil && u.devices != nil {
-		return u.devices.UpdateOperatorMeta(ctx, *edge.DeviceID, systemName, deviceIP)
+		return u.devices.UpdateOperatorMeta(ctx, *edge.DeviceID, systemName, deviceIP, environmentTag)
 	}
 	return nil
 }
@@ -396,8 +406,8 @@ func (u *Usecase) HandleRegister(ctx context.Context, edgeID uint64, info tunnel
 	if err := u.devices.MarkOnline(ctx, dev.ID); err != nil {
 		return fmt.Errorf("mark device online: %w", err)
 	}
-	if sys := strings.TrimSpace(edge.SystemName); sys != "" || strings.TrimSpace(edge.DeviceIP) != "" {
-		if err := u.devices.UpdateOperatorMeta(ctx, dev.ID, edge.SystemName, edge.DeviceIP); err != nil {
+	if sys := strings.TrimSpace(edge.SystemName); sys != "" || strings.TrimSpace(edge.DeviceIP) != "" || strings.TrimSpace(edge.EnvironmentTag) != "" {
+		if err := u.devices.UpdateOperatorMeta(ctx, dev.ID, edge.SystemName, edge.DeviceIP, edge.EnvironmentTag); err != nil {
 			return fmt.Errorf("copy operator meta to device: %w", err)
 		}
 	}
