@@ -1566,9 +1566,13 @@ func main() {
 		if promQueryClient != nil {
 			reportProm = promQueryClient
 		}
+		var reportLoki managerreportdata.LogQuerier
+		if logQuerier != nil {
+			reportLoki = logQuerier
+		}
 		reportGen = managerbizreport.NewWorkerGenerator(
 			reportRepo,
-			managerreportdata.NewFactsCollector(db, reportProm, log.With(slog.String("comp", "report-facts"))),
+			managerreportdata.NewFactsCollector(db, reportProm, reportLoki, log.With(slog.String("comp", "report-facts"))),
 			reportRT,
 			managerbizreport.GeneratorConfig{
 				DefaultLocale: firstNonEmpty(os.Getenv("ONGRID_DEFAULT_LOCALE"), "en"),

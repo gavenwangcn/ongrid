@@ -6,6 +6,7 @@ import type {
   ChangeFact,
   HeroStat,
   KeyIncident,
+  LogErrorSource,
   Paragraph,
   ReportContent as ReportContentT,
   ResourceFacts,
@@ -200,6 +201,22 @@ function ChangeRow({ c }: { c: ChangeFact }) {
   );
 }
 
+const LOG_KIND_ZH: Record<string, string> = { container: '容器', unit: 'Unit', file: '文件', other: '其他' };
+const LOG_KIND_EN: Record<string, string> = { container: 'Container', unit: 'Unit', file: 'File', other: 'Other' };
+
+function LogSourceRow({ s, tr }: { s: LogErrorSource; tr: (zh: string, en: string) => string }) {
+  const kind = tr(LOG_KIND_ZH[s.kind] ?? s.kind, LOG_KIND_EN[s.kind] ?? s.kind);
+  const device = s.device_name || (s.device_id ? `#${s.device_id}` : '');
+  return (
+    <div className="flex items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-sm">
+      <span className="shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-[11px] text-zinc-400">{kind}</span>
+      <span className="truncate font-medium text-zinc-200">{s.name}</span>
+      {device && <span className="truncate text-xs text-zinc-500">{device}</span>}
+      <span className="ml-auto shrink-0 tabular-nums text-rose-300">{s.count}</span>
+    </div>
+  );
+}
+
 export function ReportContentView({ content }: { content: ReportContentT }) {
   const { tr } = useI18n();
   const paras: Paragraph[] = content.narrative?.paragraphs ?? [];
@@ -211,6 +228,7 @@ export function ReportContentView({ content }: { content: ReportContentT }) {
   const a = content.actions_summary ?? { mutating_total: 0, mutating_approved: 0, safe_total: 0 };
   const assets = content.assets ?? { new_agents: 0, new_skills: 0, new_repos: 0 };
   const usage = content.usage ?? { sessions: 0, prompt_tokens: 0, completion_tokens: 0 };
+  const logs = content.logs ?? { available: false, total_errors: 0 };
 
   const onlinePct = fleet.total > 0 ? Math.round((fleet.online / fleet.total) * 100) : 0;
   const resolved = incidents.filter((i) => i.status === 'resolved').length;
@@ -256,6 +274,42 @@ export function ReportContentView({ content }: { content: ReportContentT }) {
             </div>
           )}
         </section>
+      )}
+
+      {/* ROW — 应用日志（潜在错误） */}
+      {logs.available && (
+        <Row
+          tone="rose"
+          title={tr('应用日志', 'Application logs')}
+          desc={tr(
+            logs.system_name ? `潜在错误 · 系统 ${logs.system_name}` : '潜在错误（error / panic / fatal）',
+            logs.system_name ? `Potential errors · system ${logs.system_name}` : 'Potential errors (error / panic / fatal)',
+          )}
+        >
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <StatCard
+              tone="rose"
+              label={tr('潜在错误', 'Potential errors')}
+              value={logs.total_errors}
+              sub={logs.delta_pct != null ? tr(`较上周期 ${logs.delta_pct > 0 ? '+' : ''}${logs.delta_pct.toFixed(0)}%`, `${logs.delta_pct > 0 ? '+' : ''}${logs.delta_pct.toFixed(0)}% vs prior`) : undefined}
+              sparkline={logs.daily_sparkline}
+            />
+            {logs.prev_total_errors != null && logs.prev_total_errors > 0 && (
+              <StatCard
+                tone="rose"
+                label={tr('上周期', 'Prior period')}
+                value={logs.prev_total_errors}
+                sub={logs.delta_pct != null ? tr(`较上周期 ${logs.delta_pct > 0 ? '+' : ''}${logs.delta_pct.toFixed(0)}%`, `${logs.delta_pct > 0 ? '+' : ''}${logs.delta_pct.toFixed(0)}% vs prior`) : undefined}
+              />
+            )}
+          </div>
+          {logs.top_sources && logs.top_sources.length > 0 && (
+            <div className="mt-2 space-y-1.5">
+              <div className="text-[11px] text-zinc-500">{tr('错误来源 Top', 'Top error sources')}</div>
+              {logs.top_sources.map((s, i) => <LogSourceRow key={`${s.kind}-${s.name}-${i}`} s={s} tr={tr} />)}
+            </div>
+          )}
+        </Row>
       )}
 
       {/* ROW 2 — 告警与处理 */}

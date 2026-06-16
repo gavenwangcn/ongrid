@@ -32,6 +32,7 @@ type Content struct {
 	Changes      []ChangeFact   `json:"changes,omitempty"`
 	Assets       AssetFacts     `json:"assets"`
 	Usage        UsageFacts     `json:"usage"`
+	Logs         LogFacts       `json:"logs"`
 	Advice       []Advice       `json:"advice"`
 	Metadata     ContentMeta    `json:"metadata"`
 }
@@ -199,6 +200,31 @@ func (c *Content) RenderMarkdown(title, locale string) string {
 	b.WriteString(fmt.Sprintf("- %s\n\n", mtr(
 		fmt.Sprintf("会话 %d · 输入 token %d · 输出 token %d", c.Usage.Sessions, c.Usage.PromptTokens, c.Usage.CompletionTokens),
 		fmt.Sprintf("%d sessions · %d prompt tokens · %d completion tokens", c.Usage.Sessions, c.Usage.PromptTokens, c.Usage.CompletionTokens))))
+
+	if c.Logs.Available {
+		b.WriteString("## " + mtr("应用日志（潜在错误）", "Application logs (potential errors)") + "\n\n")
+		b.WriteString(fmt.Sprintf("- %s\n", mtr(
+			fmt.Sprintf("潜在错误 %d 条", c.Logs.TotalErrors),
+			fmt.Sprintf("%d potential errors", c.Logs.TotalErrors),
+		)))
+		if c.Logs.DeltaPct != nil {
+			b.WriteString(fmt.Sprintf("- %s\n", mtr(
+				fmt.Sprintf("较上周期 %+.0f%%", *c.Logs.DeltaPct),
+				fmt.Sprintf("%+.0f%% vs prior period", *c.Logs.DeltaPct),
+			)))
+		}
+		if len(c.Logs.TopSources) > 0 {
+			b.WriteString("- " + mtr("主要来源", "Top sources") + ":\n")
+			for _, s := range c.Logs.TopSources {
+				name := s.Name
+				if s.DeviceName != "" {
+					name = s.DeviceName + "/" + name
+				}
+				b.WriteString(fmt.Sprintf("  - %s: %d\n", name, s.Count))
+			}
+		}
+		b.WriteString("\n")
+	}
 
 	if len(c.KeyIncidents) > 0 {
 		b.WriteString("## " + mtr("告警与处置", "Alerts & response") + "\n\n")

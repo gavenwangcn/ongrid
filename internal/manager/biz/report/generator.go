@@ -242,12 +242,13 @@ func (g *workerGenerator) generate(ctx context.Context, rpt *model.Report) error
 	content.Changes = facts.Changes
 	content.Assets = facts.Assets
 	content.Usage = facts.Usage
+	content.Logs = facts.Logs
 	content.KeyIncidents = mergeIncidents(facts.Incidents, content.KeyIncidents)
 	content.Version = ContentVersion
 	content.Metadata = ContentMeta{
 		PeriodStart: period.Start.Format(time.RFC3339),
 		PeriodEnd:   period.End.Format(time.RFC3339),
-		DataSources: []string{"prometheus", "incidents", "audit_log", "proposals", "devices"},
+		DataSources: []string{"prometheus", "loki", "incidents", "audit_log", "proposals", "devices"},
 	}
 
 	rpt.ContentJSON = content.MustJSON()

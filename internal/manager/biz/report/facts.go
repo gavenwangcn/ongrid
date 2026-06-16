@@ -48,6 +48,34 @@ type ReportFacts struct {
 	// Usage is the platform-usage signal: chat sessions + LLM token spend
 	// over the period. The "用了多少" row.
 	Usage UsageFacts `json:"usage"`
+
+	// Logs is application log error analytics from Loki (potential errors
+	// matching the Logs UI shortcut: error|panic|fatal). Scoped to the
+	// same devices as the report (system_name / edge_ids).
+	Logs LogFacts `json:"logs"`
+}
+
+// LogFacts aggregates potential application errors from Loki over the
+// report period. Available=false when Loki is unreachable, not wired, or
+// the scope matched no devices.
+type LogFacts struct {
+	Available       bool             `json:"available"`
+	TotalErrors     int              `json:"total_errors"`
+	PrevTotalErrors int              `json:"prev_total_errors,omitempty"`
+	DeltaPct        *float64         `json:"delta_pct,omitempty"`
+	DailySparkline  []int            `json:"daily_sparkline,omitempty"`
+	TopSources      []LogErrorSource `json:"top_sources,omitempty"`
+	QueryPattern    string           `json:"query_pattern,omitempty"`
+	SystemName      string           `json:"system_name,omitempty"`
+}
+
+// LogErrorSource is one high-volume error log stream in the period.
+type LogErrorSource struct {
+	DeviceID   uint64 `json:"device_id,omitempty"`
+	DeviceName string `json:"device_name,omitempty"`
+	Kind       string `json:"kind"` // container | unit | file | other
+	Name       string `json:"name"`
+	Count      int    `json:"count"`
 }
 
 // AssetFacts counts platform assets created within the period.

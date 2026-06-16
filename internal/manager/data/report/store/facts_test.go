@@ -95,7 +95,7 @@ func TestFactsCollector_Collect(t *testing.T) {
 
 	// prom=nil → Resource.Available=false → hero falls back to
 	// devices/incidents/actions/online.
-	fc := NewFactsCollector(db, nil, nil)
+	fc := NewFactsCollector(db, nil, nil, nil)
 	facts, err := fc.Collect(ctx, period, prev, bizreport.Scope{})
 	if err != nil {
 		t.Fatal(err)
@@ -170,7 +170,7 @@ func TestFactsCollector_SystemScopeFilter(t *testing.T) {
 		(1,'A','warning','resolved',7,'2026-06-02T10:00:00Z','2026-06-02T10:30:00Z',NULL),
 		(2,'B','warning','resolved',9,'2026-06-03T10:00:00Z','2026-06-03T10:30:00Z',NULL)`)
 
-	fc := NewFactsCollector(db, nil, nil)
+	fc := NewFactsCollector(db, nil, nil, nil)
 	facts, err := fc.Collect(ctx, period, period, bizreport.Scope{SystemName: "prod-a"})
 	if err != nil {
 		t.Fatal(err)
@@ -194,7 +194,7 @@ func TestFactsCollector_EdgeScopeFilter(t *testing.T) {
 		(1,'A','warning','resolved',7,'2026-06-02T10:00:00Z','2026-06-02T10:30:00Z',NULL),
 		(2,'B','warning','resolved',9,'2026-06-03T10:00:00Z','2026-06-03T10:30:00Z',NULL)`)
 
-	fc := NewFactsCollector(db, nil, nil)
+	fc := NewFactsCollector(db, nil, nil, nil)
 	// Scope to device 7 only.
 	facts, err := fc.Collect(ctx, period, period, bizreport.Scope{EdgeIDs: []uint64{7}})
 	if err != nil {
@@ -217,7 +217,7 @@ func TestFactsCollector_SeverityScopeFilter(t *testing.T) {
 		(2,'B','warning','resolved',7,'2026-06-03T10:00:00Z','2026-06-03T10:30:00Z',NULL),
 		(3,'C','critical','resolved',7,'2026-06-04T10:00:00Z','2026-06-04T10:30:00Z',NULL)`)
 
-	fc := NewFactsCollector(db, nil, nil)
+	fc := NewFactsCollector(db, nil, nil, nil)
 	// severity_min=warning → drop the info incident.
 	facts, _ := fc.Collect(ctx, period, period, bizreport.Scope{SeverityMin: "warning"})
 	if len(facts.Incidents) != 2 {
@@ -233,7 +233,7 @@ func TestFactsCollector_EmptyPeriodNoError(t *testing.T) {
 		End:   mustParse(t, "2026-06-08T00:00:00Z"),
 	}
 	// No data at all — a calm report's facts. Must not error.
-	fc := NewFactsCollector(db, nil, nil)
+	fc := NewFactsCollector(db, nil, nil, nil)
 	facts, err := fc.Collect(ctx, period, period, bizreport.Scope{})
 	if err != nil {
 		t.Fatalf("empty period should not error: %v", err)
@@ -285,7 +285,7 @@ func TestFactsCollector_ResourceQueryRangeFallback(t *testing.T) {
 			return &promquery.InstantResult{ResultType: "matrix", Result: matrix}, nil
 		},
 	}
-	fc := NewFactsCollector(db, prom, nil)
+	fc := NewFactsCollector(db, prom, nil, nil)
 	facts, err := fc.Collect(ctx, period, period, bizreport.Scope{SystemName: "人力资源-EHR系统"})
 	if err != nil {
 		t.Fatal(err)

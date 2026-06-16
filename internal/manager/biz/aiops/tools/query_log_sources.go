@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -39,7 +40,7 @@ var QueryLogSourcesSchema = json.RawMessage(`{
     },
     "lookback": {
       "type": "string",
-      "description": "How far back to scan Loki index (duration, default 24h). Max 72h (install retention)."
+      "description": "How far back to scan Loki index (duration, default 24h). Supports hours (72h), days (7d). Max 31d."
     },
     "include_configured": {
       "type": "boolean",
@@ -112,7 +113,7 @@ type DeviceLogSources struct {
 
 const (
 	queryLogSourcesCallTimeout = 45 * time.Second
-	maxLogLookback             = 72 * time.Hour
+	maxLogLookback             = 31 * 24 * time.Hour
 	defaultLogLookback         = 24 * time.Hour
 )
 
@@ -120,6 +121,17 @@ func parseLogLookback(s string) (time.Duration, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return defaultLogLookback, nil
+	}
+	if strings.HasSuffix(s, "d") {
+		days, err := strconv.Atoi(strings.TrimSuffix(s, "d"))
+		if err != nil || days <= 0 {
+			return 0, fmt.Errorf("invalid lookback duration %q", s)
+		}
+		d := time.Duration(days) * 24 * time.Hour
+		if d > maxLogLookback {
+			return maxLogLookback, nil
+		}
+		return d, nil
 	}
 	d, err := time.ParseDuration(s)
 	if err != nil {

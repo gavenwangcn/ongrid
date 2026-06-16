@@ -121,6 +121,25 @@ export type UsageFacts = {
   completion_tokens: number;
 };
 
+export type LogErrorSource = {
+  device_id?: number;
+  device_name?: string;
+  kind: string;
+  name: string;
+  count: number;
+};
+
+export type LogFacts = {
+  available: boolean;
+  total_errors: number;
+  prev_total_errors?: number;
+  delta_pct?: number;
+  daily_sparkline?: number[];
+  top_sources?: LogErrorSource[];
+  query_pattern?: string;
+  system_name?: string;
+};
+
 export type ReportContent = {
   version: string;
   hero: HeroStat[];
@@ -132,6 +151,7 @@ export type ReportContent = {
   changes?: ChangeFact[];
   assets: AssetFacts;
   usage: UsageFacts;
+  logs: LogFacts;
   advice?: Advice[];
 };
 

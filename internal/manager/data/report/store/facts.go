@@ -28,6 +28,7 @@ import (
 type FactsCollector struct {
 	db   *gorm.DB
 	prom PromQuerier
+	loki LogQuerier
 	log  *slog.Logger
 }
 
@@ -39,13 +40,14 @@ type PromQuerier interface {
 	QueryRange(ctx context.Context, expr string, start, end time.Time, step time.Duration) (*promquery.InstantResult, error)
 }
 
-func NewFactsCollector(db *gorm.DB, prom PromQuerier, log *slog.Logger) *FactsCollector {
+func NewFactsCollector(db *gorm.DB, prom PromQuerier, loki LogQuerier, log *slog.Logger) *FactsCollector {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &FactsCollector{
 		db:   db,
 		prom: prom,
+		loki: loki,
 		log:  log.With(slog.String("comp", "report-facts")),
 	}
 }
@@ -61,6 +63,7 @@ func (c *FactsCollector) Collect(ctx context.Context, period, prev bizreport.Per
 		slog.Time("period_end", period.End),
 		slog.String("system_name", strings.TrimSpace(scope.SystemName)),
 		slog.Bool("prom_wired", c.prom != nil),
+		slog.Bool("loki_wired", c.loki != nil),
 	)
 
 	scope, err := c.resolveScope(ctx, scope)
@@ -93,7 +96,8 @@ func (c *FactsCollector) Collect(ctx context.Context, period, prev bizreport.Per
 	facts.Assets = c.collectAssets(ctx, period)
 	facts.Usage = c.collectUsage(ctx, period)
 	facts.Resource = c.collectResource(ctx, period, scope)
-	facts.Hero = c.buildHero(period, prev, scope, incidents, facts.Actions, facts.Fleet, facts.Resource, c.countIncidents(ctx, prev, scope))
+	facts.Logs = c.collectLogs(ctx, period, prev, scope)
+	facts.Hero = c.buildHero(period, prev, scope, incidents, facts.Actions, facts.Fleet, facts.Resource, facts.Logs, c.countIncidents(ctx, prev, scope))
 
 	c.log.Info("report facts collect done",
 		slog.Duration("duration", time.Since(start)),
@@ -107,6 +111,8 @@ func (c *FactsCollector) Collect(ctx context.Context, period, prev bizreport.Per
 		slog.Float64("mem_peak", facts.Resource.MemPeak),
 		slog.Float64("disk_avg", facts.Resource.DiskAvg),
 		slog.Float64("disk_peak", facts.Resource.DiskPeak),
+		slog.Bool("logs_available", facts.Logs.Available),
+		slog.Int("log_errors", facts.Logs.TotalErrors),
 	)
 	return facts, nil
 }
@@ -668,7 +674,7 @@ func (c *FactsCollector) countIncidents(ctx context.Context, p bizreport.Period,
 // buildHero leads with non-incident signals so calm-period cards still
 // carry meaning: devices monitored, fleet CPU/mem avg, disk peak. Falls
 // back to incident-count when Prometheus has no resource data.
-func (c *FactsCollector) buildHero(p, prev bizreport.Period, scope bizreport.Scope, incidents []bizreport.IncidentFact, actions bizreport.ActionsSummary, fleet bizreport.FleetFacts, res bizreport.ResourceFacts, prevIncidents int) []bizreport.HeroStat {
+func (c *FactsCollector) buildHero(p, prev bizreport.Period, scope bizreport.Scope, incidents []bizreport.IncidentFact, actions bizreport.ActionsSummary, fleet bizreport.FleetFacts, res bizreport.ResourceFacts, logs bizreport.LogFacts, prevIncidents int) []bizreport.HeroStat {
 	hero := []bizreport.HeroStat{
 		{Key: "devices", Label: "监控设备", Value: float64(fleet.Total)},
 	}
@@ -677,6 +683,12 @@ func (c *FactsCollector) buildHero(p, prev bizreport.Period, scope bizreport.Sco
 			bizreport.HeroStat{Key: "cpu_avg", Label: "CPU 均值", Value: round1(res.CPUAvg), Unit: "%"},
 			bizreport.HeroStat{Key: "mem_avg", Label: "内存 均值", Value: round1(res.MemAvg), Unit: "%"},
 			bizreport.HeroStat{Key: "disk_peak", Label: "磁盘 峰值", Value: round1(res.DiskPeak), Unit: "%"},
+		)
+	} else if logs.Available {
+		hero = append(hero,
+			bizreport.HeroStat{Key: "log_errors", Label: "潜在错误", Value: float64(logs.TotalErrors), DeltaPct: logs.DeltaPct, Sparkline: logs.DailySparkline},
+			bizreport.HeroStat{Key: "incidents", Label: "Incidents", Value: float64(len(incidents)), DeltaPct: deltaPct(float64(len(incidents)), float64(prevIncidents))},
+			bizreport.HeroStat{Key: "actions", Label: "Agent 动作", Value: float64(actions.MutatingTotal + actions.SafeTotal)},
 		)
 	} else {
 		// No prom data — fall back to alert/action counts so the card row

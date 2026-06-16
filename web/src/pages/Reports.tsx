@@ -14,6 +14,7 @@ import {
   generateNow,
   listReports,
   uniqueSystemNames,
+  type ReportKind,
   type ReportListItem,
   type ReportStatus,
 } from '@/api/reports';
@@ -41,6 +42,38 @@ const KIND_FILTERS: { key: string; zh: string; en: string }[] = [
   { key: 'weekly', zh: '周报', en: 'Weekly' },
   { key: 'monthly', zh: '月报', en: 'Monthly' },
 ];
+
+const GENERATE_KINDS: { key: ReportKind; zh: string; en: string }[] = [
+  { key: 'daily', zh: '日报', en: 'Daily' },
+  { key: 'weekly', zh: '周报', en: 'Weekly' },
+  { key: 'monthly', zh: '月报', en: 'Monthly' },
+];
+
+const GENERATE_KIND_HINT: Record<ReportKind, { zh: string; en: string }> = {
+  daily: {
+    zh: '统计上一自然日（昨日 00:00–24:00）。',
+    en: 'Covers the previous calendar day (yesterday 00:00–24:00).',
+  },
+  weekly: {
+    zh: '统计上一自然周（周一至周日）。',
+    en: 'Covers the previous ISO week (Monday through Sunday).',
+  },
+  monthly: {
+    zh: '统计上一自然月。',
+    en: 'Covers the previous calendar month.',
+  },
+  custom: {
+    zh: '按自定义周期统计。',
+    en: 'Covers a custom period.',
+  },
+};
+
+const GENERATE_KIND_ACTION: Record<ReportKind, { zh: string; en: string }> = {
+  daily: { zh: '生成日报', en: 'Generate daily' },
+  weekly: { zh: '生成周报', en: 'Generate weekly' },
+  monthly: { zh: '生成月报', en: 'Generate monthly' },
+  custom: { zh: '生成报告', en: 'Generate report' },
+};
 
 const KIND_ZH: Record<string, string> = { daily: '日报', weekly: '周报', monthly: '月报', custom: '自定义' };
 const KIND_EN: Record<string, string> = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly', custom: 'Custom' };
@@ -110,12 +143,12 @@ export default function ReportsPage() {
   }, [generateOpen]);
 
   const onGenerate = useCallback(
-    async (systemName: string) => {
+    async (kind: ReportKind, systemName: string) => {
       setGenerating(true);
       setErr(null);
       try {
         const rpt = await generateNow({
-          kind: 'weekly',
+          kind,
           scope_json: formatReportScope({ system_name: systemName }),
         });
         setGenerateOpen(false);
@@ -279,7 +312,7 @@ export default function ReportsPage() {
           systemNames={systemNames}
           generating={generating}
           onClose={() => setGenerateOpen(false)}
-          onGenerate={(systemName) => void onGenerate(systemName)}
+          onGenerate={(kind, systemName) => void onGenerate(kind, systemName)}
           tr={tr}
         />
       )}
@@ -297,10 +330,13 @@ function GenerateReportModal({
   systemNames: string[];
   generating: boolean;
   onClose(): void;
-  onGenerate(systemName: string): void;
+  onGenerate(kind: ReportKind, systemName: string): void;
   tr: (zh: string, en: string) => string;
 }) {
+  const [kind, setKind] = useState<ReportKind>('weekly');
   const [systemName, setSystemName] = useState('');
+  const hint = GENERATE_KIND_HINT[kind];
+  const action = GENERATE_KIND_ACTION[kind];
 
   return (
     <Modal
@@ -319,18 +355,39 @@ function GenerateReportModal({
           </button>
           <button
             type="button"
-            onClick={() => onGenerate(systemName)}
+            onClick={() => onGenerate(kind, systemName)}
             disabled={generating}
             className="rounded-md border border-indigo-600 bg-indigo-600/20 px-3 py-1.5 text-xs text-indigo-200 hover:bg-indigo-600/30 disabled:opacity-50"
           >
-            {generating ? tr('生成中…', 'Generating…') : tr('生成周报', 'Generate weekly')}
+            {generating ? tr('生成中…', 'Generating…') : tr(action.zh, action.en)}
           </button>
         </>
       }
     >
       <div className="space-y-3">
+        <div>
+          <span className="text-xs text-zinc-400">{tr('报告类型', 'Report type')}</span>
+          <div className="mt-1.5 flex gap-1.5">
+            {GENERATE_KINDS.map((k) => (
+              <button
+                key={k.key}
+                type="button"
+                onClick={() => setKind(k.key)}
+                className={cn(
+                  'rounded-md border px-2.5 py-1 text-xs',
+                  kind === k.key
+                    ? 'border-indigo-500 bg-indigo-500/15 text-indigo-200'
+                    : 'border-zinc-700 text-zinc-300 hover:border-zinc-500',
+                )}
+              >
+                {tr(k.zh, k.en)}
+              </button>
+            ))}
+          </div>
+        </div>
         <p className="text-xs text-zinc-500">
-          {tr('默认生成上一自然周的周报。可选择仅统计某一系统下的设备。', 'Generates the previous calendar week by default. Optionally narrow to one system.')}
+          {tr(hint.zh, hint.en)}
+          {tr(' 可选择仅统计某一系统下的设备。', ' Optionally narrow to one system.')}
         </p>
         <label className="block text-xs text-zinc-400">
           {tr('系统范围', 'System scope')}
