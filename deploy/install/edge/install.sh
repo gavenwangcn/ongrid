@@ -68,14 +68,15 @@ log_ok()    { printf '%s[OK]%s    %s\n' "$C_GREEN"  "$C_RESET" "$*"; }
 # SupplementaryGroups=docker on the unit is what the running agent uses.
 docker_sock_probe_ok() {
     local u="$1"
-    local url='http://localhost/v1.44/containers/json'
     local attempt=0
     while (( attempt < 4 )); do
-        if command -v runuser >/dev/null 2>&1; then
-            runuser -u "$u" -- curl -sf --max-time 3 --unix-socket /var/run/docker.sock "$url" >/dev/null 2>&1 && return 0
-        else
-            sudo -u "$u" curl -sf --max-time 3 --unix-socket /var/run/docker.sock "$url" >/dev/null 2>&1 && return 0
-        fi
+        for url in 'http://localhost/v1.44/containers/json' 'http://localhost/v1.41/containers/json'; do
+            if command -v runuser >/dev/null 2>&1; then
+                runuser -u "$u" -- curl -sf --max-time 3 --unix-socket /var/run/docker.sock "$url" >/dev/null 2>&1 && return 0
+            else
+                sudo -u "$u" curl -sf --max-time 3 --unix-socket /var/run/docker.sock "$url" >/dev/null 2>&1 && return 0
+            fi
+        done
         attempt=$((attempt + 1))
         sleep 1
     done

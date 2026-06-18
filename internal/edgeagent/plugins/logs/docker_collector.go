@@ -20,9 +20,6 @@ import (
 )
 
 const (
-	// dockerAPIVersion is the Engine API path segment for unix-socket HTTP
-	// calls. Docker Engine v29+ rejects clients below v1.44.
-	dockerAPIVersion       = "v1.44"
 	dockerReconcilePeriod  = 15 * time.Second
 	dockerPushBatchWait    = 1 * time.Second
 	dockerPushBatchMax     = 200
@@ -44,6 +41,7 @@ type dockerCollector struct {
 	extraLabels map[string]string
 	workDir     string
 	log         *slog.Logger
+	apiVersion  string // negotiated per daemon, e.g. v1.44 or v1.41
 
 	mu          sync.Mutex
 	positions   map[string]int64 // container id -> last unix seconds
@@ -133,6 +131,7 @@ func (d *dockerCollector) health() (state string, lastErr string) {
 
 func (d *dockerCollector) run(ctx context.Context) {
 	client := d.dockerHTTPClient()
+	d.resolveAPIVersion(ctx, client)
 	ticker := time.NewTicker(dockerReconcilePeriod)
 	defer ticker.Stop()
 
@@ -150,6 +149,64 @@ func (d *dockerCollector) run(ctx context.Context) {
 			}
 		}
 	}
+}
+
+type dockerDaemonVersion struct {
+	APIVersion    string `json:"ApiVersion"`
+	MinAPIVersion string `json:"MinAPIVersion"`
+}
+
+func (d *dockerCollector) resolveAPIVersion(ctx context.Context, client *http.Client) {
+	ver, err := d.fetchDockerVersion(ctx, client)
+	if err != nil {
+		d.log.Warn("docker version probe failed; falling back to API v1.41",
+			slog.Any("err", err))
+		d.setAPIVersion(dockerAPIFallback)
+		return
+	}
+	chosen := chooseDockerAPIVersion(ver.MinAPIVersion, ver.APIVersion)
+	d.setAPIVersion(chosen)
+	d.log.Info("docker api version negotiated",
+		slog.String("api_version", chosen),
+		slog.String("daemon_api", ver.APIVersion),
+		slog.String("daemon_min_api", ver.MinAPIVersion))
+}
+
+func (d *dockerCollector) fetchDockerVersion(ctx context.Context, client *http.Client) (*dockerDaemonVersion, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, dockerVersionURL(), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, dockerVersionProbeError(resp.StatusCode, string(b))
+	}
+	var ver dockerDaemonVersion
+	if err := json.NewDecoder(resp.Body).Decode(&ver); err != nil {
+		return nil, err
+	}
+	return &ver, nil
+}
+
+func (d *dockerCollector) setAPIVersion(v string) {
+	d.mu.Lock()
+	d.apiVersion = formatAPIVersionPath(v)
+	d.mu.Unlock()
+}
+
+func (d *dockerCollector) getAPIVersion() string {
+	d.mu.Lock()
+	v := d.apiVersion
+	d.mu.Unlock()
+	if v == "" {
+		return dockerAPIFallback
+	}
+	return v
 }
 
 func (d *dockerCollector) dockerHTTPClient() *http.Client {
@@ -210,7 +267,7 @@ func (d *dockerCollector) stopAllFollowers() {
 
 func (d *dockerCollector) listRunningContainers(ctx context.Context, client *http.Client) ([]dockerContainer, error) {
 	url := fmt.Sprintf("http://docker/%s/containers/json?filters=%s",
-		dockerAPIVersion,
+		d.getAPIVersion(),
 		`{"status":["running"]}`,
 	)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -279,7 +336,7 @@ func (d *dockerCollector) streamContainerLogs(ctx context.Context, client *http.
 	if since > 0 {
 		q += fmt.Sprintf("&since=%d", since)
 	}
-	url := fmt.Sprintf("http://docker/%s/containers/%s/logs?%s", dockerAPIVersion, c.ID, q)
+	url := fmt.Sprintf("http://docker/%s/containers/%s/logs?%s", d.getAPIVersion(), c.ID, q)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
