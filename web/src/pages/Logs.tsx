@@ -220,6 +220,46 @@ function facetForDeviceIDs(ids: string[]): Facet {
   return { label: 'device_id', value: ids.join('|'), op: '=~' };
 }
 
+// Device IDs implied by the top-bar role/system/environment/device filters.
+// null = no scope (all devices).
+function scopedDeviceIDs(
+  edges: Edge[],
+  deviceFilter: string,
+  systemFilter: string,
+  environmentFilter: EnvironmentFilterValue,
+  roleFilter: '' | EdgeRole,
+): string[] | null {
+  if (deviceFilter) return [deviceFilter];
+  if (systemFilter || environmentFilter || roleFilter) {
+    return deviceIDsFromEdges(edges, (e) => {
+      if (systemFilter && e.system_name?.trim() !== systemFilter) return false;
+      if (!matchesEnvironmentFilter(e.environment_tag, environmentFilter)) return false;
+      if (
+        roleFilter &&
+        !(Array.isArray(e.roles) && (e.roles as string[]).includes(roleFilter))
+      ) {
+        return false;
+      }
+      return true;
+    });
+  }
+  return null;
+}
+
+function deviceScopeStreamSelector(ids: string[] | null): string {
+  if (ids === null) return '';
+  if (ids.length === 0) return '{device_id="__no_match__"}';
+  if (ids.length === 1) return `{device_id="${ids[0]}"}`;
+  return `{device_id=~"${ids.join('|')}"}`;
+}
+
+function rowMatchesDeviceScope(labels: Record<string, string>, ids: string[] | null): boolean {
+  if (ids === null) return true;
+  const did = labels.device_id;
+  if (!did) return false;
+  return ids.includes(did);
+}
+
 // Convert a Loki query_range response into our flat row model. Returns
 // rows sorted newest-first.
 function streamsToRows(resp: { resultType: string; result: unknown }): LogRow[] {
@@ -298,6 +338,16 @@ export default function LogsPage() {
   const findInputRef = useRef<HTMLInputElement | null>(null);
   const rowsContainerRef = useRef<HTMLDivElement | null>(null);
 
+  const scopeDeviceIDs = useMemo(
+    () => scopedDeviceIDs(edges, deviceFilter, systemFilter, environmentFilter, roleFilter),
+    [edges, deviceFilter, systemFilter, environmentFilter, roleFilter],
+  );
+
+  const scopeStreamSelector = useMemo(
+    () => deviceScopeStreamSelector(scopeDeviceIDs),
+    [scopeDeviceIDs],
+  );
+
   // Build the top-bar selector contributions. Device picks the right
   // label key based on what's actually present in the rows (the
   // promtail/filelog conventions are: `host` for collectors, `device_id`
@@ -305,30 +355,15 @@ export default function LogsPage() {
   // edges API gives us that id directly.
   const topbarFacets = useMemo<Facet[]>(() => {
     const out: Facet[] = [];
-    // deviceFilter (single id) wins over systemFilter (multi-device set)
-    // and roleFilter — explicit device pick is the narrowest scope.
-    if (deviceFilter) {
-      out.push(facetForDeviceIDs([deviceFilter]));
-    } else if (systemFilter || environmentFilter || roleFilter) {
-      const ids = deviceIDsFromEdges(edges, (e) => {
-        if (systemFilter && e.system_name?.trim() !== systemFilter) return false;
-        if (!matchesEnvironmentFilter(e.environment_tag, environmentFilter)) return false;
-        if (
-          roleFilter &&
-          !(Array.isArray(e.roles) && (e.roles as string[]).includes(roleFilter))
-        ) {
-          return false;
-        }
-        return true;
-      });
-      out.push(facetForDeviceIDs(ids));
+    if (scopeDeviceIDs !== null) {
+      out.push(facetForDeviceIDs(scopeDeviceIDs));
     }
     if (sourceFilterKey) {
       const parsed = parseSourceOptionKey(sourceFilterKey);
       if (parsed) out.push(parsed.facet);
     }
     return out;
-  }, [deviceFilter, systemFilter, environmentFilter, roleFilter, sourceFilterKey, edges]);
+  }, [scopeDeviceIDs, sourceFilterKey]);
 
   const systemNames = useMemo(() => {
     const set = new Set<string>();
@@ -527,14 +562,19 @@ export default function LogsPage() {
   }, [forceTick]);
 
   // Index Loki label values for unit / filename / file paths / container so the
-  // dropdown isn't limited to the current 1000-row window.
+  // dropdown isn't limited to the current 1000-row window. Scoped by the same
+  // role/system/environment/device filters as the log query.
   useEffect(() => {
     let cancelled = false;
     const win = resolveWindow();
     if (!win) return;
     void (async () => {
       try {
-        const params = { start: win.start, end: win.end };
+        const params = {
+          start: win.start,
+          end: win.end,
+          ...(scopeStreamSelector ? { query: scopeStreamSelector } : {}),
+        };
         const [units, filenames, sources, containers] = await Promise.all([
           listLogLabelValues('unit', params),
           listLogLabelValues('filename', params),
@@ -561,7 +601,7 @@ export default function LogsPage() {
     return () => {
       cancelled = true;
     };
-  }, [resolveWindow, forceTick, range, customStart, customEnd]);
+  }, [resolveWindow, forceTick, range, customStart, customEnd, scopeStreamSelector]);
 
   const sourceOptions = useMemo((): SourceOption[] => {
     const tally = new Map<string, { opt: SourceOption; count: number }>();
@@ -591,6 +631,7 @@ export default function LogsPage() {
     }
 
     for (const r of rows) {
+      if (!rowMatchesDeviceScope(r.labels, scopeDeviceIDs)) continue;
       const u = r.labels.unit;
       if (u) add({ kind: 'unit', value: u, facet: { label: 'unit', value: u, op: '=' } }, 1);
       const f = r.labels.filename;
@@ -608,7 +649,7 @@ export default function LogsPage() {
       .filter(({ opt }) => sourceKinds[opt.kind])
       .sort((a, b) => b.count - a.count || a.opt.value.localeCompare(b.opt.value))
       .map(({ opt }) => opt);
-  }, [rows, indexedSourceLabels, sourceKinds]);
+  }, [rows, indexedSourceLabels, sourceKinds, scopeDeviceIDs]);
 
   const sourceOptionsByKind = useMemo(() => {
     const out: Record<SourceKind, SourceOption[]> = { file: [], unit: [], container: [] };
@@ -622,6 +663,13 @@ export default function LogsPage() {
       setSourceFilterKey('');
     }
   };
+
+  // Drop file/unit/container pick when scope changes and it falls off the list.
+  useEffect(() => {
+    if (!sourceFilterKey) return;
+    const stillValid = sourceOptions.some((o) => sourceOptionKey(o) === sourceFilterKey);
+    if (!stillValid) setSourceFilterKey('');
+  }, [sourceFilterKey, sourceOptions]);
 
   const submit = (e?: React.FormEvent) => {
     e?.preventDefault();

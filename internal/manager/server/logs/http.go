@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -32,6 +33,7 @@ type Querier interface {
 	QueryRange(ctx context.Context, opts logquery.QueryRangeOptions) (*logquery.QueryRangeResult, error)
 	LabelNames(ctx context.Context, start, end time.Time) ([]string, error)
 	LabelValues(ctx context.Context, name string, start, end time.Time) ([]string, error)
+	LabelValuesWithQuery(ctx context.Context, name, query string, start, end time.Time) ([]string, error)
 }
 
 // Handler exposes the auth'd Loki query proxy. Requires an underlying
@@ -170,10 +172,17 @@ func (h *Handler) labelValues(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	from, _ := parseTime(q.Get("start"))
 	to, _ := parseTime(q.Get("end"))
+	querySelector := strings.TrimSpace(q.Get("query"))
 
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	out, err := h.q.LabelValues(ctx, name, from, to)
+	var out []string
+	var err error
+	if querySelector != "" {
+		out, err = h.q.LabelValuesWithQuery(ctx, name, querySelector, from, to)
+	} else {
+		out, err = h.q.LabelValues(ctx, name, from, to)
+	}
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return

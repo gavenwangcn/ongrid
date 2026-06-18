@@ -43,10 +43,14 @@ export function listLogLabels(params?: { start?: string; end?: string }) {
   return request<{ labels: string[] }>('GET', `/logs/labels${suffix}`);
 }
 
-export function listLogLabelValues(name: string, params?: { start?: string; end?: string }) {
+export function listLogLabelValues(
+  name: string,
+  params?: { start?: string; end?: string; query?: string },
+) {
   const qs = new URLSearchParams();
   if (params?.start) qs.set('start', params.start);
   if (params?.end) qs.set('end', params.end);
+  if (params?.query) qs.set('query', params.query);
   const suffix = qs.toString() ? `?${qs.toString()}` : '';
   return request<{ values: string[] }>('GET', `/logs/labels/${encodeURIComponent(name)}/values${suffix}`);
 }
