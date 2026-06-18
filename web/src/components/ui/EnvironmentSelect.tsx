@@ -9,6 +9,7 @@ import { useI18n } from '@/i18n/locale';
 export type EnvironmentFilterValue = '' | EnvironmentTag;
 
 type Variant = 'chip' | 'block';
+type Purpose = 'filter' | 'assign';
 
 export function EnvironmentSelect({
   value,
@@ -16,16 +17,22 @@ export function EnvironmentSelect({
   className,
   showLabel = true,
   variant = 'chip',
+  purpose = 'filter',
 }: {
   value: EnvironmentFilterValue;
   onChange(value: EnvironmentFilterValue): void;
   className?: string;
   showLabel?: boolean;
   variant?: Variant;
+  purpose?: Purpose;
 }) {
   const { tr } = useI18n();
+  const emptyLabel =
+    purpose === 'assign'
+      ? tr('未设置', 'Unset')
+      : tr('全部环境', 'All environments');
   const options: { value: EnvironmentFilterValue; label: string }[] = [
-    { value: '', label: tr('全部环境', 'All environments') },
+    { value: '', label: emptyLabel },
     ...ENVIRONMENT_TAGS.map((tag) => ({
       value: tag,
       label: tr(ENVIRONMENT_TAG_LABELS[tag], ENVIRONMENT_TAG_LABELS_EN[tag]),

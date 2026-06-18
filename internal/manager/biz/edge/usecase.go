@@ -292,6 +292,60 @@ func collectDeviceIDsForEdge(edge *model.Edge, links devicebiz.EdgeDeviceRepo, c
 	return ids
 }
 
+// PatchMetaParams carries optional operator PATCH fields. Nil pointers leave
+// the corresponding field unchanged.
+type PatchMetaParams struct {
+	Name           *string
+	Hostname       *string
+	SystemName     *string
+	DeviceIP       *string
+	EnvironmentTag *string
+}
+
+// PatchMeta applies operator-editable edge/device metadata from PATCH /v1/edges/{id}.
+func (u *Usecase) PatchMeta(ctx context.Context, edgeID uint64, p PatchMetaParams) error {
+	if u.repo == nil {
+		return errs.ErrNotWiredYet
+	}
+	edge, err := u.repo.GetByID(ctx, edgeID)
+	if err != nil {
+		return err
+	}
+	if p.Name != nil {
+		if err := u.repo.UpdateName(ctx, edgeID, strings.TrimSpace(*p.Name)); err != nil {
+			return err
+		}
+	}
+	if p.Hostname != nil {
+		hostname := strings.TrimSpace(*p.Hostname)
+		if hostname == "" {
+			return fmt.Errorf("%w: hostname cannot be empty", errs.ErrInvalid)
+		}
+		if edge.DeviceID == nil || u.devices == nil {
+			return fmt.Errorf("%w: hostname can only be updated after the host device is linked", errs.ErrInvalid)
+		}
+		if err := u.devices.UpdateHostname(ctx, *edge.DeviceID, hostname); err != nil {
+			return err
+		}
+	}
+	systemName := edge.SystemName
+	deviceIP := edge.DeviceIP
+	environmentTag := edge.EnvironmentTag
+	if p.SystemName != nil {
+		systemName = *p.SystemName
+	}
+	if p.DeviceIP != nil {
+		deviceIP = *p.DeviceIP
+	}
+	if p.EnvironmentTag != nil {
+		environmentTag = *p.EnvironmentTag
+	}
+	if p.SystemName != nil || p.DeviceIP != nil || p.EnvironmentTag != nil {
+		return u.UpdateOperatorMeta(ctx, edgeID, systemName, deviceIP, environmentTag)
+	}
+	return nil
+}
+
 // UpdateOperatorMeta updates pending system/IP metadata on the edge row.
 // When a host device is already linked, the same values are written to Device.
 func (u *Usecase) UpdateOperatorMeta(ctx context.Context, edgeID uint64, systemName, deviceIP, environmentTag string) error {

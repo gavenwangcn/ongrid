@@ -71,6 +71,10 @@ func (s *Service) UpdateOperatorMeta(ctx context.Context, id uint64, systemName,
 	return s.uc.UpdateOperatorMeta(ctx, id, systemName, deviceIP, environmentTag)
 }
 
+func (s *Service) PatchMeta(ctx context.Context, id uint64, p biz.PatchMetaParams) error {
+	return s.uc.PatchMeta(ctx, id, p)
+}
+
 // RotateSecret generates + stores a new hash, returns plaintext ONCE.
 func (s *Service) RotateSecret(ctx context.Context, id uint64) (string, error) {
 	return s.uc.RotateSecret(ctx, id)

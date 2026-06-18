@@ -66,6 +66,10 @@ type Repo interface {
 	// UpdateNameDescription updates operator-editable display fields.
 	UpdateNameDescription(ctx context.Context, id uint64, name, description string) error
 
+	// UpdateHostname overwrites the operator-edited hostname on the device row.
+	// Does not change fingerprint or agent-reported facts on next register.
+	UpdateHostname(ctx context.Context, id uint64, hostname string) error
+
 	// UpdateOperatorMeta updates operator-assigned system / IP / environment metadata.
 	UpdateOperatorMeta(ctx context.Context, id uint64, systemName, deviceIP, environmentTag string) error
 

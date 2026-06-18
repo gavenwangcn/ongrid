@@ -185,6 +185,20 @@ func (r *Repo) UpdateNameDescription(ctx context.Context, id uint64, name, descr
 	return nil
 }
 
+// UpdateHostname writes the operator-editable hostname display field.
+func (r *Repo) UpdateHostname(ctx context.Context, id uint64, hostname string) error {
+	res := r.db.WithContext(ctx).Model(&model.Device{}).Where("id = ?", id).Updates(map[string]any{
+		"hostname": strings.TrimSpace(hostname),
+	})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return errs.ErrNotFound
+	}
+	return nil
+}
+
 // MarkOnline flips online=true and bumps last_seen_at.
 func (r *Repo) MarkOnline(ctx context.Context, id uint64) error {
 	now := time.Now().UTC()

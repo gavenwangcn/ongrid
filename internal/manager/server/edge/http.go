@@ -44,6 +44,7 @@ type EdgeService interface {
 	Get(ctx context.Context, id uint64) (*model.Edge, error)
 	Delete(ctx context.Context, id uint64) error
 	UpdateOperatorMeta(ctx context.Context, id uint64, systemName, deviceIP, environmentTag string) error
+	PatchMeta(ctx context.Context, id uint64, p biz.PatchMetaParams) error
 	RotateSecret(ctx context.Context, id uint64) (string, error)
 	UpgradeAgent(ctx context.Context, edgeID uint64, url, sha256 string) (tunnel.AgentUpgradeResponse, error)
 	FetchPackage(ctx context.Context, edgeID uint64, url, sha256, version string) (tunnel.FetchPackageResponse, error)
@@ -391,6 +392,8 @@ type getResp struct {
 }
 
 type patchEdgeReq struct {
+	Name           *string `json:"name,omitempty"`
+	Hostname       *string `json:"hostname,omitempty"`
 	SystemName     *string `json:"system_name,omitempty"`
 	DeviceIP       *string `json:"device_ip,omitempty"`
 	EnvironmentTag *string `json:"environment_tag,omitempty"`
@@ -526,24 +529,13 @@ func (h *Handler) patchEdge(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, errors.Join(errs.ErrInvalid, err))
 		return
 	}
-	e, err := h.svc.Get(r.Context(), id)
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	systemName := e.SystemName
-	deviceIPVal := e.DeviceIP
-	environmentTag := e.EnvironmentTag
-	if req.SystemName != nil {
-		systemName = *req.SystemName
-	}
-	if req.DeviceIP != nil {
-		deviceIPVal = *req.DeviceIP
-	}
-	if req.EnvironmentTag != nil {
-		environmentTag = *req.EnvironmentTag
-	}
-	if err := h.svc.UpdateOperatorMeta(r.Context(), id, systemName, deviceIPVal, environmentTag); err != nil {
+	if err := h.svc.PatchMeta(r.Context(), id, biz.PatchMetaParams{
+		Name:           req.Name,
+		Hostname:       req.Hostname,
+		SystemName:     req.SystemName,
+		DeviceIP:       req.DeviceIP,
+		EnvironmentTag: req.EnvironmentTag,
+	}); err != nil {
 		writeErr(w, err)
 		return
 	}

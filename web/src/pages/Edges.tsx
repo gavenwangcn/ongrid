@@ -25,7 +25,8 @@ import {
   upgradeEdgeAgent,
   upgradeEdgePackage,
 } from '@/api/edges';
-import { environmentTagLabel } from '@/api/environment';
+import { environmentTagLabel, type EnvironmentTag } from '@/api/environment';
+import { EnvironmentSelect } from '@/components/ui/EnvironmentSelect';
 import { getManagerVersion } from '@/api/version';
 import { usePermissions } from '@/store/me';
 import { notifyDevicesChanged } from '@/lib/events';
@@ -116,11 +117,12 @@ export default function EdgesPage() {
   }, [refresh]);
   usePoll(refresh, 10_000);
 
-  async function onCreate(name: string, systemName: string, deviceIP: string) {
+  async function onCreate(name: string, systemName: string, deviceIP: string, environmentTag: EnvironmentTag | '') {
     const created: CreateEdgeResponse = await createEdge({
       name,
       system_name: systemName,
       device_ip: deviceIP,
+      environment_tag: environmentTag,
     });
     setSecretReveal({
       title: tr('已创建设备', 'Device created'),
@@ -955,12 +957,13 @@ function CreateEdgeModal({
 }: {
   open: boolean;
   onClose(): void;
-  onSubmit(name: string, systemName: string, deviceIP: string): Promise<void>;
+  onSubmit(name: string, systemName: string, deviceIP: string, environmentTag: EnvironmentTag | ''): Promise<void>;
 }) {
   const { tr } = useI18n();
   const [name, setName] = useState('');
   const [systemName, setSystemName] = useState('');
   const [deviceIP, setDeviceIP] = useState('');
+  const [environmentTag, setEnvironmentTag] = useState<EnvironmentTag | ''>('');
   const [pending, setPending] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -969,6 +972,7 @@ function CreateEdgeModal({
       setName('');
       setSystemName('');
       setDeviceIP('');
+      setEnvironmentTag('');
       setErr(null);
       setPending(false);
     }
@@ -979,7 +983,7 @@ function CreateEdgeModal({
     setPending(true);
     setErr(null);
     try {
-      await onSubmit(name.trim(), systemName.trim(), deviceIP.trim());
+      await onSubmit(name.trim(), systemName.trim(), deviceIP.trim(), environmentTag);
     } catch (e) {
       setErr((e as Error).message || tr('创建失败', 'Create failed'));
     } finally {
@@ -1035,6 +1039,14 @@ function CreateEdgeModal({
         onChange={(e) => setSystemName(e.target.value)}
         placeholder={tr('如：订单中心、监控平台', 'e.g. order-service, monitoring')}
         className="w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-100 focus:border-zinc-600 focus:outline-none"
+      />
+      <EnvironmentSelect
+        purpose="assign"
+        variant="block"
+        showLabel
+        value={environmentTag}
+        onChange={setEnvironmentTag}
+        className="mt-3"
       />
       <label htmlFor="edge-device-ip" className="mb-1 mt-3 block text-[11px] text-zinc-500">
         {tr('设备 IP', 'Device IP')}

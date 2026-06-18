@@ -36,12 +36,8 @@ import {
   type Edge,
   type PromMatrixSeries,
 } from '@/api/edges';
-import {
-  ENVIRONMENT_TAGS,
-  ENVIRONMENT_TAG_LABELS,
-  ENVIRONMENT_TAG_LABELS_EN,
-  type EnvironmentTag,
-} from '@/api/environment';
+import { EnvironmentSelect } from '@/components/ui/EnvironmentSelect';
+import { type EnvironmentTag } from '@/api/environment';
 import {
   listEdgePlugins,
   setEdgePlugin,
@@ -406,36 +402,51 @@ function EdgeMetaPanel({
   onSaved,
 }: {
   edge: Edge;
-  onSaved(patch: Pick<Edge, 'system_name' | 'device_ip' | 'environment_tag'>): void;
+  onSaved(patch: Pick<Edge, 'name' | 'system_name' | 'device_ip' | 'environment_tag' | 'host_info'>): void;
 }) {
   const { tr } = useI18n();
+  const [name, setName] = useState(edge.name ?? '');
+  const [hostname, setHostname] = useState(hostnameFromEdge(edge));
   const [systemName, setSystemName] = useState(edge.system_name ?? '');
   const [deviceIP, setDeviceIP] = useState(edge.device_ip ?? '');
   const [environmentTag, setEnvironmentTag] = useState<EnvironmentTag | ''>(edge.environment_tag ?? '');
   const [pending, setPending] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [ok, setOk] = useState(false);
+  const hostnameEditable = Boolean(edge.device_id);
 
   useEffect(() => {
+    setName(edge.name ?? '');
+    setHostname(hostnameFromEdge(edge));
     setSystemName(edge.system_name ?? '');
     setDeviceIP(edge.device_ip ?? '');
     setEnvironmentTag(edge.environment_tag ?? '');
-  }, [edge.id, edge.system_name, edge.device_ip, edge.environment_tag]);
+  }, [edge.id, edge.name, edge.system_name, edge.device_ip, edge.environment_tag, edge.host_info]);
 
   async function save() {
     setPending(true);
     setErr(null);
     setOk(false);
     try {
+      const trimmedName = name.trim();
+      const trimmedHostname = hostname.trim();
       await updateEdgeMeta(edge.id, {
+        name: trimmedName,
+        ...(hostnameEditable && trimmedHostname ? { hostname: trimmedHostname } : {}),
         system_name: systemName.trim(),
         device_ip: deviceIP.trim(),
         environment_tag: environmentTag,
       });
+      const hostInfo =
+        hostnameEditable && trimmedHostname
+          ? mergeHostInfoHostname(edge.host_info, trimmedHostname)
+          : edge.host_info;
       onSaved({
+        name: trimmedName,
         system_name: systemName.trim(),
         device_ip: deviceIP.trim(),
         environment_tag: environmentTag,
+        host_info: hostInfo,
       });
       setOk(true);
     } catch (e) {
@@ -450,29 +461,43 @@ function EdgeMetaPanel({
       <h2 className="text-sm font-medium text-zinc-100">{tr('归属信息', 'Attribution')}</h2>
       <p className="mt-1 text-[11px] text-zinc-500">
         {tr(
-          '系统名称、环境标签与设备 IP 用于告警展示、报告范围筛选与 AI 按系统维度巡检。',
-          'System name, environment tag, and IP feed alerts, report scoping, and system-scoped AI checks.',
+          '名称、主机名、系统名称、环境标签与设备 IP 用于列表展示、告警、报告范围筛选与 AI 按系统维度巡检。',
+          'Name, hostname, system name, environment tag, and IP feed lists, alerts, report scoping, and system-scoped AI checks.',
         )}
       </p>
-      <label className="mb-1 mt-4 block text-[11px] text-zinc-500">{tr('系统名称', 'System name')}</label>
+      <label className="mb-1 mt-4 block text-[11px] text-zinc-500">{tr('名称', 'Name')}</label>
+      <input
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        placeholder={tr('留空则上线后自动填主机名', 'Leave blank to auto-fill on first heartbeat')}
+        className="w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-100 focus:border-zinc-600 focus:outline-none"
+      />
+      <label className="mb-1 mt-3 block text-[11px] text-zinc-500">{tr('主机名', 'Hostname')}</label>
+      <input
+        value={hostname}
+        onChange={(e) => setHostname(e.target.value)}
+        disabled={!hostnameEditable}
+        placeholder={
+          hostnameEditable
+            ? tr('设备上报的主机名', 'Reported hostname')
+            : tr('设备上线后可编辑', 'Editable after the host is online')
+        }
+        className="w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-100 focus:border-zinc-600 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+      />
+      <label className="mb-1 mt-3 block text-[11px] text-zinc-500">{tr('系统名称', 'System name')}</label>
       <input
         value={systemName}
         onChange={(e) => setSystemName(e.target.value)}
         className="w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-100 focus:border-zinc-600 focus:outline-none"
       />
-      <label className="mb-1 mt-3 block text-[11px] text-zinc-500">{tr('环境标签', 'Environment tag')}</label>
-      <select
+      <EnvironmentSelect
+        purpose="assign"
+        variant="block"
+        showLabel
         value={environmentTag}
-        onChange={(e) => setEnvironmentTag(e.target.value as EnvironmentTag | '')}
-        className="w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-100 focus:border-zinc-600 focus:outline-none"
-      >
-        <option value="">{tr('未设置', 'Unset')}</option>
-        {ENVIRONMENT_TAGS.map((tag) => (
-          <option key={tag} value={tag}>
-            {tr(ENVIRONMENT_TAG_LABELS[tag], ENVIRONMENT_TAG_LABELS_EN[tag])}
-          </option>
-        ))}
-      </select>
+        onChange={setEnvironmentTag}
+        className="mt-3"
+      />
       <label className="mb-1 mt-3 block text-[11px] text-zinc-500">{tr('设备 IP', 'Device IP')}</label>
       <input
         value={deviceIP}
@@ -499,6 +524,51 @@ function EdgeMetaPanel({
       </div>
     </div>
   );
+}
+
+function hostnameFromEdge(edge: Edge): string {
+  const hostInfo = edge.host_info;
+  if (!hostInfo) return '';
+  if (typeof hostInfo === 'string') {
+    try {
+      const parsed = JSON.parse(hostInfo) as Record<string, unknown>;
+      return pickHostnameValue(parsed);
+    } catch {
+      const raw = hostInfo.trim();
+      return raw && !raw.startsWith('{') ? raw : '';
+    }
+  }
+  if (typeof hostInfo === 'object') {
+    return pickHostnameValue(hostInfo as Record<string, unknown>);
+  }
+  return '';
+}
+
+function pickHostnameValue(value: Record<string, unknown>): string {
+  for (const key of ['hostname', 'hostName', 'nodename', 'nodeName'] as const) {
+    const v = value[key];
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  return '';
+}
+
+function mergeHostInfoHostname(
+  hostInfo: Edge['host_info'],
+  hostname: string,
+): Edge['host_info'] {
+  if (!hostInfo) return { hostname };
+  if (typeof hostInfo === 'string') {
+    try {
+      const parsed = JSON.parse(hostInfo) as Record<string, unknown>;
+      return { ...parsed, hostname };
+    } catch {
+      return { hostname };
+    }
+  }
+  if (typeof hostInfo === 'object') {
+    return { ...(hostInfo as Record<string, unknown>), hostname };
+  }
+  return { hostname };
 }
 
 // matrixToPanel pivots PromMatrixSeries[] into the recharts row form. Each

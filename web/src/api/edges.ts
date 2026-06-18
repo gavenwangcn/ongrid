@@ -156,7 +156,13 @@ export function createEdge(input: {
 
 export function updateEdgeMeta(
   id: string | number,
-  input: { system_name?: string; device_ip?: string; environment_tag?: EnvironmentTag | '' },
+  input: {
+    name?: string;
+    hostname?: string;
+    system_name?: string;
+    device_ip?: string;
+    environment_tag?: EnvironmentTag | '';
+  },
 ) {
   return request<void>('PATCH', `/edges/${encodeURIComponent(String(id))}`, input);
 }

@@ -156,6 +156,17 @@ func (d *fakeDeviceRepo) UpdateNameDescription(_ context.Context, id uint64, nam
 	return nil
 }
 
+func (d *fakeDeviceRepo) UpdateHostname(_ context.Context, id uint64, hostname string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	dev, ok := d.byID[id]
+	if !ok {
+		return errs.ErrNotFound
+	}
+	dev.Hostname = hostname
+	return nil
+}
+
 func (d *fakeDeviceRepo) UpdateOperatorMeta(_ context.Context, id uint64, systemName, deviceIP, environmentTag string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
