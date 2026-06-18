@@ -20,7 +20,9 @@ import (
 )
 
 const (
-	dockerAPIVersion       = "v1.41"
+	// dockerAPIVersion is the Engine API path segment for unix-socket HTTP
+	// calls. Docker Engine v29+ rejects clients below v1.44.
+	dockerAPIVersion       = "v1.44"
 	dockerReconcilePeriod  = 15 * time.Second
 	dockerPushBatchWait    = 1 * time.Second
 	dockerPushBatchMax     = 200
