@@ -2670,6 +2670,7 @@ func loadBootstrapRegistries(log *slog.Logger) (*aiopschatruntime.SkillRegistry,
 // 读代码的能力"; TestCoordinatorRosterHasCodeTools pins them here.
 var coordinatorToolNames = []string{
 	"query_devices",
+	"query_systems",
 	"query_incidents",
 	"get_topology",
 	"list_database_sources",
@@ -2859,7 +2860,8 @@ func buildAIOpsRuntime(
 	// internal/manager/biz/aiops/chatruntime/worker.go).
 	//
 	// Coordinator whitelist:
-	//   - query_devices — device id resolution / existence check
+	//   - query_devices — flat device list / device id resolution
+	//   - query_systems — business-system inventory (counts per system)
 	//   - query_incidents — list active incidents (triage input)
 	//   - get_topology — single-shot cluster overview
 	//   - list_database_sources — configured DB metrics source inventory

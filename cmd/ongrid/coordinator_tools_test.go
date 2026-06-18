@@ -18,7 +18,7 @@ func TestCoordinatorRosterHasCodeTools(t *testing.T) {
 		}
 	}
 	// The lookup/triage baseline must also stay (don't accidentally drop it).
-	for _, want := range []string{"query_knowledge", "query_devices", "list_database_sources", "analyze_database_status", "list_metric_catalog"} {
+	for _, want := range []string{"query_knowledge", "query_devices", "query_systems", "list_database_sources", "analyze_database_status", "list_metric_catalog"} {
 		if !slices.Contains(coordinatorToolNames, want) {
 			t.Errorf("coordinator roster missing baseline tool %q", want)
 		}

@@ -10,6 +10,7 @@ import (
 	devicebiz "github.com/ongridio/ongrid/internal/manager/biz/device"
 	edgebiz "github.com/ongridio/ongrid/internal/manager/biz/edge"
 	devicemodel "github.com/ongridio/ongrid/internal/manager/model/device"
+	edgemodel "github.com/ongridio/ongrid/internal/manager/model/edge"
 )
 
 // ToolNameQueryEdges is the stable wire name the LLM sees.
@@ -27,7 +28,7 @@ const ToolNameQueryEdges = "query_devices"
 // devices (machines) match a coarse status / role / freshness filter.
 const QueryEdgesDescription = "List ongrid-managed devices (hosts) filtered by role, online status, system name, last-seen freshness or a name substring. " +
 	"Use this whenever the question is about which machines exist, which belong to a business system, or which ones match a coarse attribute. " +
-	"Returns an array of {device_id, name, hostname, system_name, device_ip, online, roles, last_seen_at}; use device_id (NOT edge_id) in any PromQL/LogQL/TraceQL you generate."
+	"Returns an array of {device_id, name, hostname, system_name, device_ip, environment_tag, online, roles, last_seen_at}; use device_id (NOT edge_id) in any PromQL/LogQL/TraceQL you generate."
 
 // QueryEdgesSchema is the JSON Schema of the tool's argument object.
 var QueryEdgesSchema = json.RawMessage(`{
@@ -83,15 +84,28 @@ type EdgeRow struct {
 	ID         uint64     `json:"device_id"`
 	Name       string     `json:"name"`
 	Hostname   string     `json:"hostname,omitempty"`
-	SystemName string     `json:"system_name,omitempty"`
-	DeviceIP   string     `json:"device_ip,omitempty"`
-	Online     bool       `json:"online"`
+	SystemName     string     `json:"system_name,omitempty"`
+	DeviceIP       string     `json:"device_ip,omitempty"`
+	EnvironmentTag string     `json:"environment_tag,omitempty"`
+	Online         bool       `json:"online"`
 	Roles      []string   `json:"roles"`
 	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
 }
 
 // queryEdgesCallTimeout caps the biz call.
 const queryEdgesCallTimeout = 10 * time.Second
+
+func edgeToEdgeRow(e *edgemodel.Edge) EdgeRow {
+	return EdgeRow{
+		ID:             e.ID,
+		Name:           e.Name,
+		SystemName:     e.SystemName,
+		DeviceIP:       e.DeviceIP,
+		EnvironmentTag: e.EnvironmentTag,
+		Online:         e.Status == "online",
+		LastSeenAt:     e.LastSeenAt,
+	}
+}
 
 // executeQueryEdges resolves the filter and lists matching devices.
 func (r *Registry) executeQueryEdges(ctx context.Context, args json.RawMessage) (ExecuteResult, error) {
@@ -162,16 +176,7 @@ func (r *Registry) executeQueryEdges(ctx context.Context, args json.RawMessage) 
 			if in.NameContains != "" && !strings.Contains(d.Name, in.NameContains) && !strings.Contains(d.Hostname, in.NameContains) {
 				continue
 			}
-			rows = append(rows, EdgeRow{
-				ID:         d.ID,
-				Name:       d.Name,
-				Hostname:   d.Hostname,
-				SystemName: d.SystemName,
-				DeviceIP:   d.DeviceIP,
-				Online:     d.Online,
-				Roles:      devicemodel.DecodeRoles(d.Roles),
-				LastSeenAt: d.LastSeenAt,
-			})
+			rows = append(rows, deviceToEdgeRow(d))
 			if len(rows) >= in.Limit {
 				break
 			}
@@ -209,12 +214,7 @@ func (r *Registry) executeQueryEdges(ctx context.Context, args json.RawMessage) 
 		if in.NameContains != "" && !strings.Contains(e.Name, in.NameContains) {
 			continue
 		}
-		rows = append(rows, EdgeRow{
-			ID:         e.ID,
-			Name:       e.Name,
-			Online:     e.Status == "online",
-			LastSeenAt: e.LastSeenAt,
-		})
+		rows = append(rows, edgeToEdgeRow(e))
 		if len(rows) >= in.Limit {
 			break
 		}

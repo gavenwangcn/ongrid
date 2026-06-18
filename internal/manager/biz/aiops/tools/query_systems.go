@@ -61,14 +61,15 @@ const querySystemsCallTimeout = 10 * time.Second
 
 func deviceToEdgeRow(d *devicemodel.Device) EdgeRow {
 	return EdgeRow{
-		ID:         d.ID,
-		Name:       d.Name,
-		Hostname:   d.Hostname,
-		SystemName: d.SystemName,
-		DeviceIP:   d.DeviceIP,
-		Online:     d.Online,
-		Roles:      devicemodel.DecodeRoles(d.Roles),
-		LastSeenAt: d.LastSeenAt,
+		ID:             d.ID,
+		Name:           d.Name,
+		Hostname:       d.Hostname,
+		SystemName:     d.SystemName,
+		DeviceIP:       d.DeviceIP,
+		EnvironmentTag: d.EnvironmentTag,
+		Online:         d.Online,
+		Roles:          devicemodel.DecodeRoles(d.Roles),
+		LastSeenAt:     d.LastSeenAt,
 	}
 }
 
