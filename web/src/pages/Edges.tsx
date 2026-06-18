@@ -363,8 +363,8 @@ export default function EdgesPage() {
       <CreateEdgeModal
         open={createOpen}
         onClose={() => setCreateOpen(false)}
-        onSubmit={async (name, systemName, deviceIP) => {
-          await onCreate(name, systemName, deviceIP);
+        onSubmit={async (name, systemName, deviceIP, environmentTag) => {
+          await onCreate(name, systemName, deviceIP, environmentTag);
           setCreateOpen(false);
         }}
       />
