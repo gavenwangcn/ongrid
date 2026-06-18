@@ -210,26 +210,6 @@ function deviceIDsFromEdges(edges: Edge[], predicate: (e: Edge) => boolean): str
     .map((e) => String(e.device_id));
 }
 
-// Loki `device_id` may be the host device_id (correct) or legacy edge.id
-// from older promtail configs — include both when filtering by device/system.
-function logLabelIDsFromEdges(edges: Edge[], predicate: (e: Edge) => boolean): string[] {
-  const ids = new Set<string>();
-  for (const e of edges) {
-    if (!predicate(e)) continue;
-    if (e.device_id != null) ids.add(String(e.device_id));
-    if (e.id) ids.add(String(e.id));
-  }
-  return Array.from(ids);
-}
-
-function logLabelIDsForDevice(edges: Edge[], deviceId: string): string[] {
-  const ids = new Set<string>();
-  if (deviceId) ids.add(deviceId);
-  const edge = edges.find((e) => String(e.device_id) === deviceId);
-  if (edge?.id) ids.add(String(edge.id));
-  return Array.from(ids);
-}
-
 function facetForDeviceIDs(ids: string[]): Facet {
   if (ids.length === 0) {
     return { label: 'device_id', value: '__no_match__', op: '=' };
@@ -328,9 +308,9 @@ export default function LogsPage() {
     // deviceFilter (single id) wins over systemFilter (multi-device set)
     // and roleFilter — explicit device pick is the narrowest scope.
     if (deviceFilter) {
-      out.push(facetForDeviceIDs(logLabelIDsForDevice(edges, deviceFilter)));
+      out.push(facetForDeviceIDs([deviceFilter]));
     } else if (systemFilter || environmentFilter || roleFilter) {
-      const ids = logLabelIDsFromEdges(edges, (e) => {
+      const ids = deviceIDsFromEdges(edges, (e) => {
         if (systemFilter && e.system_name?.trim() !== systemFilter) return false;
         if (!matchesEnvironmentFilter(e.environment_tag, environmentFilter)) return false;
         if (
@@ -1157,8 +1137,8 @@ export default function LogsPage() {
                 {deviceFilter && (
                   <div className="max-w-md text-xs text-zinc-600">
                     {tr(
-                      '已同时匹配 device_id 与 edge 主键（兼容旧 promtail 标签）。若仍无结果，请在 Edge 检查 promtail 是否在推送、ONGRID_PUBLIC_URL 是否可达。',
-                      'Query matches both device_id and edge PK (legacy promtail labels). If still empty, verify promtail push and ONGRID_PUBLIC_URL on the edge.',
+                      '若仍无结果，请在 Edge 检查 logs 插件是否在推送、ONGRID_PUBLIC_URL 是否可达。',
+                      'If still empty, verify the logs plugin is pushing and ONGRID_PUBLIC_URL is reachable on the edge.',
                     )}
                   </div>
                 )}
