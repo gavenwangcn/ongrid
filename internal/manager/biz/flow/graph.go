@@ -73,29 +73,23 @@ type Graph struct {
 	Edges []GraphEdge `json:"edges"`
 }
 
-var knownTypes = map[string]bool{
-	NodeTriggerManual: true,
-	NodeTriggerAlert:  true,
-	NodeTriggerCron:   true,
-	NodeAgent:         true,
-	NodeLLM:           true,
-	NodeTool:          true,
-	NodeCondition:     true,
-	NodeNotify:        true,
-	NodeSet:           true,
-}
-
 var nodeIDRe = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
 
-// portsFor lists the legal source ports per node type. Every type also
-// implicitly allows "error".
+// portsFor lists the legal source ports for a node type, derived from its
+// registered NodeSpec. Every type also implicitly allows "error" (handled
+// by the caller). Unregistered types fall back to [next].
 func portsFor(typ string) []string {
-	switch typ {
-	case NodeCondition:
-		return []string{PortTrue, PortFalse}
-	default:
-		return []string{PortNext}
+	if spec := LookupNode(typ); spec != nil {
+		return spec.Ports
 	}
+	return []string{PortNext}
+}
+
+// isTriggerType reports whether a node type is a trigger (entry point),
+// derived from its NodeSpec Kind — no string-prefix convention.
+func isTriggerType(typ string) bool {
+	spec := LookupNode(typ)
+	return spec != nil && spec.Kind == KindTrigger
 }
 
 // ParseGraph decodes and validates a canvas document. It is the single
@@ -128,7 +122,7 @@ func (g *Graph) Validate() error {
 		if _, dup := byID[n.ID]; dup {
 			return fmt.Errorf("graph: duplicate node id %q", n.ID)
 		}
-		if !knownTypes[n.Type] {
+		if LookupNode(n.Type) == nil {
 			return fmt.Errorf("graph: unknown node type %q (node %s)", n.Type, n.ID)
 		}
 		byID[n.ID] = n
@@ -143,7 +137,7 @@ func (g *Graph) Validate() error {
 		if _, ok := byID[e.Target]; !ok {
 			return fmt.Errorf("graph: edge %s references missing target %q", e.ID, e.Target)
 		}
-		if strings.HasPrefix(byID[e.Target].Type, "trigger.") {
+		if isTriggerType(byID[e.Target].Type) {
 			return fmt.Errorf("graph: edge %s targets trigger %q", e.ID, e.Target)
 		}
 		port := e.SourcePort
@@ -194,7 +188,7 @@ func (g *Graph) Validate() error {
 func (g *Graph) Triggers() []GraphNode {
 	var out []GraphNode
 	for _, n := range g.Nodes {
-		if strings.HasPrefix(n.Type, "trigger.") {
+		if isTriggerType(n.Type) {
 			out = append(out, n)
 		}
 	}

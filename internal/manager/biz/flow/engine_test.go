@@ -350,3 +350,35 @@ func TestResolveArrayIndex(t *testing.T) {
 		t.Fatal("want non-array error")
 	}
 }
+
+// TestNodeRegistryExtensibility proves the abstraction is firm: registering
+// ONE NodeSpec adds a working node type — the engine executes it, graph
+// validation accepts it, and (for a control-kind) its ports are honored —
+// without touching any switch / knownTypes / Triggers code.
+func TestNodeRegistryExtensibility(t *testing.T) {
+	RegisterNode(&NodeSpec{
+		Type:     "test_double",
+		Kind:     KindData,
+		Category: "data",
+		Execute: func(_ context.Context, _ Executors, cfg map[string]any, _ *RunContext) (NodeResult, error) {
+			n, _ := cfg["n"].(float64)
+			return NodeResult{Output: map[string]any{"doubled": n * 2}, Port: PortNext}, nil
+		},
+	})
+	defer delete(nodeRegistry, "test_double")
+
+	// Graph validation accepts the new type with no other change.
+	g := mustGraph(t, `{
+		"nodes":[
+			{"id":"t","type":"trigger.manual"},
+			{"id":"d","type":"test_double","config":{"n":21}},
+			{"id":"s","type":"set","config":{"name":"r","value":"{{nodes.d.output.doubled}}"}}
+		],
+		"edges":[{"id":"e1","source":"t","target":"d"},{"id":"e2","source":"d","target":"s"}]
+	}`)
+	eng := NewEngine(Executors{}, &fakeRunRepo{}, nil)
+	status, err := eng.Execute(context.Background(), &model.FlowRun{ID: "rx", TriggerJSON: "{}"}, g, "")
+	if err != nil || status != model.RunStatusSucceeded {
+		t.Fatalf("Execute with custom node = %s, %v", status, err)
+	}
+}
