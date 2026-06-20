@@ -1417,12 +1417,50 @@ const FIELD_LABELS: Record<string, { zh: string; en: string }> = {
   error_count: { zh: '失败数', en: 'Error count' },
   success_count: { zh: '成功数', en: 'Success count' },
   host_load: { zh: '主机负载', en: 'Host load' },
+  process_list: { zh: '进程列表', en: 'Process list' },
+  processes: { zh: '进程', en: 'Processes' },
+  pid: { zh: 'PID', en: 'PID' },
+  cmdline: { zh: '命令行', en: 'Command line' },
+  user: { zh: '用户', en: 'User' },
   structured: { zh: '结构化输出', en: 'Structured' },
   name: { zh: '名称', en: 'Name' },
   value: { zh: '值', en: 'Value' },
   channels: { zh: '渠道数', en: 'Channels' },
   sent: { zh: '已发送', en: 'Sent' },
   cron: { zh: '定时表达式', en: 'Cron' },
+};
+
+// TOOL_OUTPUT_SHAPES curates the referenceable output paths for the common
+// tools, so a tool node's "本节点输出" panel shows its real fields (cpu_pct,
+// pid, …) BEFORE the user test-runs it. Tools don't declare an output schema,
+// so without this the static shape is just the bare `result` wrapper. Unknown
+// tools fall back to `result` until a test-run expands the live output. (The
+// authoritative fix — tools declaring output fields backend-side — is step 2.)
+const TOOL_OUTPUT_SHAPES: Record<string, string[]> = {
+  get_host_load: [
+    'result.results[0].device_id',
+    'result.results[0].host_load.cpu_pct',
+    'result.results[0].host_load.mem_pct',
+    'result.results[0].host_load.disk_used_pct',
+    'result.results[0].host_load.load1',
+    'result.results[0].host_load.load5',
+    'result.results[0].host_load.load15',
+    'result.results[0].host_load.sampled_at',
+    'result.success_count',
+    'result.error_count',
+  ],
+  get_host_processes: [
+    'result.results[0].device_id',
+    'result.results[0].process_list.processes[0].pid',
+    'result.results[0].process_list.processes[0].name',
+    'result.results[0].process_list.processes[0].cmdline',
+    'result.results[0].process_list.processes[0].cpu_pct',
+    'result.results[0].process_list.processes[0].mem_pct',
+    'result.results[0].process_list.processes[0].user',
+    'result.results[0].process_list.sampled_at',
+    'result.success_count',
+    'result.error_count',
+  ],
 };
 
 function prettifyLeaf(seg: string): string {
@@ -1497,6 +1535,14 @@ function staticOutputHints(
     case 'transform':
       // Output shape = the fields the user declared (dynamic).
       return Object.keys((config?.fields as Record<string, unknown>) ?? {});
+    case 'tool': {
+      // Curated rich shape for known tools; else the bare `result` wrapper
+      // (a test-run then expands the real live output).
+      const toolName = config?.tool as string | undefined;
+      const curated = toolName ? TOOL_OUTPUT_SHAPES[toolName] : undefined;
+      if (curated?.length) return curated;
+      return specShape?.length ? specShape : ['result'];
+    }
     default:
       return specShape?.length ? specShape : [];
   }
