@@ -239,7 +239,7 @@ func (h *Handler) toggle(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Enabled bool `json:"enabled"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&in); err != nil {
 		writeErr(w, errors.Join(errs.ErrInvalid, err))
 		return
 	}

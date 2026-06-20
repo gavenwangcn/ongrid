@@ -186,7 +186,7 @@ func stringify(v any) string {
 func (c *RunContext) EvalCondition(expr string) (bool, error) {
 	ops := []string{"==", "!=", ">=", "<=", ">", "<", " contains "}
 	for _, op := range ops {
-		if i := strings.Index(expr, op); i >= 0 {
+		if i := findOperatorIndex(expr, op); i >= 0 {
 			l, err := c.evalOperand(strings.TrimSpace(expr[:i]))
 			if err != nil {
 				return false, err
@@ -203,6 +203,40 @@ func (c *RunContext) EvalCondition(expr string) (bool, error) {
 		return false, err
 	}
 	return truthy(v), nil
+}
+
+// findOperatorIndex returns the index of op in expr at the TOP LEVEL —
+// outside any quoted string literal and outside any {{...}} template block
+// — or -1. Without this, a quoted RHS like "a==b" or a template path would
+// have its inner operator substring mistaken for the comparison operator
+// (the operator scan runs BEFORE templates are resolved).
+func findOperatorIndex(expr, op string) int {
+	var quote byte
+	braces := 0
+	for i := 0; i < len(expr); i++ {
+		ch := expr[i]
+		if quote != 0 {
+			if ch == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch {
+		case ch == '"' || ch == '\'':
+			quote = ch
+		case ch == '{' && i+1 < len(expr) && expr[i+1] == '{':
+			braces++
+			i++
+		case ch == '}' && i+1 < len(expr) && expr[i+1] == '}':
+			if braces > 0 {
+				braces--
+			}
+			i++
+		case braces == 0 && strings.HasPrefix(expr[i:], op):
+			return i
+		}
+	}
+	return -1
 }
 
 func (c *RunContext) evalOperand(s string) (any, error) {

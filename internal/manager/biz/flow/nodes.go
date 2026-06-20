@@ -49,6 +49,12 @@ type LLMRunner interface {
 type NodeResult struct {
 	Output any
 	Port   string
+	// Vars carries set-node variable writes. The engine applies them to
+	// the shared RunContext UNDER ITS LOCK — executors run OUTSIDE the
+	// engine lock (concurrent fan-out), so an executor must never mutate
+	// rc.Vars directly or it races every other branch. nil for the common
+	// case of a node that sets no vars.
+	Vars map[string]any
 }
 
 // Executors bundles the seams. Zero value works for engine tests.

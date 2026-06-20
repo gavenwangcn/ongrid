@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	model "github.com/ongridio/ongrid/internal/manager/model/flow"
 )
@@ -37,6 +38,7 @@ func (f *fakeRunRepo) ListNodes(context.Context, string) ([]*model.FlowRunNode, 
 	return nil, nil
 }
 func (f *fakeRunRepo) SweepStaleRunning(context.Context, string) (int64, error) { return 0, nil }
+func (f *fakeRunRepo) PruneRuns(context.Context, time.Time) (int64, error)      { return 0, nil }
 
 type fakeAgent struct{ answer string }
 

@@ -1554,7 +1554,7 @@ func main() {
 	flowRepo := managerflowdata.NewRepo(db)
 	flowRunRepo := managerflowdata.NewRunRepo(db)
 	flowExec := managerbizflow.Executors{
-		Tools:  newFlowToolInvoker(toolsReg),
+		Tools:  newFlowToolInvoker(toolsReg, reg),
 		Notify: flowNotifierShim{channels: alertRepo, router: notifyRouter},
 		LLM:    flowLLMRunner{client: llmClient},
 	}
@@ -3041,28 +3041,47 @@ func (a webshellAuditAdapter) List(ctx context.Context, limit int) ([]*wsmodel.S
 }
 
 // flowToolInvoker implements bizflow.ToolInvoker over the aiops tool
-// registry — flow tool nodes dispatch through the exact same Registry
-// (and decorator chain) the chat agent uses.
-// flowToolInvoker dispatches a flow tool node through the SAME decorated
-// BaseTool the palette schema came from (BuildBaseTools), not the legacy
+// registry — flow tool nodes dispatch through the SAME decorated BaseTool
+// the palette schema came from (BuildBaseTools), not the legacy
 // Registry.Invoke path — otherwise the canvas shows the new batch schema
 // (device_ids) while execution hits the old Tool (edge_name), and they
-// disagree. Going through the BaseTool also means flow tool nodes inherit
-// the full decorator chain (timeout / audit / ReviewGate), as documented.
+// disagree.
+//
+// We apply decorators.Wrap with the SAME Deps the chat tool bag uses
+// (timeout / ratelimit / metric / tenant_bind) so flow tool invocations
+// are bounded and show up in ongrid_tool_* metrics like chat tool calls.
+// The metric collectors are shared per-Registerer (decorators/metric.go
+// regOrExist), so building this second wrapped set over the same `reg`
+// does NOT double-register.
+//
+// NOTE on ReviewGate: it is NOT installed here — and currently isn't
+// installed on the chat path either, because Deps.ReviewSpawner is left
+// nil system-wide (no reviewer-agent wiring yet). So mutating-class tools
+// (e.g. restart_service) in a flow run UNGUARDED, exactly as on the chat
+// path. That is a pre-existing gap, not specific to flows; when the
+// ReviewSpawner is wired, decide separately whether unattended flow runs
+// (cron/alert) should block on a human reviewer at all.
 type flowToolInvoker struct {
 	tools map[string]aiopstoolsbase.BaseTool
 }
 
-func newFlowToolInvoker(reg *aiopstools.Registry) flowToolInvoker {
+func newFlowToolInvoker(reg *aiopstools.Registry, registerer prometheus.Registerer) flowToolInvoker {
+	deps := aiopstoolsdec.Deps{
+		Timeout:    15 * time.Second,
+		Limiter:    aiopstoolsdec.NewTokenBucketLimiter(0),
+		Registerer: registerer,
+	}
 	m := map[string]aiopstoolsbase.BaseTool{}
 	if bag := reg.BuildBaseTools(); bag != nil {
 		for _, t := range bag.AllTools() {
 			if t == nil {
 				continue
 			}
-			if info, err := t.Info(context.Background()); err == nil && info != nil && info.Name != "" {
-				m[info.Name] = t
+			info, err := t.Info(context.Background())
+			if err != nil || info == nil || info.Name == "" {
+				continue
 			}
+			m[info.Name] = aiopstoolsdec.Wrap(t, deps)
 		}
 	}
 	return flowToolInvoker{tools: m}

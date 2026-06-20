@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -43,7 +45,14 @@ type RunRepo interface {
 	// once at boot; the engine is in-process so runs don't survive a
 	// restart.
 	SweepStaleRunning(ctx context.Context, reason string) (int64, error)
+	// PruneRuns deletes finished runs (and their node rows) created before
+	// `before`, bounding history growth.
+	PruneRuns(ctx context.Context, before time.Time) (int64, error)
 }
+
+// runRetention is how long finished runs are kept before PruneOldRuns
+// reaps them. Overridable via ONGRID_FLOW_RUN_RETENTION_DAYS.
+const defaultRunRetentionDays = 14
 
 // Usecase wires definitions, runs and the engine.
 type Usecase struct {
@@ -198,6 +207,9 @@ func (u *Usecase) TestNode(ctx context.Context, flowID uint64, nodeType string, 
 			}
 		}
 	}
+	if reason := u.testRunSideEffect(nodeType, configJSON); reason != "" {
+		return nil, fmt.Errorf("%s", reason)
+	}
 	rc := &RunContext{Trigger: triggerInput, Nodes: nodesCtx, Vars: map[string]any{}}
 	node := GraphNode{ID: "test", Type: nodeType, Config: configJSON}
 	res, err := u.engine.RunSingle(ctx, node, rc)
@@ -205,6 +217,38 @@ func (u *Usecase) TestNode(ctx context.Context, flowID uint64, nodeType string, 
 		return nil, err
 	}
 	return res.Output, nil
+}
+
+// testRunSideEffect returns a non-empty reason when a node type must NOT
+// be test-run because doing so causes a real external side effect (a
+// notification actually delivered, a service actually restarted). Test-run
+// exists to reveal a node's OUTPUT SHAPE for downstream references, not to
+// mutate the world — side-effecting nodes are validated only when the whole
+// flow runs. Read-class tool / agent / llm / condition / set / transform
+// nodes stay test-runnable.
+func (u *Usecase) testRunSideEffect(nodeType string, configJSON json.RawMessage) string {
+	switch nodeType {
+	case NodeNotify:
+		return "notify node delivers a real message and cannot be test-run; run the whole flow to validate it"
+	case NodeTool:
+		var cfg struct {
+			Tool string `json:"tool"`
+		}
+		_ = json.Unmarshal(configJSON, &cfg)
+		if cfg.Tool == "" {
+			return ""
+		}
+		for _, t := range u.ListTools() {
+			if t.Name != cfg.Tool {
+				continue
+			}
+			if t.Class == "write" || t.Class == "destructive" {
+				return fmt.Sprintf("tool %q is %s-class and cannot be test-run because it changes real state; run the whole flow to execute it", cfg.Tool, t.Class)
+			}
+			break
+		}
+	}
+	return ""
 }
 
 // ListEnabledFlows returns every enabled flow — the dispatcher /
@@ -337,5 +381,28 @@ func (u *Usecase) HealStaleRuns(ctx context.Context) {
 	}
 	if n > 0 {
 		u.log.Info("flow stale runs swept", slog.Int64("count", n))
+	}
+}
+
+// PruneOldRuns reaps finished runs older than the retention window. Safe
+// to call periodically (the scheduler does) and at boot.
+func (u *Usecase) PruneOldRuns(ctx context.Context) {
+	if u.runs == nil {
+		return
+	}
+	days := defaultRunRetentionDays
+	if v := strings.TrimSpace(os.Getenv("ONGRID_FLOW_RUN_RETENTION_DAYS")); v != "" {
+		if d, err := strconv.Atoi(v); err == nil && d > 0 {
+			days = d
+		}
+	}
+	before := time.Now().UTC().AddDate(0, 0, -days)
+	n, err := u.runs.PruneRuns(ctx, before)
+	if err != nil {
+		u.log.Warn("flow run prune failed", slog.Any("err", err))
+		return
+	}
+	if n > 0 {
+		u.log.Info("flow old runs pruned", slog.Int64("count", n), slog.Int("retention_days", days))
 	}
 }

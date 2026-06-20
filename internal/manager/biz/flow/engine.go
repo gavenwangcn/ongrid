@@ -132,6 +132,26 @@ func (e *Engine) activate(ctx context.Context, run *model.FlowRun, g *Graph, byI
 	st.wg.Add(1)
 	go func() {
 		defer st.wg.Done()
+		// Per-goroutine recover: the Execute-level recover only guards the
+		// main goroutine (trigger activation + wg.Wait); a panic in THIS
+		// fan-out goroutine would otherwise crash the whole manager
+		// process. Mark the run failed and let in-flight branches drain.
+		defer func() {
+			if r := recover(); r != nil {
+				e.log.Error("flow node panic",
+					slog.String("run_id", run.ID),
+					slog.String("node_id", node.ID),
+					slog.String("node_type", node.Type),
+					slog.Any("panic", r),
+					slog.String("stack", string(debug.Stack())))
+				st.mu.Lock()
+				if !st.failed {
+					st.failed = true
+					st.firstErr = fmt.Errorf("node %s (%s) panic: %v", node.ID, node.Type, r)
+				}
+				st.mu.Unlock()
+			}
+		}()
 		st.sem <- struct{}{}
 		defer func() { <-st.sem }()
 		e.runNode(ctx, run, g, byID, st, node)
@@ -200,6 +220,11 @@ func (e *Engine) runNode(ctx context.Context, run *model.FlowRun, g *Graph, byID
 		row.FiredPort = res.Port
 		st.mu.Lock()
 		st.rc.Nodes[node.ID] = res.Output
+		// Var writes (set node) are applied here under the lock — executors
+		// run outside it, so this is the ONLY place rc.Vars is mutated.
+		for k, v := range res.Vars {
+			st.rc.Vars[k] = v
+		}
 		st.mu.Unlock()
 		if b, err := json.Marshal(res.Output); err == nil {
 			row.OutputJSON = string(b)

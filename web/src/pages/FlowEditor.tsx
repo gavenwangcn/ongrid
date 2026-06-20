@@ -116,6 +116,7 @@ function statusRing(s?: string): string {
 }
 
 function FlowCanvasNode({ data, selected }: NodeProps<CanvasNode>) {
+  const { tr } = useI18n();
   const meta = NODE_META[data.flowType];
   const Icon = meta?.icon ?? Wrench;
   const isCondition = data.flowType === 'condition';
@@ -136,11 +137,11 @@ function FlowCanvasNode({ data, selected }: NodeProps<CanvasNode>) {
         </div>
         <div className="border-t border-zinc-800">
           <div className="relative flex items-center justify-end px-2 py-0.5 text-[9px] font-medium text-emerald-400">
-            真 · true
+            {tr('真', 'True')}
             <Handle id="true" type="source" position={Position.Right} className={`${handleBase} !bg-emerald-500`} />
           </div>
           <div className="relative flex items-center justify-end border-t border-zinc-800/60 px-2 py-0.5 text-[9px] font-medium text-zinc-500">
-            假 · false
+            {tr('假', 'False')}
             <Handle id="false" type="source" position={Position.Right} className={`${handleBase} !bg-zinc-500`} />
           </div>
         </div>
@@ -329,6 +330,9 @@ export default function FlowEditorPage() {
   const [testOut, setTestOut] = useState<Record<string, unknown>>({});
   const [testing, setTesting] = useState(false);
   const [testErr, setTestErr] = useState('');
+  const [runInputText, setRunInputText] = useState('');
+  const [showRunInput, setShowRunInput] = useState(false);
+  const [runInputErr, setRunInputErr] = useState('');
   const seq = useRef(1);
   const pollRef = useRef<number | null>(null);
   const rfRef = useRef<ReactFlowInstance<CanvasNode, Edge> | null>(null);
@@ -469,9 +473,20 @@ export default function FlowEditorPage() {
     (patch: Partial<CanvasData>) => {
       if (!selectedID) return;
       setNodes((ns) => ns.map((n) => (n.id === selectedID ? { ...n, data: { ...n.data, ...patch } } : n)));
+      // A config edit invalidates this node's cached test-run output — it no
+      // longer reflects the new config, so drop it (the panel falls back to
+      // the shape hint until the user re-tests).
+      if ('config' in patch) {
+        setTestOut((prev) => {
+          if (!(selectedID in prev)) return prev;
+          const next = { ...prev };
+          delete next[selectedID];
+          return next;
+        });
+      }
       setDirty(true);
     },
-    [selectedID, setNodes]
+    [selectedID, setNodes, setTestOut]
   );
 
   const removeSelected = useCallback(() => {
@@ -506,16 +521,18 @@ export default function FlowEditorPage() {
     [flow]
   );
 
-  const onSave = useCallback(async () => {
-    if (!flow) return;
+  const onSave = useCallback(async (): Promise<boolean> => {
+    if (!flow) return false;
     setSaving(true);
     setError('');
     try {
       const f = await updateFlow(flow.id, { name: flow.name, description: flow.description, graph: fromCanvas(nodes, edges) });
       setFlow(f);
       setDirty(false);
+      return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      return false;
     } finally {
       setSaving(false);
     }
@@ -554,15 +571,38 @@ export default function FlowEditorPage() {
   const onRun = useCallback(async () => {
     if (!flow) return;
     setError('');
-    if (dirty) await onSave();
+    // Manual-trigger payload: optional JSON object the user typed, exposed
+    // to nodes as {{trigger.<field>}}. Empty → {} (unchanged behaviour).
+    let input: Record<string, unknown> = {};
+    const txt = runInputText.trim();
+    if (txt) {
+      try {
+        const parsed = JSON.parse(txt);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          setRunInputErr(tr('输入必须是 JSON 对象', 'Input must be a JSON object'));
+          return;
+        }
+        input = parsed as Record<string, unknown>;
+      } catch {
+        setRunInputErr(tr('输入不是合法 JSON', 'Input is not valid JSON'));
+        return;
+      }
+    }
+    setRunInputErr('');
+    // Don't launch a run against a flow whose latest edits failed to save —
+    // it would execute the stale server-side graph and mislead the user.
+    if (dirty && !(await onSave())) return;
     try {
-      const run = await runFlow(flow.id);
+      const run = await runFlow(flow.id, input);
       setShowRuns(true);
+      setShowRunInput(false);
       pollRun(run.id);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [flow, dirty, onSave, pollRun]);
+  }, [flow, dirty, onSave, pollRun, runInputText, tr]);
+
+  const hasManualTrigger = useMemo(() => nodes.some((n) => n.data.flowType === 'trigger.manual'), [nodes]);
 
   const loadRuns = useCallback(async () => {
     try {
@@ -630,6 +670,40 @@ export default function FlowEditorPage() {
               <Save size={14} />
               {tr('保存', 'Save')}
             </button>
+            {hasManualTrigger && (
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setShowRunInput((v) => !v)}
+                  title={tr('手动触发输入（JSON，节点用 {{trigger.字段}} 引用）', 'Manual trigger input (JSON; referenced as {{trigger.<field>}})')}
+                  className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[12px] transition-colors ${
+                    showRunInput || runInputText.trim()
+                      ? 'border-indigo-700 bg-indigo-950/30 text-indigo-300'
+                      : 'border-zinc-700 text-zinc-300 hover:bg-zinc-800'
+                  }`}
+                >
+                  <Variable size={14} />
+                  {tr('输入', 'Input')}
+                </button>
+                {showRunInput && (
+                  <div className="absolute right-0 top-full z-30 mt-1 w-72 rounded-md border border-zinc-700 bg-zinc-900 p-2 shadow-lg">
+                    <div className="mb-1 text-[11px] font-medium text-zinc-300">{tr('手动触发输入（JSON）', 'Manual trigger input (JSON)')}</div>
+                    <textarea
+                      value={runInputText}
+                      onChange={(e) => setRunInputText(e.target.value)}
+                      rows={4}
+                      spellCheck={false}
+                      placeholder={'{"host":"vm-1"}'}
+                      className="w-full rounded border border-zinc-700 bg-zinc-950 px-2 py-1 font-mono text-[11px] text-zinc-200 outline-none focus:border-zinc-600"
+                    />
+                    <div className="mt-1 text-[10px] leading-relaxed text-zinc-600">
+                      {tr('运行时作为触发器载荷；节点用 {{trigger.字段}} 引用。', 'Used as the trigger payload at run time; reference it with {{trigger.<field>}}.')}
+                    </div>
+                    {runInputErr && <div className="mt-1 text-[10px] text-red-400">{runInputErr}</div>}
+                  </div>
+                )}
+              </div>
+            )}
             <button
               type="button"
               onClick={() => void onRun()}
@@ -769,6 +843,7 @@ export default function FlowEditorPage() {
                 nodes={nodes}
                 edges={edges}
                 runNodes={activeRun?.nodes?.length ? activeRun.nodes : lastRunNodes}
+                nodeSpecs={nodeSpecs}
                 onCopy={(ref) => {
                   void navigator.clipboard?.writeText(ref);
                   setCopied(ref);
@@ -797,6 +872,7 @@ export default function FlowEditorPage() {
               node={selected}
               testOutput={testOut[selected.id]}
               runNodes={activeRun?.nodes?.length ? activeRun.nodes : lastRunNodes}
+              nodeSpecs={nodeSpecs}
               onCopy={(ref) => {
                 void navigator.clipboard?.writeText(ref);
                 setCopied(ref);
@@ -845,7 +921,23 @@ export default function FlowEditorPage() {
                   <div key={`${n.node_id}`} className="rounded-md border border-zinc-800 p-2">
                     <div className="flex items-center justify-between">
                       <span className="text-[12px] text-zinc-300">{n.node_name || n.node_id}</span>
-                      <RunStatusChip status={n.status} />
+                      <div className="flex items-center gap-1.5">
+                        {n.fired_port && n.fired_port !== 'next' && (
+                          <span
+                            className={`rounded px-1 text-[9px] font-medium ${
+                              n.fired_port === 'true'
+                                ? 'bg-emerald-900/40 text-emerald-400'
+                                : n.fired_port === 'error'
+                                  ? 'bg-red-900/40 text-red-400'
+                                  : 'bg-zinc-800 text-zinc-400'
+                            }`}
+                            title={tr('该节点触发的输出端口', 'The output port this node fired')}
+                          >
+                            → {n.fired_port}
+                          </span>
+                        )}
+                        <RunStatusChip status={n.status} />
+                      </div>
                     </div>
                     {n.error && <div className="mt-1 break-all text-[11px] text-red-400">{n.error}</div>}
                     <details className="mt-1">
@@ -1222,47 +1314,70 @@ function upstreamOf(targetId: string, edges: Edge[]): Set<string> {
   return seen;
 }
 
-// flattenPaths walks a decoded JSON value into dotted leaf paths, using
-// [0] for arrays (the engine's expr resolver understands the subscript).
-// Capped in breadth + depth so a huge tool result can't explode the panel.
-function flattenPaths(v: unknown, prefix = '', out: string[] = [], depth = 0): string[] {
+// OutputEntry is one referenceable leaf: its dotted path plus, when the
+// node has actually run (live / test), the real value at that path. value
+// is undefined for static "shape" hints (the node hasn't run yet).
+type OutputEntry = { path: string; value?: unknown };
+
+// flattenEntries walks a decoded JSON value into dotted leaf paths AND
+// their values, using [0] for arrays (the engine's expr resolver
+// understands the subscript). Capped in breadth + depth so a huge tool
+// result can't explode the panel.
+function flattenEntries(v: unknown, prefix = '', out: OutputEntry[] = [], depth = 0): OutputEntry[] {
   if (out.length >= 40 || depth > 5) return out;
   if (Array.isArray(v)) {
-    if (v.length) flattenPaths(v[0], `${prefix}[0]`, out, depth + 1);
-    else if (prefix) out.push(prefix);
+    if (v.length) flattenEntries(v[0], `${prefix}[0]`, out, depth + 1);
+    else if (prefix) out.push({ path: prefix, value: [] });
   } else if (v && typeof v === 'object') {
     for (const k of Object.keys(v as Record<string, unknown>)) {
-      flattenPaths((v as Record<string, unknown>)[k], prefix ? `${prefix}.${k}` : k, out, depth + 1);
+      flattenEntries((v as Record<string, unknown>)[k], prefix ? `${prefix}.${k}` : k, out, depth + 1);
     }
   } else if (prefix) {
-    out.push(prefix);
+    out.push({ path: prefix, value: v });
   }
   return out;
 }
 
+// previewValue renders a leaf value as a short single-line string for the
+// ref chip ("= 42", '= "critical"', "= {…}"). Empty for null/undefined.
+function previewValue(v: unknown): string {
+  if (v === null || v === undefined) return '';
+  let s = typeof v === 'string' ? v : JSON.stringify(v);
+  if (s === undefined) return '';
+  s = s.replace(/\s+/g, ' ').trim();
+  return s.length > 48 ? `${s.slice(0, 48)}…` : s;
+}
+
 // staticOutputHints is the fallback when a node hasn't run yet — the known
-// output shape per node type, so the user still sees what to reference.
-function staticOutputHints(flowType: FlowNodeType, config: Record<string, unknown>): string[] {
+// output shape per node type, so the user still sees what to reference. The
+// backend NodeSpec.output_shape (specShape) is the source of truth for
+// static-shape nodes; only the two genuinely DYNAMIC cases keep frontend
+// logic: transform (= the user's declared field keys) and agent/llm (which
+// gain a `structured` field only when an output_schema is configured).
+function staticOutputHints(
+  flowType: FlowNodeType,
+  config: Record<string, unknown>,
+  specShape?: string[]
+): string[] {
   switch (flowType) {
-    case 'tool':
-      return ['result'];
     case 'agent':
     case 'llm':
-      return config?.output_schema ? ['answer', 'structured'] : ['answer'];
-    case 'condition':
-      return ['result'];
-    case 'set':
-      return ['name', 'value'];
+      return config?.output_schema ? ['answer', 'structured'] : (specShape?.length ? specShape : ['answer']);
     case 'transform':
       // Output shape = the fields the user declared (dynamic).
       return Object.keys((config?.fields as Record<string, unknown>) ?? {});
-    case 'trigger.alert_fired':
-      return ['incident_id', 'rule', 'severity', 'edge_id', 'device_id', 'labels', 'fired_at'];
-    case 'trigger.cron':
-      return ['fired_at', 'cron'];
     default:
-      return [];
+      return specShape?.length ? specShape : [];
   }
+}
+
+// shapeEntries adapts static path hints into valueless OutputEntry list.
+function shapeEntries(
+  flowType: FlowNodeType,
+  config: Record<string, unknown>,
+  specShape?: string[]
+): OutputEntry[] {
+  return staticOutputHints(flowType, config, specShape).map((path) => ({ path }));
 }
 
 function UpstreamRefs({
@@ -1270,6 +1385,7 @@ function UpstreamRefs({
   nodes,
   edges,
   runNodes,
+  nodeSpecs,
   onCopy,
   copied,
 }: {
@@ -1277,6 +1393,7 @@ function UpstreamRefs({
   nodes: CanvasNode[];
   edges: Edge[];
   runNodes: FlowRunNode[];
+  nodeSpecs: Record<string, NodeType>;
   onCopy: (ref: string) => void;
   copied: string;
 }) {
@@ -1288,18 +1405,18 @@ function UpstreamRefs({
       .filter((n) => set.has(n.id))
       .map((n) => {
         const ran = runByID.get(n.id);
-        let paths: string[];
+        let entries: OutputEntry[];
         let live = false;
         if (ran && ran.output && Object.keys(ran.output).length) {
-          paths = flattenPaths(ran.output);
+          entries = flattenEntries(ran.output);
           live = true;
         } else {
-          paths = staticOutputHints(n.data.flowType, n.data.config ?? {});
+          entries = shapeEntries(n.data.flowType, n.data.config ?? {}, nodeSpecs[n.data.flowType]?.output_shape);
         }
-        return { id: n.id, label: n.data.label, type: n.data.flowType, paths, live };
+        return { id: n.id, label: n.data.label, type: n.data.flowType, entries, live };
       })
-      .filter((u) => u.paths.length > 0);
-  }, [selectedId, nodes, edges, runNodes]);
+      .filter((u) => u.entries.length > 0);
+  }, [selectedId, nodes, edges, runNodes, nodeSpecs]);
 
   if (ups.length === 0) {
     return (
@@ -1331,13 +1448,14 @@ function UpstreamRefs({
               )}
             </div>
             <div className="mt-0.5 flex flex-wrap gap-1">
-              {u.paths.map((p) => {
-                const ref = `{{nodes.${u.id}.output.${p}}}`;
+              {u.entries.map((e) => {
+                const ref = `{{nodes.${u.id}.output.${e.path}}}`;
+                const preview = u.live ? previewValue(e.value) : '';
                 return (
                   <button
-                    key={p}
+                    key={e.path}
                     type="button"
-                    title={ref}
+                    title={preview ? `${ref}\n= ${preview}` : ref}
                     onClick={() => onCopy(ref)}
                     className={`max-w-full truncate rounded border px-1 py-0.5 font-mono text-[9px] transition-colors ${
                       copied === ref
@@ -1345,7 +1463,8 @@ function UpstreamRefs({
                         : 'border-zinc-800 bg-zinc-950 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
                     }`}
                   >
-                    {p}
+                    {e.path}
+                    {preview ? <span className="ml-1 text-zinc-600">= {preview}</span> : null}
                   </button>
                 );
               })}
@@ -1365,30 +1484,36 @@ function SelfOutputRefs({
   node,
   testOutput,
   runNodes,
+  nodeSpecs,
   onCopy,
   copied,
 }: {
   node: CanvasNode;
   testOutput?: unknown;
   runNodes: FlowRunNode[];
+  nodeSpecs: Record<string, NodeType>;
   onCopy: (ref: string) => void;
   copied: string;
 }) {
   const { tr } = useI18n();
-  const { paths, source } = useMemo(() => {
+  const { entries, source } = useMemo(() => {
     // Priority: a fresh node-level test run → the latest flow run → the
     // node type's known shape.
     if (testOutput && typeof testOutput === 'object' && Object.keys(testOutput as object).length) {
-      return { paths: flattenPaths(testOutput), source: 'test' as const };
+      return { entries: flattenEntries(testOutput), source: 'test' as const };
     }
     const ran = runNodes.find((r) => r.node_id === node.id);
     if (ran && ran.output && Object.keys(ran.output).length) {
-      return { paths: flattenPaths(ran.output), source: 'live' as const };
+      return { entries: flattenEntries(ran.output), source: 'live' as const };
     }
-    return { paths: staticOutputHints(node.data.flowType, node.data.config ?? {}), source: 'shape' as const };
-  }, [node, testOutput, runNodes]);
+    return {
+      entries: shapeEntries(node.data.flowType, node.data.config ?? {}, nodeSpecs[node.data.flowType]?.output_shape),
+      source: 'shape' as const,
+    };
+  }, [node, testOutput, runNodes, nodeSpecs]);
+  const hasValues = source === 'test' || source === 'live';
 
-  if (paths.length === 0) return null;
+  if (entries.length === 0) return null;
 
   return (
     <div className="mt-2 rounded-md border border-zinc-800 bg-zinc-900/40 p-2">
@@ -1408,13 +1533,14 @@ function SelfOutputRefs({
         {tr('本节点输出的字段，供下游节点引用。点字段复制 {{…}}。', "This node's output fields, for downstream refs. Click to copy {{…}}.")}
       </div>
       <div className="flex flex-wrap gap-1">
-        {paths.map((p) => {
-          const ref = `{{nodes.${node.id}.output.${p}}}`;
+        {entries.map((e) => {
+          const ref = `{{nodes.${node.id}.output.${e.path}}}`;
+          const preview = hasValues ? previewValue(e.value) : '';
           return (
             <button
-              key={p}
+              key={e.path}
               type="button"
-              title={ref}
+              title={preview ? `${ref}\n= ${preview}` : ref}
               onClick={() => onCopy(ref)}
               className={`max-w-full truncate rounded border px-1 py-0.5 font-mono text-[9px] transition-colors ${
                 copied === ref
@@ -1422,7 +1548,8 @@ function SelfOutputRefs({
                   : 'border-zinc-800 bg-zinc-950 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
               }`}
             >
-              {p}
+              {e.path}
+              {preview ? <span className="ml-1 text-zinc-600">= {preview}</span> : null}
             </button>
           );
         })}

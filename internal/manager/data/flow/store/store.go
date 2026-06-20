@@ -6,6 +6,7 @@ package store
 import (
 	"context"
 	"errors"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -125,6 +126,28 @@ func (r *RunRepo) ListNodes(ctx context.Context, runID string) ([]*model.FlowRun
 		return nil, err
 	}
 	return out, nil
+}
+
+// PruneRuns deletes FINISHED runs created before `before`, plus their
+// node rows, capping unbounded flow_runs / flow_run_nodes growth. Pending
+// / running rows are never pruned (they may still be in flight). Node rows
+// go first so a crash mid-prune can't orphan them. Returns runs deleted.
+func (r *RunRepo) PruneRuns(ctx context.Context, before time.Time) (int64, error) {
+	db := r.db.WithContext(ctx)
+	var ids []string
+	if err := db.Model(&model.FlowRun{}).
+		Where("created_at < ? AND status NOT IN ?", before, []string{model.RunStatusPending, model.RunStatusRunning}).
+		Pluck("id", &ids).Error; err != nil {
+		return 0, err
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	if err := db.Where("run_id IN ?", ids).Delete(&model.FlowRunNode{}).Error; err != nil {
+		return 0, err
+	}
+	res := db.Where("id IN ?", ids).Delete(&model.FlowRun{})
+	return res.RowsAffected, res.Error
 }
 
 func (r *RunRepo) SweepStaleRunning(ctx context.Context, reason string) (int64, error) {

@@ -327,14 +327,19 @@ func execNotify(ctx context.Context, x Executors, cfg map[string]any, _ *RunCont
 	return NodeResult{Output: map[string]any{"sent": true, "channels": len(ids)}, Port: PortNext}, nil
 }
 
-func execSet(_ context.Context, _ Executors, cfg map[string]any, rc *RunContext) (NodeResult, error) {
+func execSet(_ context.Context, _ Executors, cfg map[string]any, _ *RunContext) (NodeResult, error) {
 	name, _ := cfg["name"].(string)
 	if name == "" {
 		return NodeResult{}, fmt.Errorf("set node: missing var name")
 	}
 	val := cfg["value"]
-	rc.Vars[name] = val
-	return NodeResult{Output: map[string]any{"name": name, "value": val}, Port: PortNext}, nil
+	// Hand the var write back to the engine to apply under its lock — do
+	// NOT touch rc.Vars here (this executor runs outside the lock).
+	return NodeResult{
+		Output: map[string]any{"name": name, "value": val},
+		Vars:   map[string]any{name: val},
+		Port:   PortNext,
+	}, nil
 }
 
 // execTransform — the "edit fields" data node. config.fields is an

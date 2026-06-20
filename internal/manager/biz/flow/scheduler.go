@@ -24,11 +24,12 @@ type cronTriggerConfig struct {
 
 // Scheduler drives trigger.cron.
 type Scheduler struct {
-	uc       *Usecase
-	log      *slog.Logger
-	interval time.Duration
-	mu       sync.Mutex
-	next     map[string]time.Time // "flowID:nodeID" → next fire (UTC)
+	uc        *Usecase
+	log       *slog.Logger
+	interval  time.Duration
+	mu        sync.Mutex
+	next      map[string]time.Time // "flowID:nodeID" → next fire (UTC)
+	lastPrune time.Time            // last run-retention sweep (UTC)
 }
 
 // NewScheduler builds the cron driver (30s tick).
@@ -55,7 +56,14 @@ func (s *Scheduler) loop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			s.tick(ctx, time.Now().UTC())
+			now := time.Now().UTC()
+			s.tick(ctx, now)
+			// Run retention sweep at most hourly — piggybacks the cron tick
+			// so there's no second goroutine to manage.
+			if now.Sub(s.lastPrune) >= time.Hour {
+				s.lastPrune = now
+				s.uc.PruneOldRuns(ctx)
+			}
 		}
 	}
 }
