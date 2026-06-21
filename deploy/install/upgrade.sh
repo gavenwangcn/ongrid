@@ -83,6 +83,7 @@ mkdir -p \
     "$ONGRID_DATA_DIR/qdrant" \
     "$ONGRID_DATA_DIR/grafana" \
     "$ONGRID_DATA_DIR/embeddings" \
+    "$ONGRID_DATA_DIR/skills" \
     "$ONGRID_LOG_DIR"
 
 # Embedding model cache (ADR-027 Phase-2). Same staging logic as
@@ -90,6 +91,9 @@ mkdir -p \
 # time an upgrade includes it. Idempotent — skip if already there.
 chown -R 65532:65532 "$ONGRID_DATA_DIR/embeddings" 2>/dev/null || true
 chmod -R 0755 "$ONGRID_DATA_DIR/embeddings" 2>/dev/null || true
+# HLD-017 marketplace skills dir must be writable by the manager (uid 65532),
+# else pack install fails with "permission denied" moving staging → install.
+chown -R 65532:65532 "$ONGRID_DATA_DIR/skills" 2>/dev/null || true
 if [[ -d "$SCRIPT_DIR/embeddings/fast-bge-small-zh-v1.5" ]]; then
     target="$ONGRID_DATA_DIR/embeddings/fast-bge-small-zh-v1.5"
     if [[ ! -f "$target/model_optimized.onnx" ]]; then

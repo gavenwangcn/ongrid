@@ -397,6 +397,7 @@ mkdir -p \
     "$ONGRID_DATA_DIR/qdrant" \
     "$ONGRID_DATA_DIR/grafana" \
     "$ONGRID_DATA_DIR/embeddings" \
+    "$ONGRID_DATA_DIR/skills" \
     "$ONGRID_LOG_DIR"
 
 # Stage the bundled fastembed model (ADR-027 Phase-2 offline RAG).
@@ -416,6 +417,10 @@ fi
 # write its own progress / lock files on first load.
 chmod -R 0755 "$ONGRID_DATA_DIR/embeddings" 2>/dev/null || true
 chown -R 65532:65532 "$ONGRID_DATA_DIR/embeddings" 2>/dev/null || true
+# HLD-017 marketplace skills dir — manager (uid 65532) installs packs here;
+# must be writable by that uid (cf. embeddings). Without this a fresh install
+# fails at "move staging → install: permission denied".
+chown -R 65532:65532 "$ONGRID_DATA_DIR/skills" 2>/dev/null || true
 
 # Image uids — pinned to what the upstream images run as. Bumping the
 # image tag in docker-compose.yml without updating these here will fail
