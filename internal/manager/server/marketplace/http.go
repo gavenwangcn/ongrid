@@ -44,6 +44,7 @@ func NewHandler(svc Service) *Handler { return &Handler{svc: svc} }
 // the auth middleware in front of it (see cmd/ongrid).
 func (h *Handler) Register(r chi.Router) {
 	r.Post("/v1/marketplace/install", h.install)
+	r.Post("/v1/marketplace/upload", h.upload)
 	r.Get("/v1/marketplace/installed", h.listInstalled)
 	r.Delete("/v1/marketplace/installed/{pack_id}", h.uninstall)
 	r.Put("/v1/marketplace/installed/{pack_id}/bindings", h.setBindings)

@@ -247,6 +247,24 @@ export async function setPackBindings(
   );
 }
 
+/** Install a pack from a browser file upload (zip / tar.gz). The archive is
+ *  extracted server-side and installed like a local-dir install. Admin-only. */
+export async function uploadPack(file: File): Promise<InstallResponse> {
+  const fd = new FormData();
+  fd.append('file', file);
+  const raw = await request<InstallRawResp>('POST', '/marketplace/upload', fd);
+  const pack = raw.pack ?? raw.Pack;
+  const caps = raw.capabilities ?? raw.Capabilities;
+  if (!pack || !caps) {
+    throw new Error('upload response missing pack/capabilities');
+  }
+  return {
+    pack: normalisePack(pack),
+    capabilities: caps,
+    warnings: raw.warnings ?? raw.Warnings ?? [],
+  };
+}
+
 export async function uninstallPack(packId: string): Promise<void> {
   await request<void>('DELETE', `/marketplace/installed/${encodeURIComponent(packId)}`);
 }
