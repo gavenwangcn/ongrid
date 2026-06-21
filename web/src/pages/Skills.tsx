@@ -6,6 +6,7 @@ import { listSkills, localizedSkill, type SkillClass, type SkillScope, type Skil
 import { ApiError } from '@/api/client';
 import { useI18n } from '@/i18n/locale';
 import { useAuth } from '@/store/auth';
+import { PageHeader } from '@/components/ui';
 
 // Lazy-load the install/uninstall surface so the default Catalog tab
 // doesn't pull in the marketplace bundle until the operator actually
@@ -38,16 +39,24 @@ export default function SkillsPage() {
 
   return (
     <main className="anim-fade flex flex-1 flex-col overflow-hidden">
-      {isAdmin && (
-        <div className="flex items-center gap-1 border-b border-zinc-800 px-4 pt-3">
-          <TabButton active={tab === 'catalog'} onClick={() => setTab('catalog')} icon={<Wrench size={14} />} label={tr('技能目录', 'Catalog')} />
-          <TabButton active={tab === 'install'} onClick={() => setTab('install')} icon={<Package size={14} />} label={tr('技能市场', 'Marketplace')} />
-        </div>
-      )}
+      <PageHeader
+        title={tr('技能', 'Skills')}
+        subtitle={tr('LLM 当前可见的能力，以及安装 / 管理外部技能', 'Capabilities the LLM can use — plus installing / managing external skills')}
+        extra={
+          isAdmin ? (
+            <div className="-mb-4 flex items-center gap-1">
+              <TabButton active={tab === 'catalog'} onClick={() => setTab('catalog')} icon={<Wrench size={14} />} label={tr('技能目录', 'Catalog')} />
+              <TabButton active={tab === 'install'} onClick={() => setTab('install')} icon={<Package size={14} />} label={tr('技能市场', 'Marketplace')} />
+            </div>
+          ) : undefined
+        }
+      />
       {tab === 'install' ? (
-        <Suspense fallback={<div className="flex h-40 items-center justify-center text-sm text-zinc-500">{tr('加载中…', 'Loading…')}</div>}>
-          <InstallTab />
-        </Suspense>
+        <div className="flex-1 overflow-auto px-6 py-4">
+          <Suspense fallback={<div className="flex h-40 items-center justify-center text-sm text-zinc-500">{tr('加载中…', 'Loading…')}</div>}>
+            <InstallTab />
+          </Suspense>
+        </div>
       ) : (
         <CatalogTab />
       )}
@@ -140,29 +149,6 @@ function CatalogTab() {
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
-        <header className="app-header border-b border-zinc-800 px-6 py-4">
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <h1 className="text-base font-semibold text-zinc-100">{tr('已加载技能', 'Loaded skills')}</h1>
-              <p className="mt-0.5 text-xs text-zinc-500">
-                {tr(
-                  `LLM 当前可见的能力 · 共 ${items.length} 个，已匹配 ${filtered.length}`,
-                  `Capabilities the LLM can see · ${items.length} total, ${filtered.length} matched`,
-                )}
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => fetchSkills(true)}
-              disabled={loading || refreshing}
-              className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
-            >
-              <RefreshCw size={12} className={cn(refreshing && 'animate-spin')} />
-              {tr('刷新', 'Refresh')}
-            </button>
-          </div>
-        </header>
-
         <div className="border-b border-zinc-800 px-6 py-3">
           <div className="flex flex-wrap items-center gap-3">
             <label className="relative block w-64">
@@ -216,6 +202,20 @@ function CatalogTab() {
                 </div>
               </div>
             )}
+            <div className="ml-auto flex items-center gap-2">
+              <span className="text-xs text-zinc-500">
+                {tr(`${items.length} 个 · 匹配 ${filtered.length}`, `${items.length} total · ${filtered.length} matched`)}
+              </span>
+              <button
+                type="button"
+                onClick={() => fetchSkills(true)}
+                disabled={loading || refreshing}
+                className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
+              >
+                <RefreshCw size={12} className={cn(refreshing && 'animate-spin')} />
+                {tr('刷新', 'Refresh')}
+              </button>
+            </div>
           </div>
         </div>
 
