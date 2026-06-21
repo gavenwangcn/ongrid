@@ -2658,6 +2658,11 @@ var coordinatorToolNames = []string{
 	"list_repo_sources",
 	"read_source",
 	"grep_source",
+	// cloud_bash is safe to expose directly on the coordinator: it never
+	// executes — every call only QUEUES a proposal into the human approval
+	// inbox (rendered inline in chat). So the coordinator can offer "run
+	// this in the cloud" without violating the dispatch-only rule.
+	"cloud_bash",
 }
 
 // Heavy on parameters because every dep flows through this site
