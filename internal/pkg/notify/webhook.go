@@ -8,7 +8,11 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -23,6 +27,20 @@ type webhookSender struct {
 	buildBody  func(Message) (any, error)
 	signTarget func(endpoint, secret string, body []byte) (string, map[string]string, error)
 }
+
+// defaultNotifyHTTPClient is used when callers pass nil *http.Client.
+// Unlike http.DefaultClient it has an explicit timeout so channel tests
+// and alert deliveries fail fast instead of hanging on half-open conns.
+var defaultNotifyHTTPClient = &http.Client{
+	Timeout: 30 * time.Second,
+	Transport: &http.Transport{
+		Proxy:               http.ProxyFromEnvironment,
+		TLSHandshakeTimeout: 10 * time.Second,
+		IdleConnTimeout:     90 * time.Second,
+	},
+}
+
+const webhookSendMaxAttempts = 2
 
 // NewGenericWebhookSender posts the normalized Message JSON. When secret is
 // configured it adds an HMAC signature header over the request body.
@@ -203,7 +221,7 @@ func newWebhookSender(
 		name = "webhook"
 	}
 	if client == nil {
-		client = http.DefaultClient
+		client = defaultNotifyHTTPClient
 	}
 	return &webhookSender{
 		name:       name,
@@ -237,6 +255,50 @@ func (s *webhookSender) Send(ctx context.Context, msg Message) error {
 			return fmt.Errorf("sign request: %w", err)
 		}
 	}
+
+	log := slog.Default().With(
+		slog.String("comp", "notify-webhook"),
+		slog.String("channel", s.name),
+		slog.String("endpoint", maskNotifyEndpoint(endpoint)),
+		slog.Bool("signed", s.secret != ""),
+	)
+	start := time.Now()
+	var lastErr error
+	for attempt := 1; attempt <= webhookSendMaxAttempts; attempt++ {
+		if attempt > 1 {
+			log.Info("webhook send retry",
+				slog.Int("attempt", attempt),
+				slog.Any("prev_err", lastErr),
+			)
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("post: %w", ctx.Err())
+			case <-time.After(300 * time.Millisecond):
+			}
+		}
+		lastErr = s.sendOnce(ctx, log, endpoint, headers, body)
+		if lastErr == nil {
+			log.Info("webhook send ok",
+				slog.Int("attempt", attempt),
+				slog.Duration("duration", time.Since(start)),
+			)
+			return nil
+		}
+		if attempt < webhookSendMaxAttempts && isRetryableWebhookErr(lastErr) {
+			continue
+		}
+		break
+	}
+	log.Warn("webhook send failed",
+		slog.Any("err", lastErr),
+		slog.Duration("duration", time.Since(start)),
+		slog.String("source", msg.Source),
+		slog.String("dedupe_key", msg.DedupeKey),
+	)
+	return lastErr
+}
+
+func (s *webhookSender) sendOnce(ctx context.Context, log *slog.Logger, endpoint string, headers map[string]string, body []byte) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("new request: %w", err)
@@ -246,15 +308,106 @@ func (s *webhookSender) Send(ctx context.Context, msg Message) error {
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
+	log.Debug("webhook send start",
+		slog.Int("body_bytes", len(body)),
+		slog.String("method", http.MethodPost),
+	)
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("post: %w", err)
 	}
 	defer resp.Body.Close()
+	respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 2048))
+	if readErr != nil {
+		log.Warn("webhook response read failed", slog.Any("err", readErr))
+	}
+	preview := strings.TrimSpace(string(respBody))
+	if len(preview) > 400 {
+		preview = preview[:400] + "…"
+	}
+	log.Debug("webhook response",
+		slog.Int("status", resp.StatusCode),
+		slog.String("response_preview", preview),
+	)
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("unexpected status: %s", resp.Status)
+		return fmt.Errorf("unexpected status: %s body=%s", resp.Status, preview)
+	}
+	if err := checkWebhookResponseBody(preview); err != nil {
+		return err
 	}
 	return nil
+}
+
+func checkWebhookResponseBody(preview string) error {
+	if preview == "" || preview[0] != '{' {
+		return nil
+	}
+	var hook struct {
+		Code          int    `json:"code"`
+		StatusCode    int    `json:"StatusCode"`
+		Msg           string `json:"msg"`
+		StatusMessage string `json:"StatusMessage"`
+	}
+	if err := json.Unmarshal([]byte(preview), &hook); err != nil {
+		return nil
+	}
+	code := hook.Code
+	if code == 0 && hook.StatusCode != 0 {
+		code = hook.StatusCode
+	}
+	if code != 0 {
+		detail := strings.TrimSpace(hook.Msg)
+		if detail == "" {
+			detail = strings.TrimSpace(hook.StatusMessage)
+		}
+		if detail == "" {
+			detail = fmt.Sprintf("code=%d", code)
+		}
+		return fmt.Errorf("upstream rejected: %s", detail)
+	}
+	return nil
+}
+
+func isRetryableWebhookErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, needle := range []string{
+		"connection reset",
+		"connection refused",
+		"broken pipe",
+		"eof",
+		"timeout",
+		"tls handshake timeout",
+		"no such host",
+		"i/o timeout",
+	} {
+		if strings.Contains(msg, needle) {
+			return true
+		}
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	return false
+}
+
+func maskNotifyEndpoint(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		const maxLen = 56
+		if len(raw) <= maxLen {
+			return raw
+		}
+		return raw[:maxLen] + "…"
+	}
+	path := u.Path
+	if len(path) > 24 {
+		path = path[:24] + "…"
+	}
+	return u.Scheme + "://" + u.Host + path
 }
 
 func formatText(msg Message) string {

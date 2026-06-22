@@ -553,26 +553,65 @@ func (s *Service) TestChannel(ctx context.Context, _ Caller, id uint64) (*Channe
 		DedupeKey:  fmt.Sprintf("channel-test-%d", channel.ID),
 		OccurredAt: time.Now().UTC(),
 	}
-	// Build the typed sender from the channel's ChannelType + ConfigJSON and
-	// send DIRECTLY — a manual test must attempt real delivery regardless of
-	// the global ONGRID_NOTIFY_ENABLED master switch (an operator testing a
-	// channel wants to know it works, not get a silent no-op). This also
-	// fixes the prior by-name path, which only matched env-config channel
-	// names and returned "channel not configured" for UI-created channels.
 	sender, berr := bizalert.BuildSenderFromChannel(channel)
 	if berr != nil {
+		s.log.Warn("channel test build sender failed",
+			slog.Uint64("channel_id", channel.ID),
+			slog.String("channel_name", channel.Name),
+			slog.String("channel_type", channel.ChannelType),
+			slog.Any("err", berr),
+		)
 		return &ChannelTestResult{Accepted: false, Message: berr.Error()}, nil
 	}
+	endpointMasked := maskEndpoint(channelEndpoint(channel))
+	s.log.Info("channel test start",
+		slog.Uint64("channel_id", channel.ID),
+		slog.String("channel_name", channel.Name),
+		slog.String("channel_type", channel.ChannelType),
+		slog.String("endpoint", endpointMasked),
+		slog.Bool("has_secret", channelHasSecret(channel)),
+	)
 	sctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	sendErr := sender.Send(sctx, msg)
 	out := &ChannelTestResult{Accepted: sendErr == nil}
 	if sendErr != nil {
+		s.log.Warn("channel test failed",
+			slog.Uint64("channel_id", channel.ID),
+			slog.String("channel_name", channel.Name),
+			slog.String("channel_type", channel.ChannelType),
+			slog.String("endpoint", endpointMasked),
+			slog.Any("err", sendErr),
+		)
 		out.Message = sendErr.Error()
 	} else {
+		s.log.Info("channel test ok",
+			slog.Uint64("channel_id", channel.ID),
+			slog.String("channel_name", channel.Name),
+			slog.String("channel_type", channel.ChannelType),
+		)
 		out.Message = fmt.Sprintf("已投递到 %s", channel.Name)
 	}
 	return out, nil
+}
+
+func channelEndpoint(ch *model.Channel) string {
+	cfg, err := ch.Config()
+	if err != nil {
+		return ""
+	}
+	if e := strings.TrimSpace(cfg["endpoint"]); e != "" {
+		return e
+	}
+	return strings.TrimSpace(cfg["url"])
+}
+
+func channelHasSecret(ch *model.Channel) bool {
+	cfg, err := ch.Config()
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(cfg["secret"]) != ""
 }
 
 // ListRules returns the rule set, optionally filtered by scope.
