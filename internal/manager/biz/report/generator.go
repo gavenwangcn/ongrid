@@ -39,6 +39,10 @@ type GeneratorConfig struct {
 	// deliveries. Empty → a relative /reports/{id} path (still useful
 	// for same-origin IM clients).
 	PublicURL string
+	// SchemaRetry spawns the reporter agent once more with a schema
+	// correction prompt when normalize + structured extract both fail.
+	// Defaults to true.
+	SchemaRetry *bool
 }
 
 // workerGenerator implements Generator: it turns a pending report into a
@@ -50,6 +54,7 @@ type workerGenerator struct {
 	repo      Repo
 	facts     FactsCollector
 	spawner   WorkerSpawner
+	extractor *ContentExtractor
 	deliverer Deliverer // nil = in-app only
 	modelCfg  *ModelConfigService
 	ready     func(context.Context) error
@@ -83,6 +88,13 @@ func NewWorkerGenerator(repo Repo, facts FactsCollector, spawner WorkerSpawner, 
 // platform default routing behaviour.
 func (g *workerGenerator) WithModelConfig(svc *ModelConfigService) *workerGenerator {
 	g.modelCfg = svc
+	return g
+}
+
+// WithContentExtractor attaches the Pass-2 structured extractor used when
+// the worker output fails ParseContent after normalization.
+func (g *workerGenerator) WithContentExtractor(e *ContentExtractor) *workerGenerator {
+	g.extractor = e
 	return g
 }
 
@@ -248,8 +260,31 @@ func (g *workerGenerator) generate(ctx context.Context, rpt *model.Report) error
 		)
 		return fmt.Errorf("parse content: worker returned no JSON object")
 	}
-	content, err := ParseContent(rawJSON, g.log)
-	if err != nil {
+
+	locale := g.localeFor(rpt)
+	content, parseErr := g.resolveContent(ctx, worker.Result, rawJSON, locale, spawnReq.Provider, spawnReq.Model)
+	if parseErr != nil && g.schemaRetryEnabled() {
+		g.log.Info("report pipeline agent schema retry",
+			slog.String("report_id", rpt.ID),
+			slog.Any("err", parseErr),
+		)
+		retryPrompt := buildSchemaCorrectionPrompt(prompt, worker.Result, parseErr.Error(), locale)
+		retryReq := spawnReq
+		retryReq.Prompt = retryPrompt
+		retryWorker, retrySpawnErr := g.spawner.SpawnWorker(ctx, retryReq)
+		if retrySpawnErr != nil {
+			g.log.Warn("report pipeline schema retry spawn failed",
+				slog.String("report_id", rpt.ID),
+				slog.Any("err", retrySpawnErr),
+			)
+		} else if retryWorker != nil && strings.TrimSpace(retryWorker.Err) == "" {
+			retryJSON := extractJSON(retryWorker.Result)
+			if retryJSON != "" {
+				content, parseErr = g.resolveContent(ctx, retryWorker.Result, retryJSON, locale, spawnReq.Provider, spawnReq.Model)
+			}
+		}
+	}
+	if parseErr != nil {
 		g.log.Warn("report pipeline parse content failed",
 			slog.String("report_id", rpt.ID),
 			slog.String("worker_id", worker.ID),
@@ -258,9 +293,9 @@ func (g *workerGenerator) generate(ctx context.Context, rpt *model.Report) error
 			slog.Int("extracted_json_bytes", len(rawJSON)),
 			slog.String("result_preview", truncate(worker.Result, 600)),
 			slog.String("extracted_preview", truncate(rawJSON, 1000)),
-			slog.Any("err", err),
+			slog.Any("err", parseErr),
 		)
-		return fmt.Errorf("parse content: %w", err)
+		return fmt.Errorf("parse content: %w", parseErr)
 	}
 
 	// Defense-in-depth: overwrite every fact-derived field from facts so
@@ -393,9 +428,46 @@ func (g *workerGenerator) buildPrompt(rpt *model.Report, facts *ReportFacts) str
 		b.WriteString("\n")
 	}
 	b.WriteString(mtr(
-		"\n按 persona 描述的 ContentJSON schema 输出，只输出 JSON。",
-		"\nOutput the ContentJSON schema described in the persona. Output JSON only."))
+		"\n严格按以下 ContentJSON schema 输出，只输出 JSON，不要其他字段或嵌套结构：",
+		"\nOutput EXACTLY this ContentJSON schema — JSON only, no extra keys or nested report sections:"))
+	b.WriteString("\n\n```json\n")
+	b.WriteString(RequiredLLMOutputSchema())
+	b.WriteString("\n```\n")
 	return b.String()
+}
+
+func (g *workerGenerator) schemaRetryEnabled() bool {
+	if g.cfg.SchemaRetry == nil {
+		return true
+	}
+	return *g.cfg.SchemaRetry
+}
+
+// resolveContent parses worker JSON (Pass-1 normalize) and, on failure,
+// runs the structured extractor (Pass-2).
+func (g *workerGenerator) resolveContent(ctx context.Context, rawResult, rawJSON, locale, provider, model string) (*Content, error) {
+	content, err := ParseContent(rawJSON, g.log)
+	if err == nil {
+		return content, nil
+	}
+	parseErr := err.Error()
+	if g.extractor == nil {
+		return nil, err
+	}
+	g.log.Info("report pipeline structured extract fallback",
+		slog.String("parse_err", parseErr),
+	)
+	extracted, extractErr := g.extractor.Extract(ctx, ExtractContentReq{
+		RawOutput:  rawResult,
+		Locale:     locale,
+		Provider:   provider,
+		Model:      model,
+		ParseError: parseErr,
+	})
+	if extractErr != nil {
+		return nil, fmt.Errorf("%w; structured extract: %v", err, extractErr)
+	}
+	return extracted, nil
 }
 
 // localeDirective renders an explicit output-language line for the

@@ -105,6 +105,7 @@ type ChatReq struct {
 	Messages    []Message
 	Tools       []ToolSchema
 	Sampling    SamplingParams
+	ResponseFormat *ResponseFormat
 	UserID      uint64 // optional; used for budget scoping + logging only
 }
 
@@ -488,6 +489,25 @@ func (c *openaiClient) toOpenAIReq(req ChatReq, model string) (openai.ChatComple
 		Model:    model,
 		Messages: msgs,
 		Tools:    tools,
+	}
+	if rf := req.ResponseFormat; rf != nil {
+		switch rf.Type {
+		case "json_object":
+			sdkReq.ResponseFormat = &openai.ChatCompletionResponseFormat{
+				Type: openai.ChatCompletionResponseFormatTypeJSONObject,
+			}
+		case "json_schema":
+			if rf.SchemaName != "" && len(rf.JSONSchema) > 0 {
+				sdkReq.ResponseFormat = &openai.ChatCompletionResponseFormat{
+					Type: openai.ChatCompletionResponseFormatTypeJSONSchema,
+					JSONSchema: &openai.ChatCompletionResponseFormatJSONSchema{
+						Name:   rf.SchemaName,
+						Schema: rf.JSONSchema,
+						Strict: true,
+					},
+				}
+			}
+		}
 	}
 	req.Sampling.applyToOpenAIReq(&sdkReq)
 	return sdkReq, nil

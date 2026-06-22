@@ -254,7 +254,7 @@ func normalizeContentAlternateSchema(top map[string]json.RawMessage, log *slog.L
 	if headline == "" {
 		return changed, nil
 	}
-	if existingHeadline != "" && len(existingParas) > 0 {
+	if existingHeadline != "" {
 		return changed, nil
 	}
 

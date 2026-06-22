@@ -225,6 +225,90 @@ func TestGenerator_NonPendingIsNoOp(t *testing.T) {
 	}
 }
 
+func TestGenerator_ClaudeNestedSchema_Ready(t *testing.T) {
+	rpt := pendingReport()
+	repo := newGenTestRepo(rpt)
+	raw := `{
+		"report_meta": {"title": "EBD 周报"},
+		"hero_metrics": [{"key":"devices","label":"监控设备","value":4}],
+		"resource_overview": {"headline": "资源平稳", "narrative": "CPU 低负载。"},
+		"recommendations": ["排查 uip"]
+	}`
+	spawner := &fakeSpawner{result: raw}
+	gen := NewWorkerGenerator(repo, fakeFacts{facts: sampleFacts()}, spawner, GeneratorConfig{}, nil)
+	gen.Generate(context.Background(), "rpt-1")
+	got, _ := repo.GetReport(context.Background(), "rpt-1")
+	if got.Status != model.StatusReady {
+		t.Fatalf("status = %q, err = %q", got.Status, got.ErrorMsg)
+	}
+}
+
+func TestGenerator_ExtractorFallback(t *testing.T) {
+	rpt := pendingReport()
+	repo := newGenTestRepo(rpt)
+	spawner := &fakeSpawner{result: `{"unexpected":"shape"}`}
+	llmFake := &fakeContentLLM{replies: []string{`{
+		"version":"1",
+		"narrative":{"headline":"抽取成功","paragraphs":[{"text":"段落"}]},
+		"advice":[{"text":"建议"}]
+	}`}}
+	retryOff := false
+	gen := NewWorkerGenerator(repo, fakeFacts{facts: sampleFacts()}, spawner, GeneratorConfig{SchemaRetry: &retryOff}, nil).
+		WithContentExtractor(NewContentExtractor(llmFake, nil))
+	gen.Generate(context.Background(), "rpt-1")
+	got, _ := repo.GetReport(context.Background(), "rpt-1")
+	if got.Status != model.StatusReady {
+		t.Fatalf("status = %q, err = %q", got.Status, got.ErrorMsg)
+	}
+	content, err := ParseContent(got.ContentJSON, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if content.Narrative.Headline != "抽取成功" {
+		t.Errorf("headline = %q", content.Narrative.Headline)
+	}
+}
+
+type seqSpawner struct {
+	results []string
+	calls   int
+	gotReq  []chatruntime.SpawnRequest
+}
+
+func (s *seqSpawner) SpawnWorker(_ context.Context, req chatruntime.SpawnRequest) (*chatruntime.Worker, error) {
+	s.gotReq = append(s.gotReq, req)
+	idx := s.calls
+	if idx >= len(s.results) {
+		idx = len(s.results) - 1
+	}
+	s.calls++
+	return &chatruntime.Worker{
+		ID:        "agent-seq",
+		SessionID: "sess-seq",
+		Result:    s.results[idx],
+	}, nil
+}
+
+func TestGenerator_SchemaRetry(t *testing.T) {
+	rpt := pendingReport()
+	repo := newGenTestRepo(rpt)
+	bad := `{"foo":"bar"}`
+	good := `{"version":"1","narrative":{"headline":"重试成功","paragraphs":[{"text":"p"}]},"advice":[]}`
+	spawner := &seqSpawner{results: []string{bad, good}}
+	gen := NewWorkerGenerator(repo, fakeFacts{facts: sampleFacts()}, spawner, GeneratorConfig{}, nil)
+	gen.Generate(context.Background(), "rpt-1")
+	if spawner.calls != 2 {
+		t.Fatalf("spawn calls = %d, want 2", spawner.calls)
+	}
+	got, _ := repo.GetReport(context.Background(), "rpt-1")
+	if got.Status != model.StatusReady {
+		t.Fatalf("status = %q, err = %q", got.Status, got.ErrorMsg)
+	}
+	if got.SummaryText != "重试成功" {
+		t.Errorf("summary = %q", got.SummaryText)
+	}
+}
+
 func TestGenerator_PinnedModelPassedToSpawner(t *testing.T) {
 	rpt := pendingReport()
 	repo := newGenTestRepo(rpt)

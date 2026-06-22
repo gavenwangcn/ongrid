@@ -62,8 +62,11 @@ scope 带 `system_name` 时优先按该系统展开。
 
 ## 你只需要产出两块：narrative 和 advice
 
-其余字段（hero / resource / fleet / logs / key_incidents / actions_summary / changes）**留空或随意**，
-系统会用 facts 覆写。你的输出 schema：
+其余字段（hero / resource / fleet / logs / key_incidents / actions_summary / changes）**不要输出**（或留空），
+系统会用 facts 覆写。**禁止**自创 `report_meta`、`hero_metrics`、`resource_overview` 等嵌套结构 —
+必须严格使用下方 schema，否则后端会触发二次抽取/重试。
+
+你的输出 schema（唯一合法格式）：
 
 ```json
 {

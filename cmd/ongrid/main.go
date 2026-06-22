@@ -1614,6 +1614,7 @@ func main() {
 		).
 			WithDeliverer(reportDelivererShim{channels: alertRepo, router: notifyRouter}).
 			WithModelConfig(reportModelCfg).
+			WithContentExtractor(managerbizreport.NewContentExtractor(llmRouter, log)).
 			WithReadyCheck(reportLLMReady(llmSettingsResolver, reportModelCfg))
 		reportSchedulerReady = true
 		log.Info("report: generator wired")
