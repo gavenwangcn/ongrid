@@ -880,6 +880,13 @@ func main() {
 	// Honour rule-level notify_channel_ids overrides — resolver looks
 	// the rule up by key and reads its NotifyChannelIDsJSON.
 	alertResolver.SetRuleLookup(alertRepo.GetRuleByKey)
+	systemNotifySvc := managerbizalert.NewSystemNotifyService(
+		settingSvc,
+		managerbizalert.DeviceRepoSystemLister{Repo: deviceRepo},
+		managerbizalert.RepoNotifyCatalog{Repo: alertRepo},
+	)
+	alertResolver.SetDeviceLookup(managerbizalert.DeviceTargetFromGetter(deviceRepo.Get))
+	alertResolver.SetSystemNotify(systemNotifySvc)
 	alertInhibitor := managerbizalert.NewBuiltinInhibitor(alertRepo)
 	// Lifecycle alerting path was removed in — every
 	// "edge offline" alert is now a metric_raw rule on the
@@ -1653,6 +1660,7 @@ func main() {
 	}
 
 	alertHandler := managerserveralert.NewHandler(alertSvc, alertSvc, alertSvc).
+		WithSystemNotify(systemNotifySvc).
 		WithInvestigations(manageralertdata.NewInvestigationRepo(db)).
 		WithRuntime(cfg.Alert.EvaluatorInterval, cfg.Alert.Cooldown)
 	if rcaInvConcrete != nil {

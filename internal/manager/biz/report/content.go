@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"unicode"
 )
 
 // ContentJSON is the structured report body the reporter agent
@@ -166,28 +167,294 @@ func ParseContent(raw string, log *slog.Logger) (*Content, error) {
 }
 
 // normalizeContentJSON coerces common LLM shape drift (flat headline/
-// sections, string advice) into the ContentJSON schema before unmarshal.
+// sections, string advice, nested report_meta/*_overview) into the
+// ContentJSON schema before unmarshal.
 func normalizeContentJSON(raw string, log *slog.Logger) (string, bool, bool, error) {
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(raw), &top); err != nil {
 		return raw, false, false, nil
 	}
-	shapeChanged, err := normalizeContentShape(top, log)
+	altChanged, err := normalizeContentAlternateSchema(top, log)
 	if err != nil {
 		return raw, false, false, err
 	}
+	shapeChanged, err := normalizeContentShape(top, log)
+	if err != nil {
+		return raw, altChanged, false, err
+	}
 	adviceChanged, err := normalizeContentAdviceOnMap(top, log)
 	if err != nil {
-		return raw, shapeChanged, false, err
+		return raw, shapeChanged || altChanged, false, err
 	}
-	if !shapeChanged && !adviceChanged {
+	heroChanged, err := normalizeContentHeroOnMap(top, log)
+	if err != nil {
+		return raw, shapeChanged || altChanged, adviceChanged, err
+	}
+	if !shapeChanged && !adviceChanged && !heroChanged && !altChanged {
 		return raw, false, false, nil
 	}
 	b, err := json.Marshal(top)
 	if err != nil {
-		return raw, shapeChanged, adviceChanged, err
+		return raw, shapeChanged || altChanged, adviceChanged, err
 	}
-	return string(b), shapeChanged, adviceChanged, nil
+	return string(b), shapeChanged || altChanged, adviceChanged, nil
+}
+
+// nestedSectionOrder is the preferred merge order when Claude-style models
+// emit one object per report theme (resource_overview, log_analysis, …).
+var nestedSectionOrder = []string{
+	"executive_summary",
+	"resource_overview",
+	"monitoring_coverage",
+	"monitoring_status",
+	"fleet_overview",
+	"log_analysis",
+	"logs_overview",
+	"application_logs",
+	"changes_overview",
+	"alert_summary",
+	"incidents_overview",
+}
+
+// normalizeContentAlternateSchema lifts report_meta / hero_metrics /
+// *_overview nested objects into ContentJSON narrative + hero + advice.
+func normalizeContentAlternateSchema(top map[string]json.RawMessage, log *slog.Logger) (bool, error) {
+	changed := false
+
+	if _, hasHero := top["hero"]; !hasHero {
+		if hm, ok := top["hero_metrics"]; ok {
+			top["hero"] = hm
+			delete(top, "hero_metrics")
+			changed = true
+		}
+	}
+	if liftAdviceFromAlternateKeys(top) {
+		changed = true
+	}
+
+	existingHeadline, existingParas := narrativeFields(top["narrative"])
+	headline := existingHeadline
+	if headline == "" {
+		headline = jsonStringField(top["headline"])
+	}
+	if headline == "" {
+		headline = headlineFromNestedSections(top)
+	}
+	if headline == "" {
+		headline = jsonStringFieldFromObject(top["report_meta"], "title")
+	}
+
+	paras := existingParas
+	if len(paras) == 0 {
+		if nested := paragraphsFromNestedSections(top); len(nested) > 0 {
+			paras = nested
+		}
+	}
+
+	if headline == "" {
+		return changed, nil
+	}
+	if existingHeadline != "" && len(existingParas) > 0 {
+		return changed, nil
+	}
+
+	narrative, err := json.Marshal(map[string]any{
+		"headline":   headline,
+		"paragraphs": paras,
+	})
+	if err != nil {
+		return changed, err
+	}
+	if log != nil {
+		log.Info("parse content: normalized alternate report schema",
+			slog.String("headline", truncate(headline, 120)),
+			slog.Int("paragraphs", len(paras)),
+			slog.String("hint", "LLM returned report_meta/hero_metrics/nested sections instead of ContentJSON"),
+		)
+	}
+	top["narrative"] = narrative
+	delete(top, "headline")
+	changed = true
+	return changed, nil
+}
+
+func liftAdviceFromAlternateKeys(top map[string]json.RawMessage) bool {
+	if _, ok := top["advice"]; ok {
+		return false
+	}
+	for _, key := range []string{"recommendations", "action_items"} {
+		if raw, ok := top[key]; ok {
+			top["advice"] = raw
+			delete(top, key)
+			return true
+		}
+	}
+	if raw, ok := top["advice_section"]; ok {
+		if items := jsonRawFieldFromObject(raw, "items"); items != nil {
+			top["advice"] = items
+			delete(top, "advice_section")
+			return true
+		}
+		if recs := jsonRawFieldFromObject(raw, "recommendations"); recs != nil {
+			top["advice"] = recs
+			delete(top, "advice_section")
+			return true
+		}
+	}
+	return false
+}
+
+func headlineFromNestedSections(top map[string]json.RawMessage) string {
+	for _, key := range nestedSectionOrder {
+		if raw, ok := top[key]; ok {
+			if h := jsonStringFieldFromObject(raw, "headline"); h != "" {
+				return h
+			}
+			if h := jsonStringFieldFromObject(raw, "title"); h != "" {
+				return h
+			}
+		}
+	}
+	for key, raw := range top {
+		if isNestedSectionSkipKey(key) {
+			continue
+		}
+		raw = bytes.TrimSpace(raw)
+		if len(raw) == 0 || raw[0] != '{' {
+			continue
+		}
+		if h := jsonStringFieldFromObject(raw, "headline"); h != "" {
+			return h
+		}
+	}
+	return ""
+}
+
+func paragraphsFromNestedSections(top map[string]json.RawMessage) []Paragraph {
+	seen := make(map[string]bool, len(nestedSectionOrder))
+	var out []Paragraph
+	appendFrom := func(key string, raw json.RawMessage) {
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		if paras := paragraphsFromNestedSection(raw); len(paras) > 0 {
+			out = append(out, paras...)
+		}
+	}
+	for _, key := range nestedSectionOrder {
+		if raw, ok := top[key]; ok {
+			appendFrom(key, raw)
+		}
+	}
+	for key, raw := range top {
+		if isNestedSectionSkipKey(key) || seen[key] {
+			continue
+		}
+		raw = bytes.TrimSpace(raw)
+		if len(raw) == 0 || raw[0] != '{' {
+			continue
+		}
+		appendFrom(key, raw)
+	}
+	return out
+}
+
+type nestedSection struct {
+	Headline  string          `json:"headline"`
+	Title     string          `json:"title"`
+	Narrative string          `json:"narrative"`
+	Summary   string          `json:"summary"`
+	Content   string          `json:"content"`
+	Body      string          `json:"body"`
+	Text      string          `json:"text"`
+	Items     json.RawMessage `json:"items"`
+}
+
+func paragraphsFromNestedSection(raw json.RawMessage) []Paragraph {
+	var sec nestedSection
+	if err := json.Unmarshal(raw, &sec); err != nil {
+		return nil
+	}
+	text := firstNonEmpty(
+		strings.TrimSpace(sec.Narrative),
+		strings.TrimSpace(sec.Content),
+		strings.TrimSpace(sec.Body),
+		strings.TrimSpace(sec.Text),
+		strings.TrimSpace(sec.Summary),
+	)
+	if text == "" && len(bytes.TrimSpace(sec.Items)) > 0 {
+		var items []string
+		if json.Unmarshal(sec.Items, &items) == nil {
+			parts := make([]string, 0, len(items))
+			for _, it := range items {
+				it = strings.TrimSpace(it)
+				if it != "" {
+					parts = append(parts, it)
+				}
+			}
+			if len(parts) > 0 {
+				text = strings.Join(parts, "\n")
+			}
+		}
+	}
+	if text == "" {
+		return nil
+	}
+	title := firstNonEmpty(strings.TrimSpace(sec.Headline), strings.TrimSpace(sec.Title))
+	if title != "" && !strings.Contains(text, title) {
+		text = title + "\n\n" + text
+	}
+	return []Paragraph{{Text: text}}
+}
+
+func isNestedSectionSkipKey(key string) bool {
+	switch key {
+	case "version", "narrative", "hero", "hero_metrics", "advice", "recommendations",
+		"action_items", "advice_section", "report_meta", "metadata", "key_incidents",
+		"actions_summary", "resource", "fleet", "logs", "changes", "assets", "usage",
+		"headline", "sections", "summary", "paragraphs", "period", "granularity", "scope":
+		return true
+	default:
+		return false
+	}
+}
+
+func jsonStringFieldFromObject(raw json.RawMessage, field string) string {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || raw[0] != '{' {
+		return ""
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return ""
+	}
+	return jsonStringField(obj[field])
+}
+
+func jsonRawFieldFromObject(raw json.RawMessage, field string) json.RawMessage {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || raw[0] != '{' {
+		return nil
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil
+	}
+	v, ok := obj[field]
+	if !ok {
+		return nil
+	}
+	return v
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // normalizeContentShape lifts a legacy flat LLM shape (top-level headline
@@ -417,6 +684,101 @@ func normalizeContentAdviceOnMap(top map[string]json.RawMessage, log *slog.Logge
 	}
 	top["advice"] = normalized
 	return true, nil
+}
+
+// normalizeContentHeroOnMap fills missing hero keys/labels. gpt-5.x often
+// emits label+value cards without the stable key the SPA expects; the
+// generator overwrites hero from facts anyway, but ParseContent validates
+// before that merge.
+func normalizeContentHeroOnMap(top map[string]json.RawMessage, log *slog.Logger) (bool, error) {
+	raw, ok := top["hero"]
+	if !ok {
+		return false, nil
+	}
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return false, nil
+	}
+	var cards []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &cards); err != nil {
+		return false, nil // leave unmarshal to report the shape error
+	}
+	changed := false
+	for i := range cards {
+		key := jsonStringField(cards[i]["key"])
+		label := jsonStringField(cards[i]["label"])
+		if key == "" && label != "" {
+			key = heroKeyFromLabel(label, i)
+			b, err := json.Marshal(key)
+			if err != nil {
+				return false, err
+			}
+			cards[i]["key"] = b
+			changed = true
+		}
+		if label == "" && key != "" {
+			b, err := json.Marshal(key)
+			if err != nil {
+				return false, err
+			}
+			cards[i]["label"] = b
+			changed = true
+		}
+	}
+	if !changed {
+		return false, nil
+	}
+	normalized, err := json.Marshal(cards)
+	if err != nil {
+		return false, err
+	}
+	if log != nil {
+		log.Info("parse content: normalized hero field",
+			slog.Int("cards", len(cards)),
+			slog.String("hint", "LLM returned hero cards without key; derived from label"),
+		)
+	}
+	top["hero"] = normalized
+	return true, nil
+}
+
+func heroKeyFromLabel(label string, index int) string {
+	label = strings.TrimSpace(label)
+	if label == "" {
+		return fmt.Sprintf("hero_%d", index)
+	}
+	// Align with facts collector labels → stable keys.
+	known := map[string]string{
+		"监控设备":    "devices",
+		"CPU 均值":  "cpu_avg",
+		"内存 均值":   "mem_avg",
+		"磁盘 峰值":   "disk_peak",
+		"潜在错误":    "log_errors",
+		"Incidents": "incidents",
+		"Agent 动作":  "actions",
+		"在线设备":    "online",
+	}
+	if k, ok := known[label]; ok {
+		return k
+	}
+	var b strings.Builder
+	prevUnderscore := false
+	for _, r := range label {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(unicode.ToLower(r))
+			prevUnderscore = false
+			continue
+		}
+		if !prevUnderscore && b.Len() > 0 {
+			b.WriteByte('_')
+			prevUnderscore = true
+		}
+	}
+	s := strings.Trim(b.String(), "_")
+	if s != "" {
+		return s
+	}
+	return fmt.Sprintf("hero_%d", index)
 }
 
 // normalizeAdviceJSON coerces common LLM advice shapes into []Advice.

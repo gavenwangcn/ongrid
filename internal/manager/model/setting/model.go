@@ -42,6 +42,7 @@ const (
 	CategoryTempo     = "tempo"     // external Tempo OTLP HTTP endpoint + auth
 	CategoryWebSearch = "websearch" // built-in web_search skill: Tavily key + future provider knobs
 	CategoryReport    = "report"    // scheduled report worker LLM pin
+	CategoryAlert     = "alert"     // alert notification routing knobs
 )
 
 // (CategoryGit + KeyGitGitHubToken removed HTTPS git
@@ -125,6 +126,12 @@ const (
 const (
 	KeyReportLLMProvider = "llm_provider"
 	KeyReportLLMModel    = "llm_model"
+)
+
+// Per-system notification channel bindings (CategoryAlert). JSON map:
+// system_name → []channel_id. Empty / missing key → global channel filters.
+const (
+	KeySystemNotifyBindings = "system_notify_bindings"
 )
 
 // LLMProviderID enumerates the providers the multi-provider router

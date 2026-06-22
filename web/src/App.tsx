@@ -34,6 +34,7 @@ const SettingsLLM = lazy(() => import('@/pages/settings/LLM'));
 // halves of the same comms surface, kept on adjacent /settings/* paths so
 // admin nav stays predictable.
 const SettingsNotifications = lazy(() => import('@/pages/settings/Notifications'));
+const SettingsSystemNotify = lazy(() => import('@/pages/settings/SystemNotify'));
 const SettingsChannels = lazy(() => import('@/pages/settings/Channels'));
 const SettingsIntegrations = lazy(() => import('@/pages/settings/Integrations'));
 const SettingsPreferences = lazy(() => import('@/pages/settings/Preferences'));
@@ -142,6 +143,7 @@ export default function App() {
           <Route index element={<Navigate to="health" replace />} />
           <Route path="llm" element={<SettingsLLM />} />
           <Route path="notifications" element={<SettingsNotifications />} />
+          <Route path="system-notify" element={<SettingsSystemNotify />} />
           <Route path="channels" element={<SettingsChannels />} />
           <Route path="integrations" element={<SettingsIntegrations />} />
           <Route path="health" element={<SettingsHealth />} />

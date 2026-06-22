@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Bell,
   Loader2,
   MessageCircle,
   MessageSquareShare,
+  Network,
   Send,
   Webhook,
   Slack,
@@ -212,7 +214,12 @@ export default function SettingsNotifications() {
           {tr(' 启动时同步入库；UI 改动持久化到 DB，下次启动 env 不会覆盖。投递记录（成功 / 失败 / 重试）请查 ', ' is synced into the DB at startup; UI edits are persisted and not overwritten by env on next boot. Delivery records (success / failure / retry) live under ')}
           <b>{tr('设置 → 告警事件', 'Settings → Alert events')}</b>
           {tr('。需要双向 bot 会话请看 ', '. For two-way bot sessions, see ')}
-          <b>{tr('设置 → IM 机器人', 'Settings → IM bots')}</b>{tr('。', '.')}
+          <b>{tr('设置 → IM 机器人', 'Settings → IM bots')}</b>
+          {tr('。按业务系统路由告警到不同群：', '. Route alerts per business system: ')}
+          <Link to="/settings/system-notify" className="inline-flex items-center gap-1 text-indigo-300 hover:text-indigo-200">
+            <Network size={12} /> {tr('系统告警路由', 'System alert routing')}
+          </Link>
+          {tr('。', '.')}
         </div>
 
         {err && (

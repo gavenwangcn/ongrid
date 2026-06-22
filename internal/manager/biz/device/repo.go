@@ -29,6 +29,12 @@ type ListFilter struct {
 	Offset           int
 }
 
+// SystemEnvironment is one (system_name, environment_tag) bucket in the fleet.
+type SystemEnvironment struct {
+	SystemName     string
+	EnvironmentTag string
+}
+
 // Repo is the device persistence contract. The sqlite/mysql implementation
 // lives under internal/manager/data/device.
 type Repo interface {
@@ -94,6 +100,12 @@ type Repo interface {
 	List(ctx context.Context, f ListFilter) ([]*model.Device, error)
 	// Count returns the total non-soft-deleted device count.
 	Count(ctx context.Context) (int64, error)
+	// ListDistinctSystemNames returns sorted non-empty operator-assigned
+	// system_name values across the fleet.
+	ListDistinctSystemNames(ctx context.Context) ([]string, error)
+	// ListSystemEnvironmentPairs returns distinct (system_name, environment_tag)
+	// pairs seen in the fleet (environment_tag may be empty).
+	ListSystemEnvironmentPairs(ctx context.Context) ([]SystemEnvironment, error)
 	// Delete hard-deletes a device and does NOT touch junction rows;
 	// edge deletion cascades through edge usecase instead.
 	Delete(ctx context.Context, id uint64) error

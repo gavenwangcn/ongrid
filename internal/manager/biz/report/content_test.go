@@ -136,6 +136,93 @@ func TestParseContent_LegacyFlatShape(t *testing.T) {
 	}
 }
 
+func TestParseContent_LegacyHeroLabelOnly(t *testing.T) {
+	// gpt-5.5 shape: hero cards carry label+value but omit stable key.
+	raw := `{
+		"headline": "电子招标管理平台-EBD 日常运维报告",
+		"period": "2026-06-21 — 2026-06-22",
+		"granularity": "daily",
+		"scope": "系统「电子招标管理平台-EBD」（仅统计该系统下设备）",
+		"summary": "本周期系统整体运行平稳，监控设备在线情况正常，资源使用处于较低水平。",
+		"hero": [
+			{"label": "监控设备", "value": 4},
+			{"label": "CPU 均值", "value": 2.3, "unit": "%"},
+			{"label": "内存 均值", "value": 50.4, "unit": "%"},
+			{"label": "磁盘 峰值", "value": 4.1, "unit": "%"}
+		],
+		"sections": [
+			{"title": "资源概览", "status": "正常", "content": "本周期资源数据可用。"},
+			{"title": "日志风险", "status": "关注", "content": "存在潜在错误记录。"}
+		],
+		"advice": ["优先排查 uip 500", "跟进 sts 定时器错误"]
+	}`
+	got, err := ParseContent(raw, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Narrative.Headline != "电子招标管理平台-EBD 日常运维报告" {
+		t.Errorf("headline: %q", got.Narrative.Headline)
+	}
+	if len(got.Hero) != 4 {
+		t.Fatalf("hero count = %d, want 4", len(got.Hero))
+	}
+	if got.Hero[0].Key != "devices" || got.Hero[1].Key != "cpu_avg" {
+		t.Errorf("hero keys not derived: %+v", got.Hero[:2])
+	}
+	if len(got.Advice) != 2 {
+		t.Errorf("advice: %+v", got.Advice)
+	}
+}
+
+func TestParseContent_ClaudeNestedReportSchema(t *testing.T) {
+	// claude-haiku-4-5 shape: report_meta + hero_metrics + *_overview sections.
+	raw := `{
+		"report_meta": {
+			"title": "电子招标管理平台-EBD 运维周报",
+			"period": "2026-06-21 — 2026-06-22",
+			"system_name": "电子招标管理平台-EBD",
+			"generated_at": "2026-06-22"
+		},
+		"hero_metrics": [
+			{"key": "devices", "label": "监控设备", "value": 4, "trend": "stable"},
+			{"key": "cpu_avg", "label": "CPU 均值", "value": 2.3, "unit": "%", "trend": "healthy"},
+			{"key": "mem_avg", "label": "内存 均值", "value": 50.4, "unit": "%", "trend": "normal"},
+			{"key": "disk_peak", "label": "磁盘 峰值", "value": 4.1, "unit": "%", "trend": "healthy"}
+		],
+		"resource_overview": {
+			"headline": "基础设施资源平稳运行",
+			"narrative": "本周期内，系统资源利用率处于健康水平。CPU 平均负载仅 2.29%，峰值 8.30%。"
+		},
+		"log_analysis": {
+			"headline": "日志错误需持续跟进",
+			"narrative": "本周期共检测到 28 条潜在错误，与上周期持平。"
+		},
+		"recommendations": [
+			"优先排查 chery-prod-uip 接口 error code=500",
+			"跟进 chery-prod-sts 定时器错误"
+		]
+	}`
+	got, err := ParseContent(raw, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Narrative.Headline != "基础设施资源平稳运行" {
+		t.Errorf("headline: %q", got.Narrative.Headline)
+	}
+	if len(got.Narrative.Paragraphs) < 2 {
+		t.Fatalf("paragraphs = %d, want >= 2: %+v", len(got.Narrative.Paragraphs), got.Narrative.Paragraphs)
+	}
+	if !strings.Contains(got.Narrative.Paragraphs[0].Text, "CPU 平均负载") {
+		t.Errorf("first paragraph: %q", got.Narrative.Paragraphs[0].Text)
+	}
+	if len(got.Hero) != 4 || got.Hero[0].Key != "devices" {
+		t.Errorf("hero: %+v", got.Hero)
+	}
+	if len(got.Advice) != 2 || !strings.Contains(got.Advice[0].Text, "uip") {
+		t.Errorf("advice: %+v", got.Advice)
+	}
+}
+
 func TestParseContent_LegacyFlatShapePreservesCanonicalNarrative(t *testing.T) {
 	raw := `{"version":"1","hero":[{"key":"incidents","label":"Incidents","value":0}],
 		"narrative":{"headline":"canonical"},

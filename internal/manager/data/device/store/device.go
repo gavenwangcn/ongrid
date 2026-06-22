@@ -299,6 +299,44 @@ func (r *Repo) Count(ctx context.Context) (int64, error) {
 	return n, nil
 }
 
+// ListDistinctSystemNames returns sorted non-empty system_name values.
+func (r *Repo) ListDistinctSystemNames(ctx context.Context) ([]string, error) {
+	var names []string
+	err := r.db.WithContext(ctx).Model(&model.Device{}).
+		Where("system_name <> ''").
+		Distinct("system_name").
+		Order("system_name ASC").
+		Pluck("system_name", &names).Error
+	return names, err
+}
+
+// ListSystemEnvironmentPairs returns distinct non-empty system_name +
+// environment_tag combinations.
+func (r *Repo) ListSystemEnvironmentPairs(ctx context.Context) ([]biz.SystemEnvironment, error) {
+	type row struct {
+		SystemName     string
+		EnvironmentTag string
+	}
+	var rows []row
+	err := r.db.WithContext(ctx).Model(&model.Device{}).
+		Select("system_name", "environment_tag").
+		Where("system_name <> ''").
+		Group("system_name, environment_tag").
+		Order("system_name ASC, environment_tag ASC").
+		Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	out := make([]biz.SystemEnvironment, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, biz.SystemEnvironment{
+			SystemName:     strings.TrimSpace(row.SystemName),
+			EnvironmentTag: strings.TrimSpace(strings.ToLower(row.EnvironmentTag)),
+		})
+	}
+	return out, nil
+}
+
 // Delete hard-deletes a device by id (row removed from devices).
 func (r *Repo) Delete(ctx context.Context, id uint64) error {
 	res := r.db.WithContext(ctx).Unscoped().Delete(&model.Device{}, id)

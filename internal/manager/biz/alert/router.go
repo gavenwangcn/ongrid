@@ -31,9 +31,11 @@ type RuleLookup func(ctx context.Context, key string) (*model.Rule, error)
 // DBChannelResolver enumerates enabled channel rows on each call and
 // filters them against the incident's severity + scope_type.
 type DBChannelResolver struct {
-	src      channelLister
-	fallback []string
-	rules    RuleLookup
+	src          channelLister
+	fallback     []string
+	rules        RuleLookup
+	devices      DeviceTargetResolver
+	systemNotify *SystemNotifyService
 }
 
 // NewDBChannelResolver wires a DB-backed resolver. fallback is the list of
@@ -51,6 +53,17 @@ func NewDBChannelResolver(src channelLister, fallback []string) *DBChannelResolv
 // severity/scope filters.
 func (r *DBChannelResolver) SetRuleLookup(lookup RuleLookup) {
 	r.rules = lookup
+}
+
+// SetDeviceLookup wires device→system_name/environment_tag resolution.
+func (r *DBChannelResolver) SetDeviceLookup(devices DeviceTargetResolver) {
+	r.devices = devices
+}
+
+// SetSystemNotify wires per-system channel bindings. When an incident
+// resolves to a system with bindings, only those channels are used.
+func (r *DBChannelResolver) SetSystemNotify(svc *SystemNotifyService) {
+	r.systemNotify = svc
 }
 
 // ChannelsFor returns the matching channel rows. When no row matches, the
@@ -92,6 +105,15 @@ func (r *DBChannelResolver) ChannelsFor(ctx context.Context, incident *model.Inc
 		}
 		// Pinned IDs all disabled / deleted — fall through to global
 		// filter so we don't drop the notification entirely.
+	}
+
+	// Per-system (+ optional environment) bindings.
+	if systemName, envTag := r.targetFor(ctx, incident); systemName != "" && r.systemNotify != nil {
+		if ids := r.systemNotify.ChannelIDsForTarget(ctx, systemName, envTag); len(ids) > 0 {
+			if matched := channelsByIDs(rows, ids); len(matched) > 0 {
+				return matched
+			}
+		}
 	}
 
 	var matched []*model.Channel
@@ -190,4 +212,47 @@ func synthetic(names []string) []*model.Channel {
 		out = append(out, &model.Channel{Name: n, Enabled: true})
 	}
 	return out
+}
+
+func channelsByIDs(rows []*model.Channel, ids []uint64) []*model.Channel {
+	want := make(map[uint64]struct{}, len(ids))
+	for _, id := range ids {
+		want[id] = struct{}{}
+	}
+	var matched []*model.Channel
+	for _, ch := range rows {
+		if ch == nil || !ch.Enabled {
+			continue
+		}
+		if _, ok := want[ch.ID]; ok {
+			matched = append(matched, ch)
+		}
+	}
+	return matched
+}
+
+func (r *DBChannelResolver) targetFor(ctx context.Context, incident *model.Incident) (systemName, environmentTag string) {
+	if incident == nil {
+		return "", ""
+	}
+	if labels, err := incident.Labels(); err == nil {
+		if s := strings.TrimSpace(labels["system_name"]); s != "" {
+			systemName = s
+		}
+		if e := strings.TrimSpace(labels["environment_tag"]); e != "" {
+			environmentTag = strings.ToLower(e)
+		}
+	}
+	if r.devices != nil && incident.DeviceID != nil && *incident.DeviceID != 0 {
+		sys, env, err := r.devices.TargetForDevice(ctx, *incident.DeviceID)
+		if err == nil {
+			if systemName == "" {
+				systemName = sys
+			}
+			if environmentTag == "" {
+				environmentTag = env
+			}
+		}
+	}
+	return strings.TrimSpace(systemName), strings.TrimSpace(strings.ToLower(environmentTag))
 }

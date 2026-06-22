@@ -516,3 +516,39 @@ export type AlertRuntimeInfo = {
 export function getAlertRuntimeInfo() {
   return request<AlertRuntimeInfo>('GET', '/alerts/runtime-info');
 }
+
+// ---- System notification routing ----
+
+export type SystemNotifyChannel = {
+  id: number;
+  name: string;
+  type: string;
+  enabled: boolean;
+};
+
+export type SystemNotifyBinding = {
+  system_name: string;
+  environment_tag?: string;
+  channel_ids: number[];
+};
+
+export type SystemEnvironmentPair = {
+  system_name: string;
+  environment_tag: string;
+};
+
+export type SystemNotifyConfig = {
+  systems: string[];
+  system_environments?: SystemEnvironmentPair[];
+  bindings: SystemNotifyBinding[];
+  channels: SystemNotifyChannel[];
+  environment_tags?: string[];
+};
+
+export function getSystemNotifyConfig() {
+  return request<SystemNotifyConfig>('GET', '/alert-settings/system-notify');
+}
+
+export function setSystemNotifyConfig(bindings: SystemNotifyBinding[]) {
+  return request<SystemNotifyConfig>('PUT', '/alert-settings/system-notify', { bindings });
+}

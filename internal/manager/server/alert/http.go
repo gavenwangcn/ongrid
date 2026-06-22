@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	bizalert "github.com/ongridio/ongrid/internal/manager/biz/alert"
 	bizaudit "github.com/ongridio/ongrid/internal/manager/biz/audit"
 	"github.com/ongridio/ongrid/internal/manager/biz/alert/investigator"
 	alertmodel "github.com/ongridio/ongrid/internal/manager/model/alert"
@@ -103,10 +104,17 @@ type InvestigationReport struct {
 	ReadyAt          *string         `json:"ready_at,omitempty"`
 }
 
+// SystemNotifySettings manages per-system notification channel bindings.
+type SystemNotifySettings interface {
+	Get(ctx context.Context) (bizalert.SystemNotifyView, error)
+	Set(ctx context.Context, bindings []bizalert.SystemNotifyBinding) (bizalert.SystemNotifyView, error)
+}
+
 type Handler struct {
 	incidents             IncidentService
 	channels              ChannelService
 	rules                 RuleService
+	systemNotify          SystemNotifySettings
 	investigations        InvestigationReader
 	investigationsTrigger InvestigationTrigger
 	// runtime knobs exposed as informational metadata via
@@ -151,6 +159,11 @@ func (h *Handler) WithInvestigationTrigger(t InvestigationTrigger) *Handler {
 	return h
 }
 
+func (h *Handler) WithSystemNotify(svc SystemNotifySettings) *Handler {
+	h.systemNotify = svc
+	return h
+}
+
 func (h *Handler) Register(r chi.Router) {
 	r.Get("/v1/alerts/incidents", h.listIncidents)
 	r.Get("/v1/alerts/incidents/{id}", h.getIncident)
@@ -168,6 +181,9 @@ func (h *Handler) Register(r chi.Router) {
 	r.Put("/v1/notification-channels/{id}", h.updateChannel)
 	r.Delete("/v1/notification-channels/{id}", h.deleteChannel)
 	r.Post("/v1/notification-channels/{id}/test", h.testChannel)
+
+	r.Get("/v1/alert-settings/system-notify", h.getSystemNotify)
+	r.Put("/v1/alert-settings/system-notify", h.putSystemNotify)
 
 	if h.rules != nil {
 		r.Get("/v1/alert-rules", h.listRules)
@@ -691,6 +707,58 @@ func (h *Handler) testChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := h.channels.TestChannel(r.Context(), caller, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// getSystemNotify returns per-system notification channel bindings.
+//
+// @Summary      Get system notification bindings
+// @Router       /v1/alert-settings/system-notify [get]
+// @Success      200  {object}  bizalert.SystemNotifyView
+func (h *Handler) getSystemNotify(w http.ResponseWriter, r *http.Request) {
+	if _, ok := callerFromRequest(r); !ok {
+		writeErr(w, errs.ErrUnauthorized)
+		return
+	}
+	if h.systemNotify == nil {
+		writeErr(w, errs.ErrNotWiredYet)
+		return
+	}
+	out, err := h.systemNotify.Get(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+type systemNotifyReq struct {
+	Bindings []bizalert.SystemNotifyBinding `json:"bindings"`
+}
+
+// putSystemNotify updates per-system notification channel bindings.
+//
+// @Summary      Update system notification bindings
+// @Router       /v1/alert-settings/system-notify [put]
+// @Success      200  {object}  bizalert.SystemNotifyView
+func (h *Handler) putSystemNotify(w http.ResponseWriter, r *http.Request) {
+	if _, ok := requireAdmin(w, r); !ok {
+		return
+	}
+	if h.systemNotify == nil {
+		writeErr(w, errs.ErrNotWiredYet)
+		return
+	}
+	var req systemNotifyReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, errors.Join(errs.ErrInvalid, err))
+		return
+	}
+	out, err := h.systemNotify.Set(r.Context(), req.Bindings)
 	if err != nil {
 		writeErr(w, err)
 		return
