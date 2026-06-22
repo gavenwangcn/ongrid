@@ -1580,6 +1580,7 @@ func main() {
 	// UI can list existing reports and surface a clear not-configured
 	// error on generate instead of a route-level 404.
 	reportRepo := managerreportdata.NewRepo(db)
+	reportModelCfg := managerbizreport.NewModelConfigService(settingSvc, llmRouter)
 	var reportGen managerbizreport.Generator
 	reportSchedulerReady := false
 	if reportRT, ok := aiopsRuntime.(*aiopschatruntime.Runtime); ok && reportRT != nil {
@@ -1605,7 +1606,8 @@ func main() {
 			log,
 		).
 			WithDeliverer(reportDelivererShim{channels: alertRepo, router: notifyRouter}).
-			WithReadyCheck(reportLLMReady(llmSettingsResolver))
+			WithModelConfig(reportModelCfg).
+			WithReadyCheck(reportLLMReady(llmSettingsResolver, reportModelCfg))
 		reportSchedulerReady = true
 		log.Info("report: generator wired")
 	} else {
@@ -1619,7 +1621,7 @@ func main() {
 		managerbizreport.NewScheduler(reportUC, log).Start(rootCtx)
 		log.Info("report: scheduler wired")
 	}
-	reportHandler := managerserverreport.NewHandler(reportUC)
+	reportHandler := managerserverreport.NewHandler(reportUC).WithModelConfig(reportModelCfg)
 
 	// Boot compensation pass for the structured RCA path: incidents that
 	// fired while no LLM provider was configured had their auto-investigation
@@ -2275,10 +2277,18 @@ func knownLLMProviderIDs() []string {
 	}
 }
 
-func reportLLMReady(resolver *managerbizsetting.LLMSettingsResolver) func(context.Context) error {
+func reportLLMReady(resolver *managerbizsetting.LLMSettingsResolver, modelCfg *managerbizreport.ModelConfigService) func(context.Context) error {
 	return func(ctx context.Context) error {
 		if resolver == nil {
 			return fmt.Errorf("%w: LLM provider not configured", errs.ErrNotWiredYet)
+		}
+		if modelCfg != nil {
+			if pinProv, _ := modelCfg.ResolveSpawnModel(ctx); pinProv != "" {
+				if modelCfg.ProviderConfigured(pinProv) {
+					return nil
+				}
+				return fmt.Errorf("%w: report LLM provider %q is not configured", errs.ErrNotWiredYet, pinProv)
+			}
 		}
 		providers, resolvedDefault, err := resolver.ResolveProviders(ctx)
 		if err != nil {

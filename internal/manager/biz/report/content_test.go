@@ -91,12 +91,12 @@ func TestRenderMarkdown_FlattensEntities(t *testing.T) {
 // headings, never the Chinese defaults.
 func TestRenderMarkdown_Locale(t *testing.T) {
 	en := sampleContent().RenderMarkdown("Weekly · 2026 W23", "en")
-	for _, want := range []string{"## Monitoring coverage", "## Usage", "## New assets"} {
+	for _, want := range []string{"## Monitoring coverage"} {
 		if !strings.Contains(en, want) {
 			t.Errorf("en markdown missing %q:\n%s", want, en)
 		}
 	}
-	for _, banned := range []string{"## 监控覆盖", "## 使用情况", "## 资源使用"} {
+	for _, banned := range []string{"## 监控覆盖", "## 使用情况", "## 知识资产新增", "## New assets", "## Usage", "## 资源使用"} {
 		if strings.Contains(en, banned) {
 			t.Errorf("en markdown leaked Chinese heading %q", banned)
 		}
@@ -146,6 +146,79 @@ func TestParseContent_LegacyFlatShapePreservesCanonicalNarrative(t *testing.T) {
 	}
 	if got.Narrative.Headline != "canonical" {
 		t.Errorf("canonical narrative should win: %q", got.Narrative.Headline)
+	}
+}
+
+func TestParseContent_LegacyTitleOnlySectionsUsesSummary(t *testing.T) {
+	// gpt-5.5 shape: sections are outline titles; prose lives in summary[].
+	raw := `{
+		"headline": "人力资源-EHR系统本周期整体运行平稳，主要风险集中在日志错误。",
+		"sections": [
+			{"title":"资源概况"},
+			{"title":"设备与在线状态"},
+			{"title":"日志风险"}
+		],
+		"summary": [
+			"本周期 CPU 均值 3.1%，内存均值 68.4%，资源负载较低。",
+			"监控设备 1 台全部在线。",
+			"潜在错误 848 条，较上周期 +0.4%，主要来自 RabbitMQ exporter。"
+		],
+		"hero": [{"key":"devices","label":"监控设备","value":1}]
+	}`
+	got, err := ParseContent(raw, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Narrative.Paragraphs) != 3 {
+		t.Fatalf("paragraphs = %d, want 3 from summary: %+v", len(got.Narrative.Paragraphs), got.Narrative.Paragraphs)
+	}
+	if !strings.Contains(got.Narrative.Paragraphs[0].Text, "CPU 均值 3.1%") {
+		t.Errorf("first paragraph should come from summary, got %q", got.Narrative.Paragraphs[0].Text)
+	}
+	for _, p := range got.Narrative.Paragraphs {
+		if p.Text == "资源概况" || p.Text == "设备与在线状态" {
+			t.Errorf("title-only section leaked as paragraph: %q", p.Text)
+		}
+	}
+}
+
+func TestParseContent_LegacyNarrativeHeadlineWithSummary(t *testing.T) {
+	raw := `{
+		"version":"1",
+		"hero":[{"key":"devices","label":"监控设备","value":1}],
+		"narrative":{"headline":"headline in narrative"},
+		"summary": ["段落一：资源平稳。", "段落二：日志需关注。"]
+	}`
+	got, err := ParseContent(raw, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Narrative.Headline != "headline in narrative" {
+		t.Errorf("headline: %q", got.Narrative.Headline)
+	}
+	if len(got.Narrative.Paragraphs) != 2 {
+		t.Fatalf("paragraphs: %+v", got.Narrative.Paragraphs)
+	}
+}
+
+func TestParseContent_LegacySectionsWithContentField(t *testing.T) {
+	raw := `{
+		"headline": "本周平稳",
+		"sections": [
+			{"title":"资源概况","content":"CPU 均值 2.3%。"},
+			{"title":"日志","content":"潜在错误 28 条。"}
+		],
+		"hero": [{"key":"devices","label":"监控设备","value":4}]
+	}`
+	got, err := ParseContent(raw, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Narrative.Paragraphs) != 2 {
+		t.Fatalf("paragraphs: %+v", got.Narrative.Paragraphs)
+	}
+	if !strings.Contains(got.Narrative.Paragraphs[0].Text, "CPU 均值 2.3%") {
+		t.Errorf("content field not parsed: %q", got.Narrative.Paragraphs[0].Text)
 	}
 }
 

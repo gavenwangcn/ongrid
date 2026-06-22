@@ -41,13 +41,10 @@ type ReportFacts struct {
 	// rule / setting / device / channel / user edits. "Who changed what."
 	Changes []ChangeFact `json:"changes"`
 
-	// Assets is what was newly added to the platform this period —
-	// custom assistants, skills, knowledge repos. The "我们建设了什么" row.
-	Assets AssetFacts `json:"assets"`
-
-	// Usage is the platform-usage signal: chat sessions + LLM token spend
-	// over the period. The "用了多少" row.
-	Usage UsageFacts `json:"usage"`
+	// Assets / Usage are legacy ContentJSON fields kept for backward
+	// compatibility with older reports; no longer collected or displayed.
+	Assets AssetFacts `json:"assets,omitempty"`
+	Usage  UsageFacts `json:"usage,omitempty"`
 
 	// Logs is application log error analytics from Loki (potential errors
 	// matching the Logs UI shortcut: error|panic|fatal). Scoped to the

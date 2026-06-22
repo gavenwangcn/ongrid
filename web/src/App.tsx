@@ -19,6 +19,7 @@ const IncidentDetailPage = lazy(() => import('@/pages/IncidentDetail'));
 const ReportsPage = lazy(() => import('@/pages/Reports'));
 const ReportDetailPage = lazy(() => import('@/pages/ReportDetail'));
 const ReportSchedulesPage = lazy(() => import('@/pages/ReportSchedules'));
+const ReportModelSettingsPage = lazy(() => import('@/pages/ReportModelSettings'));
 const SkillsPage = lazy(() => import('@/pages/Skills'));
 const SkillRunPage = lazy(() => import('@/pages/SkillRun'));
 const AgentsPage = lazy(() => import('@/pages/Agents'));
@@ -102,6 +103,7 @@ export default function App() {
         <Route path="/alerts/incidents/:id" element={<IncidentDetailPage />} />
         <Route path="/reports" element={<ReportsPage />} />
         <Route path="/reports/schedules" element={<ReportSchedulesPage />} />
+        <Route path="/reports/model" element={<ReportModelSettingsPage />} />
         <Route path="/reports/:id" element={<ReportDetailPage />} />
         <Route path="/skills" element={<SkillsPage />} />
         <Route path="/skills/:key" element={<SkillRunPage />} />

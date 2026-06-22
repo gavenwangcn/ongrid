@@ -12,11 +12,10 @@ import type {
   ResourceFacts,
 } from '@/api/reports';
 
-// ReportContent renders a ContentJSON report body as four colour-coded
-// thematic rows (HLD-014, 2026-06-06 redesign): cluster posture, alerts
-// & response, new assets, usage — with the LLM narrative between the
-// first two, and changes / advice below. Zero chart deps (rAF count-up,
-// inline SVG sparkline).
+// ReportContent renders a ContentJSON report body as colour-coded
+// thematic rows: cluster posture, application logs, alerts & response —
+// with the LLM narrative between posture and logs, and changes / advice
+// below. Zero chart deps (rAF count-up, inline SVG sparkline).
 
 // --- count-up (rAF, no deps) ---
 function useCountUp(target: number, durationMs = 800): number {
@@ -40,12 +39,6 @@ function useCountUp(target: number, durationMs = 800): number {
 
 function fmtNum(v: number): string {
   return Number.isInteger(v) ? String(v) : v.toFixed(1);
-}
-
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
-  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
-  return String(n);
 }
 
 function Sparkline({ points, className }: { points: number[]; className?: string }) {
@@ -269,8 +262,6 @@ export function ReportContentView({ content }: { content: ReportContentT }) {
   const res = content.resource;
   const fleet = content.fleet ?? { total: 0, online: 0 };
   const a = content.actions_summary ?? { mutating_total: 0, mutating_approved: 0, safe_total: 0 };
-  const assets = content.assets ?? { new_agents: 0, new_skills: 0, new_repos: 0 };
-  const usage = content.usage ?? { sessions: 0, prompt_tokens: 0, completion_tokens: 0 };
   const logs = content.logs ?? { available: false, total_errors: 0 };
 
   const onlinePct = fleet.total > 0 ? Math.round((fleet.online / fleet.total) * 100) : 0;
@@ -368,24 +359,6 @@ export function ReportContentView({ content }: { content: ReportContentT }) {
             {incidents.map((ki) => <IncidentRow key={ki.id} ki={ki} />)}
           </div>
         )}
-      </Row>
-
-      {/* ROW 3 — 知识资产新增 */}
-      <Row tone="violet" title={tr('知识资产新增', 'New assets')} desc={tr('本周期新建的助理 / 技能 / 仓库', 'assistants / skills / repos added')}>
-        <div className="grid grid-cols-3 gap-3">
-          <StatCard tone="violet" label={tr('新增助理', 'Assistants')} value={assets.new_agents} />
-          <StatCard tone="violet" label={tr('新增技能', 'Skills')} value={assets.new_skills} />
-          <StatCard tone="violet" label={tr('新增仓库', 'Repos')} value={assets.new_repos} />
-        </div>
-      </Row>
-
-      {/* ROW 4 — 使用情况 */}
-      <Row tone="cyan" title={tr('使用情况', 'Usage')} desc={tr('会话与 LLM token 消耗', 'sessions & LLM tokens')}>
-        <div className="grid grid-cols-3 gap-3">
-          <StatCard tone="cyan" label={tr('会话数', 'Sessions')} value={usage.sessions} />
-          <StatCard tone="cyan" label={tr('输入 token', 'Prompt tokens')} value={usage.prompt_tokens} sub={fmtTokens(usage.prompt_tokens)} />
-          <StatCard tone="cyan" label={tr('输出 token', 'Completion tokens')} value={usage.completion_tokens} sub={fmtTokens(usage.completion_tokens)} />
-        </div>
       </Row>
 
       {/* Changes */}

@@ -32,8 +32,9 @@ type Content struct {
 	KeyIncidents []KeyIncident  `json:"key_incidents"`
 	Actions      ActionsSummary `json:"actions_summary"`
 	Changes      []ChangeFact   `json:"changes,omitempty"`
-	Assets       AssetFacts     `json:"assets"`
-	Usage        UsageFacts     `json:"usage"`
+	// Legacy fields — no longer collected or rendered in new reports.
+	Assets       AssetFacts     `json:"assets,omitempty"`
+	Usage        UsageFacts     `json:"usage,omitempty"`
 	Logs         LogFacts       `json:"logs"`
 	Advice       []Advice       `json:"advice"`
 	Metadata     ContentMeta    `json:"metadata"`
@@ -190,19 +191,36 @@ func normalizeContentJSON(raw string, log *slog.Logger) (string, bool, bool, err
 }
 
 // normalizeContentShape lifts a legacy flat LLM shape (top-level headline
-// + sections) into narrative.headline / narrative.paragraphs.
+// + sections / summary) into narrative.headline / narrative.paragraphs.
+// Also back-fills narrative.paragraphs when the model put headline under
+// narrative but parked prose in summary or title-only sections.
 func normalizeContentShape(top map[string]json.RawMessage, log *slog.Logger) (bool, error) {
-	if narrativeHasHeadline(top["narrative"]) {
-		return false, nil
+	existingHeadline, existingParas := narrativeFields(top["narrative"])
+	headline := existingHeadline
+	if headline == "" {
+		headline = jsonStringField(top["headline"])
 	}
-	headline := jsonStringField(top["headline"])
 	if headline == "" {
 		return false, nil
 	}
-	paras, err := paragraphsFromLegacy(top)
+	if existingHeadline != "" && len(existingParas) > 0 {
+		return false, nil
+	}
+
+	paras := existingParas
+	legacyParas, err := paragraphsFromLegacy(top)
 	if err != nil {
 		return false, err
 	}
+	if len(paras) == 0 {
+		paras = legacyParas
+	}
+
+	needsFix := existingHeadline == "" || len(existingParas) == 0 && len(legacyParas) > 0
+	if !needsFix {
+		return false, nil
+	}
+
 	narrative, err := json.Marshal(map[string]any{
 		"headline":   headline,
 		"paragraphs": paras,
@@ -214,30 +232,32 @@ func normalizeContentShape(top map[string]json.RawMessage, log *slog.Logger) (bo
 		log.Info("parse content: normalized narrative shape",
 			slog.String("headline", truncate(headline, 120)),
 			slog.Int("paragraphs", len(paras)),
-			slog.String("hint", "LLM returned flat headline/sections instead of narrative.{headline,paragraphs}"),
+			slog.String("hint", "LLM returned flat headline/sections/summary instead of narrative.{headline,paragraphs}"),
 		)
 	}
 	top["narrative"] = narrative
 	delete(top, "headline")
 	delete(top, "sections")
 	delete(top, "paragraphs")
+	delete(top, "summary")
 	delete(top, "period")
 	delete(top, "granularity")
 	delete(top, "scope")
 	return true, nil
 }
 
-func narrativeHasHeadline(raw json.RawMessage) bool {
+func narrativeFields(raw json.RawMessage) (string, []Paragraph) {
 	if len(bytes.TrimSpace(raw)) == 0 {
-		return false
+		return "", nil
 	}
 	var n struct {
-		Headline string `json:"headline"`
+		Headline   string      `json:"headline"`
+		Paragraphs []Paragraph `json:"paragraphs"`
 	}
 	if err := json.Unmarshal(raw, &n); err != nil {
-		return false
+		return "", nil
 	}
-	return strings.TrimSpace(n.Headline) != ""
+	return strings.TrimSpace(n.Headline), n.Paragraphs
 }
 
 func jsonStringField(raw json.RawMessage) string {
@@ -259,39 +279,118 @@ func paragraphsFromLegacy(top map[string]json.RawMessage) ([]Paragraph, error) {
 			return paras, nil
 		}
 	}
-	if raw, ok := top["sections"]; ok {
-		var sections []struct {
-			Title string `json:"title"`
-			Body  string `json:"body"`
-			Text  string `json:"text"`
-		}
-		if err := json.Unmarshal(raw, &sections); err != nil {
-			return nil, fmt.Errorf("sections: %w", err)
-		}
-		out := make([]Paragraph, 0, len(sections))
-		for _, s := range sections {
-			text := strings.TrimSpace(s.Text)
-			if text == "" {
-				title := strings.TrimSpace(s.Title)
-				body := strings.TrimSpace(s.Body)
-				switch {
-				case title != "" && body != "":
-					text = title + "\n\n" + body
-				case body != "":
-					text = body
-				default:
-					text = title
-				}
-			}
-			if text != "" {
-				out = append(out, Paragraph{Text: text})
-			}
-		}
-		if len(out) > 0 {
-			return out, nil
-		}
+	if paras, ok, err := paragraphsFromSectionsField(top["sections"]); err != nil {
+		return nil, err
+	} else if ok {
+		return paras, nil
+	}
+	if paras := paragraphsFromSummaryField(top["summary"]); len(paras) > 0 {
+		return paras, nil
 	}
 	return nil, nil
+}
+
+type sectionLegacy struct {
+	Title   string          `json:"title"`
+	Body    string          `json:"body"`
+	Text    string          `json:"text"`
+	Content string          `json:"content"`
+	Items   json.RawMessage `json:"items"`
+}
+
+func (s sectionLegacy) combineText() (text string, hadBody bool) {
+	text = strings.TrimSpace(s.Text)
+	if text != "" {
+		return text, true
+	}
+	body := strings.TrimSpace(s.Body)
+	if body == "" {
+		body = strings.TrimSpace(s.Content)
+	}
+	if body == "" && len(bytes.TrimSpace(s.Items)) > 0 {
+		var items []string
+		if json.Unmarshal(s.Items, &items) == nil {
+			parts := make([]string, 0, len(items))
+			for _, it := range items {
+				it = strings.TrimSpace(it)
+				if it != "" {
+					parts = append(parts, it)
+				}
+			}
+			if len(parts) > 0 {
+				body = strings.Join(parts, "\n")
+			}
+		}
+	}
+	title := strings.TrimSpace(s.Title)
+	switch {
+	case title != "" && body != "":
+		return title + "\n\n" + body, true
+	case body != "":
+		return body, true
+	default:
+		return title, false
+	}
+}
+
+func paragraphsFromSectionsField(raw json.RawMessage) ([]Paragraph, bool, error) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 {
+		return nil, false, nil
+	}
+	var sections []sectionLegacy
+	if err := json.Unmarshal(raw, &sections); err != nil {
+		return nil, false, fmt.Errorf("sections: %w", err)
+	}
+	out := make([]Paragraph, 0, len(sections))
+	hadBody := false
+	for _, s := range sections {
+		text, body := s.combineText()
+		if body {
+			hadBody = true
+		}
+		if text != "" {
+			out = append(out, Paragraph{Text: text})
+		}
+	}
+	if len(out) == 0 || !hadBody {
+		return nil, false, nil
+	}
+	return out, true, nil
+}
+
+func paragraphsFromSummaryField(raw json.RawMessage) []Paragraph {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 {
+		return nil
+	}
+	switch raw[0] {
+	case '"':
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return nil
+		}
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return nil
+		}
+		return []Paragraph{{Text: s}}
+	case '[':
+		var arr []string
+		if err := json.Unmarshal(raw, &arr); err != nil || len(arr) == 0 {
+			return nil
+		}
+		out := make([]Paragraph, 0, len(arr))
+		for _, s := range arr {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				out = append(out, Paragraph{Text: s})
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 // normalizeContentAdviceOnMap rewrites the top-level advice field when the
@@ -474,16 +573,6 @@ func (c *Content) RenderMarkdown(title, locale string) string {
 		b.WriteString("- " + mtr("角色", "Roles") + ": " + strings.Join(roles, " · ") + "\n")
 	}
 	b.WriteString("\n")
-
-	b.WriteString("## " + mtr("知识资产新增", "New assets") + "\n\n")
-	b.WriteString(fmt.Sprintf("- %s\n\n", mtr(
-		fmt.Sprintf("新增助理 %d · 新增技能 %d · 新增仓库 %d", c.Assets.NewAgents, c.Assets.NewSkills, c.Assets.NewRepos),
-		fmt.Sprintf("%d assistants · %d skills · %d repos", c.Assets.NewAgents, c.Assets.NewSkills, c.Assets.NewRepos))))
-
-	b.WriteString("## " + mtr("使用情况", "Usage") + "\n\n")
-	b.WriteString(fmt.Sprintf("- %s\n\n", mtr(
-		fmt.Sprintf("会话 %d · 输入 token %d · 输出 token %d", c.Usage.Sessions, c.Usage.PromptTokens, c.Usage.CompletionTokens),
-		fmt.Sprintf("%d sessions · %d prompt tokens · %d completion tokens", c.Usage.Sessions, c.Usage.PromptTokens, c.Usage.CompletionTokens))))
 
 	if c.Logs.Available {
 		b.WriteString("## " + mtr("应用日志（潜在错误）", "Application logs (potential errors)") + "\n\n")

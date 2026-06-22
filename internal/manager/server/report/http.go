@@ -29,12 +29,19 @@ const roleViewer = "viewer"
 // Handler serves the report API. uc is required; a nil uc makes every
 // route 503 (binary built without the report stack wired).
 type Handler struct {
-	uc  *bizreport.Usecase
-	now func() time.Time // injectable clock for tests
+	uc        *bizreport.Usecase
+	modelCfg  *bizreport.ModelConfigService
+	now       func() time.Time // injectable clock for tests
 }
 
 func NewHandler(uc *bizreport.Usecase) *Handler {
 	return &Handler{uc: uc, now: func() time.Time { return time.Now().UTC() }}
+}
+
+// WithModelConfig attaches report LLM model settings (optional).
+func (h *Handler) WithModelConfig(svc *bizreport.ModelConfigService) *Handler {
+	h.modelCfg = svc
+	return h
 }
 
 // Register mounts the authenticated routes.
@@ -51,6 +58,8 @@ func NewHandler(uc *bizreport.Usecase) *Handler {
 //	DELETE /v1/report-schedules/{id}         delete                     (writer)
 //	POST   /v1/report-schedules/{id}/toggle  enable/disable             (writer)
 //	POST   /v1/report-schedules/{id}/run-now generate immediately       (writer)
+//	GET    /v1/report-settings/model      report LLM model config
+//	PUT    /v1/report-settings/model      update report LLM model       (writer)
 func (h *Handler) Register(r chi.Router) {
 	r.Get("/v1/reports", h.listReports)
 	r.With(h.requireWriter).Post("/v1/reports", h.generateNow)
@@ -65,6 +74,9 @@ func (h *Handler) Register(r chi.Router) {
 	r.With(h.requireWriter).Delete("/v1/report-schedules/{id}", h.deleteSchedule)
 	r.With(h.requireWriter).Post("/v1/report-schedules/{id}/toggle", h.toggleSchedule)
 	r.With(h.requireWriter).Post("/v1/report-schedules/{id}/run-now", h.runNow)
+
+	r.Get("/v1/report-settings/model", h.getReportModel)
+	r.With(h.requireWriter).Put("/v1/report-settings/model", h.putReportModel)
 }
 
 // RegisterPublic mounts the unauthenticated share route.
@@ -330,6 +342,59 @@ func (h *Handler) runNow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, toReportDetail(rpt))
+}
+
+type reportModelReq struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+}
+
+// getReportModel returns the pinned report worker LLM and the provider
+// catalog for the settings page.
+//
+// @Summary      Get report LLM model config
+// @Router       /v1/report-settings/model [get]
+// @Success      200  {object}  bizreport.ModelConfigView
+func (h *Handler) getReportModel(w http.ResponseWriter, r *http.Request) {
+	if !h.authed(w, r) {
+		return
+	}
+	if h.modelCfg == nil {
+		writeErr(w, errs.ErrNotWiredYet)
+		return
+	}
+	out, err := h.modelCfg.Get(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// putReportModel pins or clears the report worker LLM model.
+//
+// @Summary      Update report LLM model config
+// @Router       /v1/report-settings/model [put]
+// @Success      200  {object}  bizreport.ModelConfigView
+func (h *Handler) putReportModel(w http.ResponseWriter, r *http.Request) {
+	if !h.authed(w, r) {
+		return
+	}
+	if h.modelCfg == nil {
+		writeErr(w, errs.ErrNotWiredYet)
+		return
+	}
+	var req reportModelReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, errors.Join(errs.ErrInvalid, err))
+		return
+	}
+	out, err := h.modelCfg.Set(r.Context(), req.Provider, req.Model)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // --- helpers ---

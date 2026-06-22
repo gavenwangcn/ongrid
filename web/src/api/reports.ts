@@ -159,8 +159,10 @@ export type ReportContent = {
   key_incidents?: KeyIncident[];
   actions_summary: ActionsSummary;
   changes?: ChangeFact[];
-  assets: AssetFacts;
-  usage: UsageFacts;
+  /** @deprecated no longer collected or displayed in new reports */
+  assets?: AssetFacts;
+  /** @deprecated no longer collected or displayed in new reports */
+  usage?: UsageFacts;
   logs: LogFacts;
   advice?: Advice[];
 };
@@ -271,4 +273,29 @@ export function toggleSchedule(id: number, enabled: boolean) {
 
 export function runScheduleNow(id: number) {
   return request<ReportDetail>('POST', `/report-schedules/${id}/run-now`, {});
+}
+
+// --- report model settings ---
+
+export type ReportModelProvider = {
+  id: string;
+  label: string;
+  models: string[];
+  model?: string;
+};
+
+export type ReportModelConfig = {
+  provider: string;
+  model: string;
+  use_platform_default: boolean;
+  platform_default: { provider: string; model: string };
+  providers: ReportModelProvider[];
+};
+
+export function getReportModel() {
+  return request<ReportModelConfig>('GET', '/report-settings/model');
+}
+
+export function setReportModel(body: { provider: string; model: string }) {
+  return request<ReportModelConfig>('PUT', '/report-settings/model', body);
 }

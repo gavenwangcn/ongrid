@@ -6,8 +6,10 @@ import (
 	"testing"
 	"time"
 
+	bizsetting "github.com/ongridio/ongrid/internal/manager/biz/setting"
 	"github.com/ongridio/ongrid/internal/manager/biz/aiops/chatruntime"
 	model "github.com/ongridio/ongrid/internal/manager/model/report"
+	"github.com/ongridio/ongrid/internal/pkg/llm"
 )
 
 // fakeFacts returns a canned ReportFacts.
@@ -220,6 +222,32 @@ func TestGenerator_NonPendingIsNoOp(t *testing.T) {
 	// Spawner must not have been called.
 	if spawner.gotReq.AgentName != "" {
 		t.Error("generator ran on a non-pending report")
+	}
+}
+
+func TestGenerator_PinnedModelPassedToSpawner(t *testing.T) {
+	rpt := pendingReport()
+	repo := newGenTestRepo(rpt)
+	llmOut := `{"version":"1","hero":[],"narrative":{"headline":"ok"},"key_incidents":[],"actions_summary":{},"advice":[]}`
+	spawner := &fakeSpawner{result: llmOut}
+
+	catalog := fakeModelCatalog{
+		providers: []llm.ProviderInfo{
+			{ID: "openai", Label: "OpenAI", Models: []string{"gpt-4o"}, Model: "gpt-4o"},
+		},
+	}
+	settings := bizsetting.New(newMemSettingRepo(), nil)
+	modelCfg := NewModelConfigService(settings, catalog)
+	if _, err := modelCfg.Set(context.Background(), "openai", "gpt-4o"); err != nil {
+		t.Fatal(err)
+	}
+
+	gen := NewWorkerGenerator(repo, fakeFacts{facts: sampleFacts()}, spawner, GeneratorConfig{}, nil).
+		WithModelConfig(modelCfg)
+	gen.Generate(context.Background(), "rpt-1")
+
+	if spawner.gotReq.Provider != "openai" || spawner.gotReq.Model != "gpt-4o" {
+		t.Fatalf("spawn model = (%q,%q), want (openai,gpt-4o)", spawner.gotReq.Provider, spawner.gotReq.Model)
 	}
 }
 

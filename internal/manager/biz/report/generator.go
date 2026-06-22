@@ -51,6 +51,7 @@ type workerGenerator struct {
 	facts     FactsCollector
 	spawner   WorkerSpawner
 	deliverer Deliverer // nil = in-app only
+	modelCfg  *ModelConfigService
 	ready     func(context.Context) error
 	cfg       GeneratorConfig
 	log       *slog.Logger
@@ -76,6 +77,13 @@ func NewWorkerGenerator(repo Repo, facts FactsCollector, spawner WorkerSpawner, 
 		log = slog.Default()
 	}
 	return &workerGenerator{repo: repo, facts: facts, spawner: spawner, cfg: cfg, log: log.With(slog.String("comp", "report-generator"))}
+}
+
+// WithModelConfig attaches the report LLM pin resolver. nil keeps the
+// platform default routing behaviour.
+func (g *workerGenerator) WithModelConfig(svc *ModelConfigService) *workerGenerator {
+	g.modelCfg = svc
+	return g
 }
 
 // WithDeliverer attaches the IM deliverer. Returns the receiver for
@@ -169,15 +177,9 @@ func (g *workerGenerator) generate(ctx context.Context, rpt *model.Report) error
 	)
 
 	prompt := g.buildPrompt(rpt, facts)
-	g.log.Info("report pipeline spawn reporter agent",
-		slog.String("report_id", rpt.ID),
-		slog.String("persona", g.cfg.Persona),
-		slog.Int("prompt_bytes", len(prompt)),
-		slog.String("note", "facts already collected without agent; agent phase writes narrative and may call query_systems/query_log_sources"),
-	)
 
 	workerStart := time.Now()
-	worker, err := g.spawner.SpawnWorker(ctx, chatruntime.SpawnRequest{
+	spawnReq := chatruntime.SpawnRequest{
 		AgentName:   g.cfg.Persona,
 		Prompt:      prompt,
 		Background:  false, // sync — this goroutine owns the lifecycle
@@ -186,7 +188,19 @@ func (g *workerGenerator) generate(ctx context.Context, rpt *model.Report) error
 		TraceID:     rpt.ID,
 		OwnerUserID: rpt.CreatedBy,
 		Locale:      g.localeFor(rpt),
-	})
+	}
+	if g.modelCfg != nil {
+		spawnReq.Provider, spawnReq.Model = g.modelCfg.ResolveSpawnModel(ctx)
+	}
+	g.log.Info("report pipeline spawn reporter agent",
+		slog.String("report_id", rpt.ID),
+		slog.String("persona", g.cfg.Persona),
+		slog.Int("prompt_bytes", len(prompt)),
+		slog.String("llm_provider", spawnReq.Provider),
+		slog.String("llm_model", spawnReq.Model),
+		slog.String("note", "facts already collected without agent; agent phase writes narrative and may call query_systems/query_log_sources"),
+	)
+	worker, err := g.spawner.SpawnWorker(ctx, spawnReq)
 	if err != nil {
 		return fmt.Errorf("spawn worker: %w", err)
 	}
@@ -257,8 +271,6 @@ func (g *workerGenerator) generate(ctx context.Context, rpt *model.Report) error
 	content.Fleet = facts.Fleet
 	content.Actions = facts.Actions
 	content.Changes = facts.Changes
-	content.Assets = facts.Assets
-	content.Usage = facts.Usage
 	content.Logs = facts.Logs
 	content.KeyIncidents = mergeIncidents(facts.Incidents, content.KeyIncidents)
 	content.Version = ContentVersion

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeft, Pencil, Play, Plus, Power, Trash2 } from 'lucide-react';
+import { ArrowLeft, Pencil, Play, Plus, Power, Sparkles, Trash2 } from 'lucide-react';
 import { Modal } from '@/components/Modal';
 import { cn } from '@/lib/cn';
 import { fullDateTime } from '@/lib/format';
@@ -96,6 +96,14 @@ export default function ReportSchedulesPage() {
         <Link to="/reports" className="mb-2 inline-flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-300">
           <ArrowLeft size={13} /> {tr('返回报告', 'Back to reports')}
         </Link>
+        <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
+          <Link
+            to="/reports/model"
+            className="inline-flex items-center gap-1 text-zinc-500 hover:text-zinc-300"
+          >
+            <Sparkles size={12} /> {tr('报告模型', 'Report model')}
+          </Link>
+        </div>
         <div className="flex items-center justify-between gap-4">
           <div>
             <h1 className="text-base font-semibold text-zinc-100">{tr('定时生成', 'Scheduled')}</h1>

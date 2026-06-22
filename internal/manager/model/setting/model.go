@@ -41,6 +41,7 @@ const (
 	CategoryLoki      = "loki"      // external Loki / VictoriaLogs URL + auth
 	CategoryTempo     = "tempo"     // external Tempo OTLP HTTP endpoint + auth
 	CategoryWebSearch = "websearch" // built-in web_search skill: Tavily key + future provider knobs
+	CategoryReport    = "report"    // scheduled report worker LLM pin
 )
 
 // (CategoryGit + KeyGitGitHubToken removed HTTPS git
@@ -117,6 +118,13 @@ const (
 	// KeyLLMDefaultProvider stores the cluster-wide default provider id.
 	// Empty → first provider (alphabetical) is used.
 	KeyLLMDefaultProvider = "default_provider"
+)
+
+// Report worker model pin (CategoryReport). When provider is empty the
+// reporter agent uses the platform default from CategoryLLM.
+const (
+	KeyReportLLMProvider = "llm_provider"
+	KeyReportLLMModel    = "llm_model"
 )
 
 // LLMProviderID enumerates the providers the multi-provider router

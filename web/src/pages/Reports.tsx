@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Plus, Settings } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, Settings, Sparkles } from 'lucide-react';
 import { Modal } from '@/components/Modal';
 import { cn } from '@/lib/cn';
 import { relativeTime } from '@/lib/format';
@@ -183,6 +183,12 @@ export default function ReportsPage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <Link
+              to="/reports/model"
+              className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800"
+            >
+              <Sparkles size={12} /> {tr('报告模型', 'Report model')}
+            </Link>
             <Link
               to="/reports/schedules"
               className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800"
