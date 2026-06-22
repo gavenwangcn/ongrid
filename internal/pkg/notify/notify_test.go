@@ -260,7 +260,4 @@ func TestDefaultNotifyHTTPClientTransport(t *testing.T) {
 	if !tr.DisableCompression {
 		t.Error("DisableCompression = false, want true")
 	}
-	if !tr.DisableKeepAlives {
-		t.Error("DisableKeepAlives = false, want true")
-	}
 }

@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
-	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -34,42 +33,16 @@ type webhookSender struct {
 // and alert deliveries fail fast instead of hanging on half-open conns.
 //
 // Feishu CDN nodes have been observed to RST Go clients while curl in the
-// same container succeeds on the same IP (including HTTP/2 + TLS 1.3).
-// Go's http.Transport adds "Accept-Encoding: gzip" by default; curl does not.
-// Keep HTTP/2 (curl negotiates h2 successfully) but disable compression.
+// same container succeeds on the same IP (HTTP/2 + TLS 1.3). The main
+// behavioral gap is Go's default "Accept-Encoding: gzip" header; curl does
+// not send it unless asked. Keep the rest of net/http defaults (HTTP/2, ALPN).
 var defaultNotifyHTTPClient = &http.Client{
-	Timeout:   30 * time.Second,
-	Transport: newNotifyHTTPTransport(),
-}
-
-func newNotifyHTTPTransport() *http.Transport {
-	return &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
-		DisableCompression:    true,
-		DisableKeepAlives:     true,
-		MaxIdleConns:          0,
-		MaxIdleConnsPerHost:   0,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ResponseHeaderTimeout: 15 * time.Second,
-		TLSClientConfig: &tls.Config{
-			MinVersion: tls.VersionTLS12,
-		},
-		DialContext: notifyDialContext,
-	}
-}
-
-func notifyDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	d := &net.Dialer{
-		Timeout:   10 * time.Second,
-		KeepAlive: -1,
-	}
-	// Prefer IPv4 — some CDN v6 paths RST while v4 works from the same host.
-	if network == "tcp" || network == "tcp6" {
-		if conn, err := d.DialContext(ctx, "tcp4", addr); err == nil {
-			return conn, nil
-		}
-	}
-	return d.DialContext(ctx, network, addr)
+	Timeout: 30 * time.Second,
+	Transport: &http.Transport{
+		Proxy:              http.ProxyFromEnvironment,
+		DisableCompression: true,
+		TLSHandshakeTimeout: 10 * time.Second,
+	},
 }
 
 const webhookSendMaxAttempts = 4
@@ -364,7 +337,6 @@ func (s *webhookSender) sendOnce(ctx context.Context, log *slog.Logger, endpoint
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("User-Agent", "ongrid-notify/1.0")
-	req.Close = true
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
