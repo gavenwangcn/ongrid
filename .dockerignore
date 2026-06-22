@@ -5,10 +5,12 @@
 local/
 .cache/
 tmp/
+.codegraph/
 
 bin/
-dist/stage/
-dist/out/
+dist/
+!dist/stage/
+!dist/out/
 
 web/node_modules/
 web/dist/
@@ -16,3 +18,4 @@ web/tsconfig.tsbuildinfo
 
 deploy/certs/
 deploy/install/certs/
+deploy/product/
