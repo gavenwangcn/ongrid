@@ -35,12 +35,13 @@ type webhookSender struct {
 // Feishu CDN nodes have been observed to RST Go clients while curl in the
 // same container succeeds on the same IP (HTTP/2 + TLS 1.3). The main
 // behavioral gap is Go's default "Accept-Encoding: gzip" header; curl does
-// not send it unless asked. Keep the rest of net/http defaults (HTTP/2, ALPN).
+// not send it unless asked. Outbound webhooks bypass HTTP(S)_PROXY — alert
+// delivery must reach public endpoints directly; proxy env is for LLM/IM only.
 var defaultNotifyHTTPClient = &http.Client{
 	Timeout: 30 * time.Second,
 	Transport: &http.Transport{
-		Proxy:              http.ProxyFromEnvironment,
-		DisableCompression: true,
+		Proxy:               nil,
+		DisableCompression:    true,
 		TLSHandshakeTimeout: 10 * time.Second,
 	},
 }
@@ -296,6 +297,18 @@ func (s *webhookSender) Send(ctx context.Context, msg Message) error {
 			continue
 		}
 		break
+	}
+	if lastErr != nil && isRetryableWebhookErr(lastErr) && curlAvailable() {
+		if curlErr := sendOnceViaCurl(ctx, log, endpoint, headers, body); curlErr == nil {
+			log.Info("webhook send ok",
+				slog.String("via", "curl"),
+				slog.Duration("duration", time.Since(start)),
+			)
+			return nil
+		} else {
+			log.Warn("webhook curl fallback failed", slog.Any("err", curlErr))
+			lastErr = fmt.Errorf("%w; curl fallback: %v", lastErr, curlErr)
+		}
 	}
 	log.Warn("webhook send failed",
 		slog.Any("err", lastErr),

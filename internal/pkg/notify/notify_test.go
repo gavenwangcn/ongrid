@@ -260,4 +260,17 @@ func TestDefaultNotifyHTTPClientTransport(t *testing.T) {
 	if !tr.DisableCompression {
 		t.Error("DisableCompression = false, want true")
 	}
+	if tr.Proxy != nil {
+		t.Error("Proxy should be nil so webhooks bypass HTTP(S)_PROXY")
+	}
+}
+
+func TestParseCurlWebhookOutput(t *testing.T) {
+	status, preview, err := parseCurlWebhookOutput([]byte(`{"code":0}` + curlHTTPCodeMarker + "200"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != 200 || preview != `{"code":0}` {
+		t.Fatalf("status=%d preview=%q", status, preview)
+	}
 }
