@@ -251,3 +251,19 @@ func TestWebhookErrRemote(t *testing.T) {
 		t.Errorf("remote = %q, want 117.68.90.116:443", got)
 	}
 }
+
+func TestDefaultNotifyHTTPClientTransport(t *testing.T) {
+	tr, ok := defaultNotifyHTTPClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatal("transport not *http.Transport")
+	}
+	if !tr.DisableCompression {
+		t.Error("DisableCompression = false, want true")
+	}
+	if !tr.DisableKeepAlives {
+		t.Error("DisableKeepAlives = false, want true")
+	}
+	if tr.TLSNextProto == nil {
+		t.Error("TLSNextProto = nil, want empty map to disable HTTP/2")
+	}
+}

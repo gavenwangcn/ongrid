@@ -33,24 +33,44 @@ type webhookSender struct {
 // Unlike http.DefaultClient it has an explicit timeout so channel tests
 // and alert deliveries fail fast instead of hanging on half-open conns.
 //
-// Feishu CDN nodes occasionally RST Go's HTTP/2 streams while curl on the
-// same host succeeds; force HTTP/1.1 and fresh TCP per request to match
-// curl's one-shot connection pattern more closely.
+// Feishu CDN nodes have been observed to RST Go clients while curl in the
+// same container succeeds. Go's http.Transport adds "Accept-Encoding: gzip"
+// by default (DisableCompression=false); curl does not. Match curl more
+// closely: HTTP/1.1 only, no compression negotiation, fresh TCP per try.
 var defaultNotifyHTTPClient = &http.Client{
-	Timeout: 30 * time.Second,
-	Transport: &http.Transport{
+	Timeout:   30 * time.Second,
+	Transport: newNotifyHTTPTransport(),
+}
+
+func newNotifyHTTPTransport() *http.Transport {
+	return &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
 		TLSNextProto:          map[string]func(string, *tls.Conn) http.RoundTripper{},
+		DisableCompression:    true,
 		DisableKeepAlives:     true,
 		MaxIdleConns:          0,
 		MaxIdleConnsPerHost:   0,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ResponseHeaderTimeout: 15 * time.Second,
-		DialContext: (&net.Dialer{
-			Timeout:   10 * time.Second,
-			KeepAlive: -1,
-		}).DialContext,
-	},
+		TLSClientConfig: &tls.Config{
+			MinVersion: tls.VersionTLS12,
+		},
+		DialContext: notifyDialContext,
+	}
+}
+
+func notifyDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	d := &net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: -1,
+	}
+	// Prefer IPv4 — some CDN v6 paths RST while v4 works from the same host.
+	if network == "tcp" || network == "tcp6" {
+		if conn, err := d.DialContext(ctx, "tcp4", addr); err == nil {
+			return conn, nil
+		}
+	}
+	return d.DialContext(ctx, network, addr)
 }
 
 const webhookSendMaxAttempts = 4
@@ -343,7 +363,9 @@ func (s *webhookSender) sendOnce(ctx context.Context, log *slog.Logger, endpoint
 		return fmt.Errorf("new request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "*/*")
 	req.Header.Set("User-Agent", "ongrid-notify/1.0")
+	req.Close = true
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
