@@ -322,7 +322,7 @@ func (uc *PluginConfigUC) FetchForEdge(ctx context.Context, edgeID uint64) (*Wir
 		}
 		out.Configs[name] = cfg
 	}
-	uc.log.Info("FetchForEdge",
+	uc.log.Debug("FetchForEdge",
 		slog.Uint64("edge_id", edgeID),
 		slog.Uint64("label_device_id", out.DeviceID),
 		slog.Bool("host_device_resolved", hostDeviceResolved),

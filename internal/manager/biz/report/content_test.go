@@ -103,6 +103,52 @@ func TestRenderMarkdown_Locale(t *testing.T) {
 	}
 }
 
+func TestParseContent_LegacyFlatShape(t *testing.T) {
+	// Mirrors production failure: LLM returned flat headline + sections instead
+	// of narrative.{headline,paragraphs}.
+	raw := `{
+		"headline": "电子招标管理平台-EBD 本周期运行整体平稳",
+		"period": "2026-06-21 — 2026-06-22",
+		"granularity": "daily",
+		"scope": "系统「电子招标管理平台-EBD」",
+		"hero": [{"key":"devices","label":"监控设备","value":5}],
+		"sections": [
+			{"title":"总体概况","body":"本周期内设备共 5 台，全部在线。"},
+			{"title":"日志","body":"潜在错误 60 条。"}
+		],
+		"advice": ["优先排查 uip 500","核查 Kong Error"]
+	}`
+	got, err := ParseContent(raw, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Narrative.Headline != "电子招标管理平台-EBD 本周期运行整体平稳" {
+		t.Errorf("headline: %q", got.Narrative.Headline)
+	}
+	if len(got.Narrative.Paragraphs) != 2 {
+		t.Fatalf("paragraphs: %+v", got.Narrative.Paragraphs)
+	}
+	if !strings.Contains(got.Narrative.Paragraphs[0].Text, "总体概况") {
+		t.Errorf("first paragraph: %q", got.Narrative.Paragraphs[0].Text)
+	}
+	if len(got.Advice) != 2 || got.Advice[0].Text != "优先排查 uip 500" {
+		t.Errorf("advice: %+v", got.Advice)
+	}
+}
+
+func TestParseContent_LegacyFlatShapePreservesCanonicalNarrative(t *testing.T) {
+	raw := `{"version":"1","hero":[{"key":"incidents","label":"Incidents","value":0}],
+		"narrative":{"headline":"canonical"},
+		"headline":"ignored flat headline"}`
+	got, err := ParseContent(raw, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Narrative.Headline != "canonical" {
+		t.Errorf("canonical narrative should win: %q", got.Narrative.Headline)
+	}
+}
+
 func TestParseContent_AdviceStringArray(t *testing.T) {
 	raw := `{"version":"1","hero":[{"key":"incidents","label":"Incidents","value":0}],
 		"narrative":{"headline":"本周平稳"},

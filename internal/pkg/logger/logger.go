@@ -9,6 +9,9 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
+
+	armlog "github.com/jumboframes/armorigo/log"
 )
 
 // New returns a *slog.Logger that writes JSON lines to stderr at the given
@@ -23,7 +26,18 @@ func New(level slog.Level) *slog.Logger {
 // NewFromEnv returns a logger whose minimum level comes from ONGRID_LOG_LEVEL
 // (debug | info | warn | error). Empty or unknown values default to info.
 func NewFromEnv() *slog.Logger {
+	quietThirdPartyLogs()
 	return New(ParseLevel(os.Getenv("ONGRID_LOG_LEVEL")))
+}
+
+var quietThirdPartyOnce sync.Once
+
+// quietThirdPartyLogs turns down chatty INFO lines from tunnel deps
+// (geminio uses armorigo/log and logs per-packet "writePkt() is running").
+func quietThirdPartyLogs() {
+	quietThirdPartyOnce.Do(func() {
+		armlog.SetLevel(armlog.LevelWarn)
+	})
 }
 
 // ParseLevel maps a string to slog.Level. Empty → info.

@@ -128,10 +128,10 @@ func ParseContent(raw string, log *slog.Logger) (*Content, error) {
 		log.Debug("parse content start", slog.Int("bytes", len(raw)))
 	}
 
-	normalized, adviceChanged, err := normalizeContentAdvice(raw, log)
+	normalized, shapeChanged, adviceChanged, err := normalizeContentJSON(raw, log)
 	if err != nil {
-		logContentParseFailure(log, raw, normalized, err, "advice_normalize")
-		return nil, fmt.Errorf("report: content advice normalize: %w", err)
+		logContentParseFailure(log, raw, normalized, err, "normalize")
+		return nil, fmt.Errorf("report: content normalize: %w", err)
 	}
 
 	var c Content
@@ -157,30 +157,157 @@ func ParseContent(raw string, log *slog.Logger) (*Content, error) {
 			slog.String("headline", truncate(c.Narrative.Headline, 120)),
 			slog.Int("paragraphs", len(c.Narrative.Paragraphs)),
 			slog.Int("advice", len(c.Advice)),
+			slog.Bool("shape_normalized", shapeChanged),
 			slog.Bool("advice_normalized", adviceChanged),
 		)
 	}
 	return &c, nil
 }
 
-// normalizeContentAdvice rewrites the top-level advice field when the
-// LLM returns a string, a string array, or a lone object instead of
-// [{"text":"..."}]. Other fields are left untouched.
-func normalizeContentAdvice(raw string, log *slog.Logger) (string, bool, error) {
+// normalizeContentJSON coerces common LLM shape drift (flat headline/
+// sections, string advice) into the ContentJSON schema before unmarshal.
+func normalizeContentJSON(raw string, log *slog.Logger) (string, bool, bool, error) {
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(raw), &top); err != nil {
-		return raw, false, nil
+		return raw, false, false, nil
 	}
+	shapeChanged, err := normalizeContentShape(top, log)
+	if err != nil {
+		return raw, false, false, err
+	}
+	adviceChanged, err := normalizeContentAdviceOnMap(top, log)
+	if err != nil {
+		return raw, shapeChanged, false, err
+	}
+	if !shapeChanged && !adviceChanged {
+		return raw, false, false, nil
+	}
+	b, err := json.Marshal(top)
+	if err != nil {
+		return raw, shapeChanged, adviceChanged, err
+	}
+	return string(b), shapeChanged, adviceChanged, nil
+}
+
+// normalizeContentShape lifts a legacy flat LLM shape (top-level headline
+// + sections) into narrative.headline / narrative.paragraphs.
+func normalizeContentShape(top map[string]json.RawMessage, log *slog.Logger) (bool, error) {
+	if narrativeHasHeadline(top["narrative"]) {
+		return false, nil
+	}
+	headline := jsonStringField(top["headline"])
+	if headline == "" {
+		return false, nil
+	}
+	paras, err := paragraphsFromLegacy(top)
+	if err != nil {
+		return false, err
+	}
+	narrative, err := json.Marshal(map[string]any{
+		"headline":   headline,
+		"paragraphs": paras,
+	})
+	if err != nil {
+		return false, err
+	}
+	if log != nil {
+		log.Info("parse content: normalized narrative shape",
+			slog.String("headline", truncate(headline, 120)),
+			slog.Int("paragraphs", len(paras)),
+			slog.String("hint", "LLM returned flat headline/sections instead of narrative.{headline,paragraphs}"),
+		)
+	}
+	top["narrative"] = narrative
+	delete(top, "headline")
+	delete(top, "sections")
+	delete(top, "paragraphs")
+	delete(top, "period")
+	delete(top, "granularity")
+	delete(top, "scope")
+	return true, nil
+}
+
+func narrativeHasHeadline(raw json.RawMessage) bool {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return false
+	}
+	var n struct {
+		Headline string `json:"headline"`
+	}
+	if err := json.Unmarshal(raw, &n); err != nil {
+		return false
+	}
+	return strings.TrimSpace(n.Headline) != ""
+}
+
+func jsonStringField(raw json.RawMessage) string {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || raw[0] != '"' {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(s)
+}
+
+func paragraphsFromLegacy(top map[string]json.RawMessage) ([]Paragraph, error) {
+	if raw, ok := top["paragraphs"]; ok {
+		var paras []Paragraph
+		if err := json.Unmarshal(raw, &paras); err == nil && len(paras) > 0 {
+			return paras, nil
+		}
+	}
+	if raw, ok := top["sections"]; ok {
+		var sections []struct {
+			Title string `json:"title"`
+			Body  string `json:"body"`
+			Text  string `json:"text"`
+		}
+		if err := json.Unmarshal(raw, &sections); err != nil {
+			return nil, fmt.Errorf("sections: %w", err)
+		}
+		out := make([]Paragraph, 0, len(sections))
+		for _, s := range sections {
+			text := strings.TrimSpace(s.Text)
+			if text == "" {
+				title := strings.TrimSpace(s.Title)
+				body := strings.TrimSpace(s.Body)
+				switch {
+				case title != "" && body != "":
+					text = title + "\n\n" + body
+				case body != "":
+					text = body
+				default:
+					text = title
+				}
+			}
+			if text != "" {
+				out = append(out, Paragraph{Text: text})
+			}
+		}
+		if len(out) > 0 {
+			return out, nil
+		}
+	}
+	return nil, nil
+}
+
+// normalizeContentAdviceOnMap rewrites the top-level advice field when the
+// LLM returns a string, a string array, or a lone object instead of
+// [{"text":"..."}].
+func normalizeContentAdviceOnMap(top map[string]json.RawMessage, log *slog.Logger) (bool, error) {
 	adviceRaw, ok := top["advice"]
 	if !ok {
-		return raw, false, nil
+		return false, nil
 	}
 	normalized, changed, err := normalizeAdviceJSON(adviceRaw)
 	if err != nil {
-		return raw, false, err
+		return false, err
 	}
 	if !changed {
-		return raw, false, nil
+		return false, nil
 	}
 	if log != nil {
 		log.Info("parse content: normalized advice field",
@@ -190,11 +317,7 @@ func normalizeContentAdvice(raw string, log *slog.Logger) (string, bool, error) 
 		)
 	}
 	top["advice"] = normalized
-	b, err := json.Marshal(top)
-	if err != nil {
-		return raw, false, err
-	}
-	return string(b), true, nil
+	return true, nil
 }
 
 // normalizeAdviceJSON coerces common LLM advice shapes into []Advice.
