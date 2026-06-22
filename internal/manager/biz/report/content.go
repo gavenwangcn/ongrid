@@ -1,8 +1,10 @@
 package report
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 )
 
@@ -112,15 +114,174 @@ const ContentVersion = "1"
 
 // ParseContent unmarshals a ContentJSON blob and validates it. Used by
 // the generator (PR-2b) to check the LLM output before persisting.
-func ParseContent(raw string) (*Content, error) {
+// log is optional; when set, parse/normalize failures emit structured
+// diagnostics (field snippets + JSON preview) for production triage.
+func ParseContent(raw string, log *slog.Logger) (*Content, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		if log != nil {
+			log.Warn("parse content: empty input")
+		}
+		return nil, fmt.Errorf("report: content unmarshal: empty input")
+	}
+	if log != nil {
+		log.Debug("parse content start", slog.Int("bytes", len(raw)))
+	}
+
+	normalized, adviceChanged, err := normalizeContentAdvice(raw, log)
+	if err != nil {
+		logContentParseFailure(log, raw, normalized, err, "advice_normalize")
+		return nil, fmt.Errorf("report: content advice normalize: %w", err)
+	}
+
 	var c Content
-	if err := json.Unmarshal([]byte(raw), &c); err != nil {
+	if err := json.Unmarshal([]byte(normalized), &c); err != nil {
+		logContentParseFailure(log, raw, normalized, err, "unmarshal")
 		return nil, fmt.Errorf("report: content unmarshal: %w", err)
 	}
 	if err := c.Validate(); err != nil {
+		if log != nil {
+			log.Warn("parse content validate failed",
+				slog.Any("err", err),
+				slog.String("headline", c.Narrative.Headline),
+				slog.Int("hero_count", len(c.Hero)),
+				slog.Int("advice_count", len(c.Advice)),
+				slog.String("json_preview", truncate(raw, 800)),
+			)
+		}
 		return nil, err
 	}
+	if log != nil {
+		log.Debug("parse content ok",
+			slog.String("version", c.Version),
+			slog.String("headline", truncate(c.Narrative.Headline, 120)),
+			slog.Int("paragraphs", len(c.Narrative.Paragraphs)),
+			slog.Int("advice", len(c.Advice)),
+			slog.Bool("advice_normalized", adviceChanged),
+		)
+	}
 	return &c, nil
+}
+
+// normalizeContentAdvice rewrites the top-level advice field when the
+// LLM returns a string, a string array, or a lone object instead of
+// [{"text":"..."}]. Other fields are left untouched.
+func normalizeContentAdvice(raw string, log *slog.Logger) (string, bool, error) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &top); err != nil {
+		return raw, false, nil
+	}
+	adviceRaw, ok := top["advice"]
+	if !ok {
+		return raw, false, nil
+	}
+	normalized, changed, err := normalizeAdviceJSON(adviceRaw)
+	if err != nil {
+		return raw, false, err
+	}
+	if !changed {
+		return raw, false, nil
+	}
+	if log != nil {
+		log.Info("parse content: normalized advice field",
+			slog.String("from", truncate(string(adviceRaw), 400)),
+			slog.String("to", truncate(string(normalized), 400)),
+			slog.String("hint", "LLM returned string or string[] instead of [{\"text\":...}]"),
+		)
+	}
+	top["advice"] = normalized
+	b, err := json.Marshal(top)
+	if err != nil {
+		return raw, false, err
+	}
+	return string(b), true, nil
+}
+
+// normalizeAdviceJSON coerces common LLM advice shapes into []Advice.
+func normalizeAdviceJSON(raw json.RawMessage) (json.RawMessage, bool, error) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return raw, false, nil
+	}
+	switch raw[0] {
+	case '"':
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return nil, false, err
+		}
+		out, err := json.Marshal([]Advice{{Text: s}})
+		return out, true, err
+	case '{':
+		var adv Advice
+		if err := json.Unmarshal(raw, &adv); err != nil {
+			return nil, false, err
+		}
+		out, err := json.Marshal([]Advice{adv})
+		return out, true, err
+	case '[':
+		var elems []json.RawMessage
+		if err := json.Unmarshal(raw, &elems); err != nil {
+			return nil, false, err
+		}
+		changed := false
+		out := make([]Advice, 0, len(elems))
+		for i, elem := range elems {
+			elem = bytes.TrimSpace(elem)
+			if len(elem) > 0 && elem[0] == '"' {
+				var s string
+				if err := json.Unmarshal(elem, &s); err != nil {
+					return nil, false, fmt.Errorf("advice[%d]: %w", i, err)
+				}
+				out = append(out, Advice{Text: s})
+				changed = true
+				continue
+			}
+			var adv Advice
+			if err := json.Unmarshal(elem, &adv); err != nil {
+				return nil, false, fmt.Errorf("advice[%d]: %w", i, err)
+			}
+			out = append(out, adv)
+		}
+		if !changed {
+			return raw, false, nil
+		}
+		normalized, err := json.Marshal(out)
+		return normalized, true, err
+	default:
+		return nil, false, fmt.Errorf("unexpected JSON type %q", string(raw[:min(16, len(raw))]))
+	}
+}
+
+func logContentParseFailure(log *slog.Logger, original, normalized string, err error, stage string) {
+	if log == nil {
+		return
+	}
+	attrs := []any{
+		slog.String("stage", stage),
+		slog.Any("err", err),
+		slog.Int("raw_bytes", len(original)),
+		slog.Bool("advice_normalized", original != normalized),
+	}
+	if advice := extractJSONField(original, "advice"); advice != "" {
+		attrs = append(attrs, slog.String("advice_field", truncate(advice, 500)))
+	}
+	if narrative := extractJSONField(original, "narrative"); narrative != "" {
+		attrs = append(attrs, slog.String("narrative_field", truncate(narrative, 300)))
+	}
+	attrs = append(attrs, slog.String("json_preview", truncate(original, 1000)))
+	log.Warn("parse content failed", attrs...)
+}
+
+func extractJSONField(raw, key string) string {
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &probe); err != nil {
+		return ""
+	}
+	v, ok := probe[key]
+	if !ok {
+		return ""
+	}
+	return string(v)
 }
 
 // Validate enforces the minimal shape the SPA depends on. Lenient on

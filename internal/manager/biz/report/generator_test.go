@@ -100,7 +100,7 @@ func TestGenerator_HappyPath_OverwritesNumbersFromFacts(t *testing.T) {
 	if got.Status != model.StatusReady {
 		t.Fatalf("status = %q, want ready (err=%q)", got.Status, got.ErrorMsg)
 	}
-	content, err := ParseContent(got.ContentJSON)
+	content, err := ParseContent(got.ContentJSON, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

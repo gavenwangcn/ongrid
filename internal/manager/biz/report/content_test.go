@@ -29,7 +29,7 @@ func sampleContent() *Content {
 
 func TestParseContent_RoundTrip(t *testing.T) {
 	raw := sampleContent().MustJSON()
-	got, err := ParseContent(raw)
+	got, err := ParseContent(raw, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,6 +100,45 @@ func TestRenderMarkdown_Locale(t *testing.T) {
 		if strings.Contains(en, banned) {
 			t.Errorf("en markdown leaked Chinese heading %q", banned)
 		}
+	}
+}
+
+func TestParseContent_AdviceStringArray(t *testing.T) {
+	raw := `{"version":"1","hero":[{"key":"incidents","label":"Incidents","value":0}],
+		"narrative":{"headline":"本周平稳"},
+		"advice":["关注磁盘容量","检查离线设备"]}`
+	got, err := ParseContent(raw, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Advice) != 2 || got.Advice[0].Text != "关注磁盘容量" || got.Advice[1].Text != "检查离线设备" {
+		t.Errorf("advice string[] coerce: %+v", got.Advice)
+	}
+}
+
+func TestParseContent_AdviceSingleString(t *testing.T) {
+	raw := `{"version":"1","hero":[{"key":"incidents","label":"Incidents","value":0}],
+		"narrative":{"headline":"本周平稳"},
+		"advice":"单条建议"}`
+	got, err := ParseContent(raw, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Advice) != 1 || got.Advice[0].Text != "单条建议" {
+		t.Errorf("advice string coerce: %+v", got.Advice)
+	}
+}
+
+func TestParseContent_AdviceSingleObject(t *testing.T) {
+	raw := `{"version":"1","hero":[{"key":"incidents","label":"Incidents","value":0}],
+		"narrative":{"headline":"本周平稳"},
+		"advice":{"text":"对象形式"}}`
+	got, err := ParseContent(raw, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Advice) != 1 || got.Advice[0].Text != "对象形式" {
+		t.Errorf("advice object coerce: %+v", got.Advice)
 	}
 }
 

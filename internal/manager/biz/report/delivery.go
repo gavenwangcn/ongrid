@@ -91,7 +91,7 @@ func deliveryFor(rpt *model.Report, deepLink string) DeliverySummary {
 		ReportID: rpt.ID,
 	}
 	if rpt.ContentJSON != "" {
-		if c, err := ParseContent(rpt.ContentJSON); err == nil {
+		if c, err := ParseContent(rpt.ContentJSON, nil); err == nil {
 			s.Hero = c.Hero
 			if c.Narrative.Headline != "" {
 				s.Headline = c.Narrative.Headline

@@ -217,7 +217,24 @@ func (g *workerGenerator) generate(ctx context.Context, rpt *model.Report) error
 	}
 
 	rawJSON := extractJSON(worker.Result)
-	content, err := ParseContent(rawJSON)
+	g.log.Info("report pipeline extract json",
+		slog.String("report_id", rpt.ID),
+		slog.String("worker_id", worker.ID),
+		slog.Int("raw_result_bytes", len(worker.Result)),
+		slog.Int("extracted_json_bytes", len(rawJSON)),
+		slog.String("result_preview", truncate(worker.Result, 600)),
+		slog.String("extracted_preview", truncate(rawJSON, 800)),
+	)
+	if rawJSON == "" {
+		g.log.Warn("report pipeline extract json empty",
+			slog.String("report_id", rpt.ID),
+			slog.String("worker_id", worker.ID),
+			slog.String("session_id", worker.SessionID),
+			slog.String("result_preview", truncate(worker.Result, 800)),
+		)
+		return fmt.Errorf("parse content: worker returned no JSON object")
+	}
+	content, err := ParseContent(rawJSON, g.log)
 	if err != nil {
 		g.log.Warn("report pipeline parse content failed",
 			slog.String("report_id", rpt.ID),
@@ -225,8 +242,8 @@ func (g *workerGenerator) generate(ctx context.Context, rpt *model.Report) error
 			slog.String("session_id", worker.SessionID),
 			slog.Int("raw_result_bytes", len(worker.Result)),
 			slog.Int("extracted_json_bytes", len(rawJSON)),
-			slog.String("result_preview", truncate(worker.Result, 400)),
-			slog.String("extracted_preview", truncate(rawJSON, 400)),
+			slog.String("result_preview", truncate(worker.Result, 600)),
+			slog.String("extracted_preview", truncate(rawJSON, 1000)),
 			slog.Any("err", err),
 		)
 		return fmt.Errorf("parse content: %w", err)
