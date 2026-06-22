@@ -34,9 +34,9 @@ type webhookSender struct {
 // and alert deliveries fail fast instead of hanging on half-open conns.
 //
 // Feishu CDN nodes have been observed to RST Go clients while curl in the
-// same container succeeds. Go's http.Transport adds "Accept-Encoding: gzip"
-// by default (DisableCompression=false); curl does not. Match curl more
-// closely: HTTP/1.1 only, no compression negotiation, fresh TCP per try.
+// same container succeeds on the same IP (including HTTP/2 + TLS 1.3).
+// Go's http.Transport adds "Accept-Encoding: gzip" by default; curl does not.
+// Keep HTTP/2 (curl negotiates h2 successfully) but disable compression.
 var defaultNotifyHTTPClient = &http.Client{
 	Timeout:   30 * time.Second,
 	Transport: newNotifyHTTPTransport(),
@@ -45,7 +45,6 @@ var defaultNotifyHTTPClient = &http.Client{
 func newNotifyHTTPTransport() *http.Transport {
 	return &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
-		TLSNextProto:          map[string]func(string, *tls.Conn) http.RoundTripper{},
 		DisableCompression:    true,
 		DisableKeepAlives:     true,
 		MaxIdleConns:          0,

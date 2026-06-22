@@ -263,7 +263,4 @@ func TestDefaultNotifyHTTPClientTransport(t *testing.T) {
 	if !tr.DisableKeepAlives {
 		t.Error("DisableKeepAlives = false, want true")
 	}
-	if tr.TLSNextProto == nil {
-		t.Error("TLSNextProto = nil, want empty map to disable HTTP/2")
-	}
 }
