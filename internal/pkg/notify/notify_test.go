@@ -3,6 +3,9 @@ package notify
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -208,5 +211,43 @@ func TestSlackSenderColorByUnknownSeverity(t *testing.T) {
 		if got := slackColor(sev); got != want {
 			t.Errorf("slackColor(%q) = %q, want %q", sev, got, want)
 		}
+	}
+}
+
+func TestWebhookRetryDelay(t *testing.T) {
+	cases := map[int]time.Duration{
+		2: 200 * time.Millisecond,
+		3: 500 * time.Millisecond,
+		4: 1 * time.Second,
+		9: 300 * time.Millisecond,
+	}
+	for attempt, want := range cases {
+		if got := webhookRetryDelay(attempt); got != want {
+			t.Errorf("webhookRetryDelay(%d) = %v, want %v", attempt, got, want)
+		}
+	}
+}
+
+func TestIsRetryableWebhookErr(t *testing.T) {
+	if !isRetryableWebhookErr(fmt.Errorf(`post: read tcp 172.20.0.10:51288->117.68.90.116:443: read: connection reset by peer`)) {
+		t.Error("connection reset should be retryable")
+	}
+	if isRetryableWebhookErr(fmt.Errorf("upstream rejected: invalid sign")) {
+		t.Error("business rejection should not be retryable")
+	}
+}
+
+func TestWebhookErrRemote(t *testing.T) {
+	err := fmt.Errorf("post: %w", &net.OpError{
+		Op:  "read",
+		Net: "tcp",
+		Err: errors.New("connection reset by peer"),
+		Addr: &net.TCPAddr{
+			IP:   net.ParseIP("117.68.90.116"),
+			Port: 443,
+		},
+	})
+	if got := webhookErrRemote(err); got != "117.68.90.116:443" {
+		t.Errorf("remote = %q, want 117.68.90.116:443", got)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -31,16 +32,28 @@ type webhookSender struct {
 // defaultNotifyHTTPClient is used when callers pass nil *http.Client.
 // Unlike http.DefaultClient it has an explicit timeout so channel tests
 // and alert deliveries fail fast instead of hanging on half-open conns.
+//
+// Feishu CDN nodes occasionally RST Go's HTTP/2 streams while curl on the
+// same host succeeds; force HTTP/1.1 and fresh TCP per request to match
+// curl's one-shot connection pattern more closely.
 var defaultNotifyHTTPClient = &http.Client{
 	Timeout: 30 * time.Second,
 	Transport: &http.Transport{
-		Proxy:               http.ProxyFromEnvironment,
-		TLSHandshakeTimeout: 10 * time.Second,
-		IdleConnTimeout:     90 * time.Second,
+		Proxy:                 http.ProxyFromEnvironment,
+		TLSNextProto:          map[string]func(string, *tls.Conn) http.RoundTripper{},
+		DisableKeepAlives:     true,
+		MaxIdleConns:          0,
+		MaxIdleConnsPerHost:   0,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 15 * time.Second,
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: -1,
+		}).DialContext,
 	},
 }
 
-const webhookSendMaxAttempts = 2
+const webhookSendMaxAttempts = 4
 
 // NewGenericWebhookSender posts the normalized Message JSON. When secret is
 // configured it adds an HMAC signature header over the request body.
@@ -266,14 +279,17 @@ func (s *webhookSender) Send(ctx context.Context, msg Message) error {
 	var lastErr error
 	for attempt := 1; attempt <= webhookSendMaxAttempts; attempt++ {
 		if attempt > 1 {
+			delay := webhookRetryDelay(attempt)
 			log.Info("webhook send retry",
 				slog.Int("attempt", attempt),
 				slog.Any("prev_err", lastErr),
+				slog.String("remote", webhookErrRemote(lastErr)),
+				slog.Duration("backoff", delay),
 			)
 			select {
 			case <-ctx.Done():
 				return fmt.Errorf("post: %w", ctx.Err())
-			case <-time.After(300 * time.Millisecond):
+			case <-time.After(delay):
 			}
 		}
 		lastErr = s.sendOnce(ctx, log, endpoint, headers, body)
@@ -291,11 +307,34 @@ func (s *webhookSender) Send(ctx context.Context, msg Message) error {
 	}
 	log.Warn("webhook send failed",
 		slog.Any("err", lastErr),
+		slog.String("remote", webhookErrRemote(lastErr)),
+		slog.Int("attempts", webhookSendMaxAttempts),
 		slog.Duration("duration", time.Since(start)),
 		slog.String("source", msg.Source),
 		slog.String("dedupe_key", msg.DedupeKey),
 	)
 	return lastErr
+}
+
+func webhookRetryDelay(attempt int) time.Duration {
+	switch attempt {
+	case 2:
+		return 200 * time.Millisecond
+	case 3:
+		return 500 * time.Millisecond
+	case 4:
+		return 1 * time.Second
+	default:
+		return 300 * time.Millisecond
+	}
+}
+
+func webhookErrRemote(err error) string {
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && opErr.Addr != nil {
+		return opErr.Addr.String()
+	}
+	return ""
 }
 
 func (s *webhookSender) sendOnce(ctx context.Context, log *slog.Logger, endpoint string, headers map[string]string, body []byte) error {
