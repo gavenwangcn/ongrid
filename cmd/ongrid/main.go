@@ -885,6 +885,8 @@ func main() {
 		managerbizalert.DeviceRepoSystemLister{Repo: deviceRepo},
 		managerbizalert.RepoNotifyCatalog{Repo: alertRepo},
 	)
+	notifyWebhookSettingsSvc := managerbizalert.NewNotifyWebhookSettingsService(settingSvc)
+	notifyRouter = notifyRouter.WithWebhookSendMode(notifyWebhookSettingsSvc.ResolveSendMode)
 	alertResolver.SetDeviceLookup(managerbizalert.DeviceTargetFromGetter(deviceRepo.Get))
 	alertResolver.SetSystemNotify(systemNotifySvc)
 	alertInhibitor := managerbizalert.NewBuiltinInhibitor(alertRepo)
@@ -1107,6 +1109,7 @@ func main() {
 
 	alertSvc := managersvcalert.New(alertUC, alertRepo, notifyRouter, log.With(slog.String("comp", "alert-svc")))
 	alertSvc.SetDeviceRepo(deviceRepo)
+	alertSvc.SetWebhookSendModeResolver(notifyWebhookSettingsSvc.ResolveSendMode)
 	// Wire the read-only preview clients (Prom range + Loki range). Each
 	// is optional — when nil, the corresponding kind returns skipped_reason
 	// instead of a hard error. Built before the AIOps runtime so
@@ -1662,6 +1665,7 @@ func main() {
 
 	alertHandler := managerserveralert.NewHandler(alertSvc, alertSvc, alertSvc).
 		WithSystemNotify(systemNotifySvc).
+		WithNotifyWebhookSettings(notifyWebhookSettingsSvc).
 		WithInvestigations(manageralertdata.NewInvestigationRepo(db)).
 		WithRuntime(cfg.Alert.EvaluatorInterval, cfg.Alert.Cooldown)
 	if rcaInvConcrete != nil {

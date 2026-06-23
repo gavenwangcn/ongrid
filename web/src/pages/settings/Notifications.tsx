@@ -18,12 +18,15 @@ import { cn } from '@/lib/cn';
 import {
   createChannel,
   deleteChannel,
+  getWebhookSendMode,
   listChannels,
+  setWebhookSendMode,
   testChannel,
   updateChannel,
   type Channel,
   type ChannelInput,
   type ChannelTestResult,
+  type WebhookSendMode,
 } from '@/api/alerts';
 import { ApiError } from '@/api/client';
 import type { IconType } from '@/lib/icon';
@@ -142,6 +145,9 @@ export default function SettingsNotifications() {
   const [testingId, setTestingId] = useState<number | null>(null);
   const [testResult, setTestResult] = useState<{ id: number; result: ChannelTestResult } | null>(null);
   const [toast, setToast] = useState<Toast>(null);
+  const [sendMode, setSendMode] = useState<WebhookSendMode>('curl');
+  const [sendModeLoading, setSendModeLoading] = useState(true);
+  const [sendModeSaving, setSendModeSaving] = useState(false);
 
   const fetchChannels = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -159,6 +165,41 @@ export default function SettingsNotifications() {
   useEffect(() => {
     fetchChannels();
   }, [fetchChannels]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setSendModeLoading(true);
+      try {
+        const res = await getWebhookSendMode();
+        if (!cancelled) setSendMode(res.send_mode === 'http' ? 'http' : 'curl');
+      } catch {
+        if (!cancelled) setSendMode('curl');
+      } finally {
+        if (!cancelled) setSendModeLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const saveSendMode = useCallback(async (mode: WebhookSendMode) => {
+    setSendModeSaving(true);
+    try {
+      const res = await setWebhookSendMode(mode);
+      setSendMode(res.send_mode === 'http' ? 'http' : 'curl');
+      setToast({
+        kind: 'ok',
+        text: tr('发送方式已保存', 'Send mode saved'),
+      });
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : (e as Error).message;
+      setToast({ kind: 'err', text: tr(`保存失败：${msg}`, `Save failed: ${msg}`) });
+    } finally {
+      setSendModeSaving(false);
+    }
+  }, [tr]);
 
   useEffect(() => {
     if (!toast) return;
@@ -221,6 +262,59 @@ export default function SettingsNotifications() {
           </Link>
           {tr('。', '.')}
         </div>
+
+        <Card className="p-4">
+          <div className="mb-2 text-sm font-medium text-zinc-100">{tr('Webhook 发送方式', 'Webhook send mode')}</div>
+          <p className="mb-3 text-[11px] text-zinc-500">
+            {tr(
+              '全局生效：所有飞书 / 钉钉 / Slack / Telegram / 通用 Webhook 渠道的告警与测试投递均使用所选方式。',
+              'Applies globally: alert and test deliveries for Feishu / DingTalk / Slack / Telegram / generic webhook channels use the selected transport.',
+            )}
+          </p>
+          {sendModeLoading ? (
+            <div className="flex items-center gap-2 text-xs text-zinc-500">
+              <Loader2 size={12} className="animate-spin" /> {tr('加载中…', 'Loading…')}
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-4">
+              <label className="inline-flex items-center gap-2 text-xs text-zinc-300">
+                <input
+                  type="radio"
+                  name="webhook-send-mode"
+                  checked={sendMode === 'curl'}
+                  disabled={sendModeSaving}
+                  onChange={() => {
+                    setSendMode('curl');
+                    void saveSendMode('curl');
+                  }}
+                  className="h-3.5 w-3.5 border-zinc-700 bg-zinc-900"
+                />
+                curl
+                <span className="text-zinc-500">{tr('（默认，容器内 curl 二进制）', '(default — container curl binary)')}</span>
+              </label>
+              <label className="inline-flex items-center gap-2 text-xs text-zinc-300">
+                <input
+                  type="radio"
+                  name="webhook-send-mode"
+                  checked={sendMode === 'http'}
+                  disabled={sendModeSaving}
+                  onChange={() => {
+                    setSendMode('http');
+                    void saveSendMode('http');
+                  }}
+                  className="h-3.5 w-3.5 border-zinc-700 bg-zinc-900"
+                />
+                http
+                <span className="text-zinc-500">{tr('（Go net/http，网络异常时自动 curl 兜底）', '(Go net/http — curl fallback on transient network errors)')}</span>
+              </label>
+              {sendModeSaving && (
+                <span className="inline-flex items-center gap-1 text-[11px] text-zinc-500">
+                  <Loader2 size={11} className="animate-spin" /> {tr('保存中…', 'Saving…')}
+                </span>
+              )}
+            </div>
+          )}
+        </Card>
 
         {err && (
           <Card className="p-4">

@@ -274,3 +274,21 @@ func TestParseCurlWebhookOutput(t *testing.T) {
 		t.Fatalf("status=%d preview=%q", status, preview)
 	}
 }
+
+func TestNormalizeWebhookSendMode(t *testing.T) {
+	if got := NormalizeWebhookSendMode("http"); got != WebhookSendModeHTTP {
+		t.Fatalf("got %q", got)
+	}
+	if got := NormalizeWebhookSendMode("curl"); got != WebhookSendModeCurl {
+		t.Fatalf("got %q", got)
+	}
+	if got := NormalizeWebhookSendMode("bogus"); got != WebhookSendModeCurl {
+		t.Fatalf("unknown should default to curl, got %q", got)
+	}
+}
+
+func TestWebhookSendModeFromContextDefaultCurl(t *testing.T) {
+	if got := WebhookSendModeFromContext(context.Background()); got != WebhookSendModeCurl {
+		t.Fatalf("default = %q, want curl", got)
+	}
+}

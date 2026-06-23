@@ -38,10 +38,11 @@ type Sender interface {
 
 // Router fans a notification out to selected channels.
 type Router struct {
-	enabled  bool
-	timeout  time.Duration
-	defaults []string
-	channels map[string]Sender
+	enabled         bool
+	timeout         time.Duration
+	defaults        []string
+	channels        map[string]Sender
+	webhookSendMode func(context.Context) WebhookSendMode
 }
 
 // NewRouter builds a channel router from explicit senders.
@@ -62,6 +63,24 @@ func NewRouter(enabled bool, timeout time.Duration, defaults []string, senders .
 		r.channels[sender.Name()] = sender
 	}
 	return r
+}
+
+// WithWebhookSendMode wires a resolver that supplies the global webhook
+// transport mode (curl vs http) on every Send / SendVia call. When nil,
+// deliveries default to curl.
+func (r *Router) WithWebhookSendMode(fn func(context.Context) WebhookSendMode) *Router {
+	if r != nil {
+		r.webhookSendMode = fn
+	}
+	return r
+}
+
+func (r *Router) deliveryContext(ctx context.Context) context.Context {
+	mode := WebhookSendModeCurl
+	if r != nil && r.webhookSendMode != nil {
+		mode = NormalizeWebhookSendMode(string(r.webhookSendMode(ctx)))
+	}
+	return ContextWithWebhookSendMode(ctx, mode)
 }
 
 // NewFromConfig constructs the configured channel adapters. Disabled
@@ -113,14 +132,15 @@ func (r *Router) Send(ctx context.Context, msg Message, channels ...string) erro
 	}
 
 	var errs []error
+	sendCtx := r.deliveryContext(ctx)
 	for _, name := range channels {
 		sender, ok := r.channels[name]
 		if !ok {
 			errs = append(errs, fmt.Errorf("notify: channel %q not configured", name))
 			continue
 		}
-		sendCtx, cancel := context.WithTimeout(ctx, r.timeout)
-		err := sender.Send(sendCtx, msg)
+		reqCtx, cancel := context.WithTimeout(sendCtx, r.timeout)
+		err := sender.Send(reqCtx, msg)
 		cancel()
 		if err != nil {
 			errs = append(errs, fmt.Errorf("notify: channel %q: %w", name, err))
@@ -150,7 +170,7 @@ func (r *Router) SendVia(ctx context.Context, msg Message, sender Sender) error 
 	if msg.OccurredAt.IsZero() {
 		msg.OccurredAt = time.Now().UTC()
 	}
-	sendCtx, cancel := context.WithTimeout(ctx, r.timeout)
+	sendCtx, cancel := context.WithTimeout(r.deliveryContext(ctx), r.timeout)
 	defer cancel()
 	return sender.Send(sendCtx, msg)
 }

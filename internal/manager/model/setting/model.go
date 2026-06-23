@@ -131,7 +131,8 @@ const (
 // Per-system notification channel bindings (CategoryAlert). JSON map:
 // system_name → []channel_id. Empty / missing key → global channel filters.
 const (
-	KeySystemNotifyBindings = "system_notify_bindings"
+	KeySystemNotifyBindings   = "system_notify_bindings"
+	KeyNotifyWebhookSendMode  = "webhook_send_mode" // "curl" | "http"; default curl
 )
 
 // LLMProviderID enumerates the providers the multi-provider router

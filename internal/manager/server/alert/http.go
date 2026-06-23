@@ -110,11 +110,18 @@ type SystemNotifySettings interface {
 	Set(ctx context.Context, bindings []bizalert.SystemNotifyBinding) (bizalert.SystemNotifyView, error)
 }
 
+// NotifyWebhookSettings manages the global webhook send mode (curl/http).
+type NotifyWebhookSettings interface {
+	Get(ctx context.Context) (bizalert.NotifyWebhookSettingsView, error)
+	Set(ctx context.Context, sendMode string) (bizalert.NotifyWebhookSettingsView, error)
+}
+
 type Handler struct {
 	incidents             IncidentService
 	channels              ChannelService
 	rules                 RuleService
 	systemNotify          SystemNotifySettings
+	notifyWebhookSettings NotifyWebhookSettings
 	investigations        InvestigationReader
 	investigationsTrigger InvestigationTrigger
 	// runtime knobs exposed as informational metadata via
@@ -164,6 +171,11 @@ func (h *Handler) WithSystemNotify(svc SystemNotifySettings) *Handler {
 	return h
 }
 
+func (h *Handler) WithNotifyWebhookSettings(svc NotifyWebhookSettings) *Handler {
+	h.notifyWebhookSettings = svc
+	return h
+}
+
 func (h *Handler) Register(r chi.Router) {
 	r.Get("/v1/alerts/incidents", h.listIncidents)
 	r.Get("/v1/alerts/incidents/{id}", h.getIncident)
@@ -184,6 +196,8 @@ func (h *Handler) Register(r chi.Router) {
 
 	r.Get("/v1/alert-settings/system-notify", h.getSystemNotify)
 	r.Put("/v1/alert-settings/system-notify", h.putSystemNotify)
+	r.Get("/v1/alert-settings/webhook-send-mode", h.getWebhookSendMode)
+	r.Put("/v1/alert-settings/webhook-send-mode", h.putWebhookSendMode)
 
 	if h.rules != nil {
 		r.Get("/v1/alert-rules", h.listRules)
@@ -759,6 +773,58 @@ func (h *Handler) putSystemNotify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := h.systemNotify.Set(r.Context(), req.Bindings)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// getWebhookSendMode returns the global webhook transport mode.
+//
+// @Summary      Get webhook send mode
+// @Router       /v1/alert-settings/webhook-send-mode [get]
+// @Success      200  {object}  bizalert.NotifyWebhookSettingsView
+func (h *Handler) getWebhookSendMode(w http.ResponseWriter, r *http.Request) {
+	if _, ok := callerFromRequest(r); !ok {
+		writeErr(w, errs.ErrUnauthorized)
+		return
+	}
+	if h.notifyWebhookSettings == nil {
+		writeErr(w, errs.ErrNotWiredYet)
+		return
+	}
+	out, err := h.notifyWebhookSettings.Get(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+type webhookSendModeReq struct {
+	SendMode string `json:"send_mode"`
+}
+
+// putWebhookSendMode updates the global webhook transport mode.
+//
+// @Summary      Update webhook send mode
+// @Router       /v1/alert-settings/webhook-send-mode [put]
+// @Success      200  {object}  bizalert.NotifyWebhookSettingsView
+func (h *Handler) putWebhookSendMode(w http.ResponseWriter, r *http.Request) {
+	if _, ok := requireAdmin(w, r); !ok {
+		return
+	}
+	if h.notifyWebhookSettings == nil {
+		writeErr(w, errs.ErrNotWiredYet)
+		return
+	}
+	var req webhookSendModeReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, errors.Join(errs.ErrInvalid, err))
+		return
+	}
+	out, err := h.notifyWebhookSettings.Set(r.Context(), req.SendMode)
 	if err != nil {
 		writeErr(w, err)
 		return

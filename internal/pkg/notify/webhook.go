@@ -270,6 +270,25 @@ func (s *webhookSender) Send(ctx context.Context, msg Message) error {
 	)
 	start := time.Now()
 	var lastErr error
+	mode := WebhookSendModeFromContext(ctx)
+	if mode == WebhookSendModeCurl {
+		lastErr = s.sendViaCurlWithRetries(ctx, log, endpoint, headers, body)
+		if lastErr == nil {
+			log.Info("webhook send ok",
+				slog.String("via", "curl"),
+				slog.Duration("duration", time.Since(start)),
+			)
+			return nil
+		}
+		log.Warn("webhook send failed",
+			slog.Any("err", lastErr),
+			slog.String("via", "curl"),
+			slog.Duration("duration", time.Since(start)),
+			slog.String("source", msg.Source),
+			slog.String("dedupe_key", msg.DedupeKey),
+		)
+		return lastErr
+	}
 	for attempt := 1; attempt <= webhookSendMaxAttempts; attempt++ {
 		if attempt > 1 {
 			delay := webhookRetryDelay(attempt)
@@ -318,6 +337,37 @@ func (s *webhookSender) Send(ctx context.Context, msg Message) error {
 		slog.String("source", msg.Source),
 		slog.String("dedupe_key", msg.DedupeKey),
 	)
+	return lastErr
+}
+
+func (s *webhookSender) sendViaCurlWithRetries(ctx context.Context, log *slog.Logger, endpoint string, headers map[string]string, body []byte) error {
+	if !curlAvailable() {
+		return fmt.Errorf("curl send mode selected but curl binary unavailable")
+	}
+	var lastErr error
+	for attempt := 1; attempt <= webhookSendMaxAttempts; attempt++ {
+		if attempt > 1 {
+			delay := webhookRetryDelay(attempt)
+			log.Info("webhook curl send retry",
+				slog.Int("attempt", attempt),
+				slog.Any("prev_err", lastErr),
+				slog.Duration("backoff", delay),
+			)
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("curl: %w", ctx.Err())
+			case <-time.After(delay):
+			}
+		}
+		lastErr = sendOnceViaCurl(ctx, log, endpoint, headers, body)
+		if lastErr == nil {
+			return nil
+		}
+		if attempt < webhookSendMaxAttempts && isRetryableWebhookErr(lastErr) {
+			continue
+		}
+		break
+	}
 	return lastErr
 }
 

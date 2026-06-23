@@ -12,18 +12,17 @@ import (
 
 const curlHTTPCodeMarker = "\n__ONGRID_HTTP_CODE__:"
 
-// sendOnceViaCurl posts the webhook by exec'ing the system curl binary.
-// Production images ship curl; it succeeds on Feishu CDN paths where Go
-// net/http gets connection reset from the same container.
+// sendOnceViaCurl posts the webhook with the container's curl binary.
+// Used only when net/http fails with transient network errors — curl has
+// been observed to succeed from the same container/IP where Go gets RST.
 func sendOnceViaCurl(ctx context.Context, log *slog.Logger, endpoint string, headers map[string]string, body []byte) error {
 	curlPath, err := exec.LookPath("curl")
 	if err != nil {
-		return fmt.Errorf("curl unavailable: %w", err)
+		return fmt.Errorf("curl fallback unavailable: %w", err)
 	}
 	args := []string{
 		"-sS",
 		"--max-time", "30",
-		"--noproxy", "*",
 		"-X", "POST",
 		endpoint,
 		"-H", "Content-Type: application/json",
@@ -34,7 +33,7 @@ func sendOnceViaCurl(ctx context.Context, log *slog.Logger, endpoint string, hea
 	for k, v := range headers {
 		args = append(args, "-H", k+": "+v)
 	}
-	log.Info("webhook send via curl",
+	log.Info("webhook send curl fallback",
 		slog.Int("body_bytes", len(body)),
 	)
 	cmd := exec.CommandContext(ctx, curlPath, args...)

@@ -218,6 +218,7 @@ type Service struct {
 	notifier    Notifier
 	previewDeps bizalert.PreviewDeps
 	devices     devicebiz.Repo
+	webhookSendMode func(context.Context) notify.WebhookSendMode
 	log         *slog.Logger
 }
 
@@ -241,6 +242,12 @@ func (s *Service) SetPreviewDeps(d bizalert.PreviewDeps) {
 // SetDeviceRepo wires device metadata lookup for incident target enrichment.
 func (s *Service) SetDeviceRepo(r devicebiz.Repo) {
 	s.devices = r
+}
+
+// SetWebhookSendModeResolver supplies the global webhook transport mode for
+// channel test deliveries (TestChannel bypasses the notify router).
+func (s *Service) SetWebhookSendModeResolver(fn func(context.Context) notify.WebhookSendMode) {
+	s.webhookSendMode = fn
 }
 
 // NewStub returns a Service whose methods short-circuit to ErrNotWiredYet
@@ -573,6 +580,7 @@ func (s *Service) TestChannel(ctx context.Context, _ Caller, id uint64) (*Channe
 	)
 	sctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
+	sctx = notify.ContextWithWebhookSendMode(sctx, s.resolveWebhookSendMode(ctx))
 	sendErr := sender.Send(sctx, msg)
 	out := &ChannelTestResult{Accepted: sendErr == nil}
 	if sendErr != nil {
@@ -612,6 +620,13 @@ func channelHasSecret(ch *model.Channel) bool {
 		return false
 	}
 	return strings.TrimSpace(cfg["secret"]) != ""
+}
+
+func (s *Service) resolveWebhookSendMode(ctx context.Context) notify.WebhookSendMode {
+	if s != nil && s.webhookSendMode != nil {
+		return notify.NormalizeWebhookSendMode(string(s.webhookSendMode(ctx)))
+	}
+	return notify.WebhookSendModeCurl
 }
 
 // ListRules returns the rule set, optionally filtered by scope.

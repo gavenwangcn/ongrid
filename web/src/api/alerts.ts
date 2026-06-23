@@ -505,6 +505,20 @@ export function testChannel(id: number) {
   return request<ChannelTestResult>('POST', `/notification-channels/${id}/test`);
 }
 
+export type WebhookSendMode = 'curl' | 'http';
+
+export type WebhookSendModeConfig = {
+  send_mode: WebhookSendMode;
+};
+
+export function getWebhookSendMode() {
+  return request<WebhookSendModeConfig>('GET', '/alert-settings/webhook-send-mode');
+}
+
+export function setWebhookSendMode(sendMode: WebhookSendMode) {
+  return request<WebhookSendModeConfig>('PUT', '/alert-settings/webhook-send-mode', { send_mode: sendMode });
+}
+
 // Runtime info exposed by the manager so the SPA can show "evaluator
 // runs every N min" / "notify cooldown N min" without the operator
 // having to read env vars. Per-deployment, not per-rule.
