@@ -684,6 +684,10 @@ func (rt *Runtime) Handle(ctx context.Context, req *Request) (*Reply, error) {
 	// ("openai"), and installs without an OpenAI key see specialists
 	// fail with `provider "openai" not configured`.
 	ctx = basetool.WithLLMChoice(ctx, req.Provider, req.Model)
+	// HLD-019: attach the session id so cloud_bash can resolve a per-session
+	// agent workspace at exec time (files persist across commands in a session
+	// instead of running in a throwaway temp dir).
+	ctx = basetool.WithSessionID(ctx, sess.ID)
 	// Always autoheal any in-flight tool batch on the way out — covers
 	// the "user closed browser mid-tool-batch" case the in-session
 	// ChatModel.OnStart flush can't reach. Defer with a background-rooted

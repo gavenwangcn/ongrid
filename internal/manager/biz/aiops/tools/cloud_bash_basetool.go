@@ -129,7 +129,9 @@ func (t *CloudBashTool) InvokableRun(ctx context.Context, argsJSON string, opts 
 	// active-skill bound credentials (HLD-017 design-time binding, attached
 	// to ctx by the runtime). De-duped, order-stable.
 	creds := mergeCreds(basetool.BoundCredentialsFromContext(ctx), strings.TrimSpace(in.Credential))
-	id, err := t.proposer.Propose(ctx, in.Command, creds, "", cfg.UserID)
+	// HLD-019: carry the session id into the approval so the execute-on-approve
+	// hook runs the command in this session's persistent workspace.
+	id, err := t.proposer.Propose(ctx, in.Command, creds, basetool.SessionIDFromContext(ctx), cfg.UserID)
 	if err != nil {
 		return "", fmt.Errorf("cloud_bash: propose: %w", err)
 	}
