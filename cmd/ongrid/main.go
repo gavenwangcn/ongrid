@@ -1828,12 +1828,22 @@ func main() {
 		for _, name := range names {
 			injected, _, err := secretUC.ResolveInjection(ctx, name)
 			if err != nil {
-				return "", fmt.Errorf("resolve credential %q: %w", name, err)
+				// Surface the available credential names so the agent can retry
+				// with the right one instead of guessing (it tends to invent
+				// e.g. "tencent" when the vault has "tencent-prod").
+				return "", fmt.Errorf("resolve credential %q: %w%s", name, err, availableCredentialsHint(ctx, secretUC))
 			}
 			for k, v := range injected {
 				env[k] = v
 			}
 		}
+		// Make installed extension binaries reachable. Skills install verbatim
+		// under marketplaceSkillsRoot/<pack>/; a skill that ships a CLI puts it
+		// in <pack>/bin/. The sandbox PATH otherwise never sees those dirs, so
+		// the agent can't run an installed tool (e.g. tccli) and wastes a turn
+		// re-installing it from scratch (which fails — the sandbox is non-root
+		// with no package manager). Prepend every existing bin dir.
+		env["PATH"] = skillBinPATH(marketplaceSkillsRoot)
 		// Resolve the session's persistent workspace as cwd (HLD-019). Empty
 		// workdir → runner uses a transient temp dir (legacy behavior).
 		workdir, err := wsMgr.Session(p.SessionID)
@@ -3364,6 +3374,63 @@ const approvalWaitTimeout = 30 * time.Minute
 // approvalPollInterval is how often the blocking tool re-reads the approval
 // row while waiting for the human decision.
 const approvalPollInterval = 1500 * time.Millisecond
+
+// cloudBashSystemPATH is the fallback PATH for the cloud_bash sandbox when no
+// installed skill ships a bin dir. Mirrors runner.buildEnv's default.
+const cloudBashSystemPATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+// skillBinPATH returns a PATH that prepends every installed skill's bin dir
+// (skillsRoot/<pack>/bin) to the system default, so a CLI an extension ships
+// is callable from cloud_bash. Missing root / no bin dirs → the system PATH
+// unchanged. Order across packs is directory-listing order (stable enough; an
+// operator with colliding tool names across packs should rename).
+func skillBinPATH(skillsRoot string) string {
+	if skillsRoot == "" {
+		return cloudBashSystemPATH
+	}
+	entries, err := os.ReadDir(skillsRoot)
+	if err != nil {
+		return cloudBashSystemPATH
+	}
+	var dirs []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		bin := filepath.Join(skillsRoot, e.Name(), "bin")
+		if fi, err := os.Stat(bin); err == nil && fi.IsDir() {
+			dirs = append(dirs, bin)
+		}
+	}
+	if len(dirs) == 0 {
+		return cloudBashSystemPATH
+	}
+	return strings.Join(dirs, ":") + ":" + cloudBashSystemPATH
+}
+
+// availableCredentialsHint returns a " (available: a, b)" suffix listing the
+// vault's credential names, for an error message when a cloud_bash credential
+// resolve misses. Empty string when listing fails or the vault is empty —
+// never blocks the real error. Names are not secret (values are).
+func availableCredentialsHint(ctx context.Context, secretUC *managerbizsecret.Usecase) string {
+	if secretUC == nil {
+		return ""
+	}
+	views, err := secretUC.List(ctx)
+	if err != nil || len(views) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(views))
+	for _, v := range views {
+		if v != nil && v.Name != "" {
+			names = append(names, v.Name)
+		}
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	return " (available credentials: " + strings.Join(names, ", ") + ")"
+}
 
 // aiopstools.CloudBashProposer seam — the cloud_bash tool calls
 // ProposeAndAwait to queue a command, surface the inline card, then block on
