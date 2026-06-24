@@ -181,6 +181,10 @@ function mcpToSkill(t: FlowToolMeta): SkillSummary {
 function CatalogTab() {
   const { tr, locale } = useI18n();
   const [items, setItems] = useState<SkillSummary[]>([]);
+  // wire name → Chinese display label, from the flow-tools catalog (the single
+  // backend source the flow palette already uses). Lets the Skills page show
+  // localized tool names without a second translation table.
+  const [zhNames, setZhNames] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -204,6 +208,9 @@ function CatalogTab() {
       ]);
       const base = (sk.items ?? []).map(localizedSkill);
       const mcp = (ft.items ?? []).filter((t) => t.name.startsWith('mcp__')).map(mcpToSkill);
+      const zh: Record<string, string> = {};
+      for (const t of ft.items ?? []) if (t.display_zh) zh[t.name] = t.display_zh;
+      setZhNames(zh);
       setItems([...base, ...mcp]);
       setErr(null);
     } catch (e) {
@@ -376,7 +383,15 @@ function CatalogTab() {
                           </div>
                         </td>
                       </tr>
-                      {!isCollapsed && rows.map((skill) => <SkillRow key={skill.key} skill={skill} onView={() => setViewing(skill)} />)}
+                      {!isCollapsed &&
+                        rows.map((skill) => (
+                          <SkillRow
+                            key={skill.key}
+                            skill={skill}
+                            displayName={locale === 'zh-CN' ? zhNames[skill.key] || skill.name : skill.name}
+                            onView={() => setViewing(skill)}
+                          />
+                        ))}
                     </tbody>
                   );
                 })}
@@ -414,12 +429,12 @@ function CategoryChip({
   );
 }
 
-function SkillRow({ skill, onView }: { skill: SkillSummary; onView(): void }) {
+function SkillRow({ skill, displayName, onView }: { skill: SkillSummary; displayName?: string; onView(): void }) {
   const { tr } = useI18n();
   return (
     <tr className="cursor-pointer transition-colors hover:bg-zinc-900/40" onClick={onView}>
       <td className="whitespace-nowrap px-4 py-1.5 pl-8">
-        <span className="text-[13px] text-zinc-200">{skill.name}</span>
+        <span className="text-[13px] text-zinc-200">{displayName ?? skill.name}</span>
         <div className="font-mono text-[10px] text-zinc-600" title={skill.key}>
           {skill.key}
         </div>
@@ -488,10 +503,18 @@ export function ScopeBadge({ value }: { value: SkillScope }) {
 }
 
 export function ClassBadge({ value }: { value: SkillClass }) {
+  const { tr } = useI18n();
   const styles: Record<SkillClass, string> = {
     safe: 'bg-emerald-500/10 text-emerald-300 ring-emerald-500/30',
     mutating: 'bg-amber-500/10 text-amber-300 ring-amber-500/30',
     dangerous: 'bg-red-500/15 text-red-300 ring-red-500/40',
+  };
+  // safe = read-only, no side effects; mutating = changes state (write/
+  // restart); dangerous = high-risk destructive. Drives the approval gate.
+  const label: Record<SkillClass, string> = {
+    safe: tr('安全', 'safe'),
+    mutating: tr('变更', 'mutating'),
+    dangerous: tr('危险', 'dangerous'),
   };
   return (
     <span
@@ -500,7 +523,7 @@ export function ClassBadge({ value }: { value: SkillClass }) {
         styles[value],
       )}
     >
-      {value}
+      {label[value]}
     </span>
   );
 }
