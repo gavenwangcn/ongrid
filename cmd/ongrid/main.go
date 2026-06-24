@@ -1798,6 +1798,17 @@ func main() {
 	// Reuses the credential vault (secretUC) for server auth injection.
 	mcpUC := managerbizmcp.NewUsecase(managermcpdata.NewRepo(db), secretUC, log.With(slog.String("comp", "mcp")))
 	mcpHandler := managerservermcp.NewHandler(mcpUC)
+	// HLD-018 + flow: MCP tools are schema-typed callables, so they're
+	// first-class deterministic flow nodes (unlike SKILL.md skills). Wire a
+	// LIVE source into the flow palette + dispatcher now that mcpUC exists —
+	// the palette queries servers per editor load, and the tool node runs them
+	// directly with NO approval (a published flow node is pre-authorized; the
+	// inbox gate is only for agent-initiated calls). flowInvoker is a pointer,
+	// so setting .mcp here is seen by the engine; re-set the catalog to the
+	// MCP-aware one (WithToolCatalog just stores it).
+	mcpFlowSrc := &flowMCPSource{uc: mcpUC, log: log.With(slog.String("comp", "flow-mcp"))}
+	flowInvoker.mcp = mcpFlowSrc
+	flowUC.WithToolCatalog(flowToolCatalog{reg: toolsReg, mcp: mcpFlowSrc})
 	// HLD-017 propose-confirm inbox: human approval queue for dangerous
 	// actions (agent cloud-shell, etc.). Additive — empty until a producer
 	// proposes; producers register their execute-on-approve executor.
@@ -1971,9 +1982,12 @@ func main() {
 		}
 		mcpCaller := mcpCallerShim{uc: mcpUC}
 		mcpProposer := mcpProposerShim{uc: approvalUC}
+		// Chat path: bolt enabled servers' tools onto the chat toolbag (boot
+		// snapshot; agent-initiated calls respect each server's trusted flag /
+		// approval). The FLOW path uses the LIVE flowMCPSource wired above, so
+		// it isn't touched here.
 		if servers, err := mcpUC.ListEnabled(rootCtx); err == nil {
-			var mcpTools []aiopstoolsbase.BaseTool // wrapped — chat + flow dispatch
-			var mcpRaw []aiopstoolsbase.BaseTool   // raw — registry (flow palette / v1 skills)
+			var mcpTools []aiopstoolsbase.BaseTool
 			for _, srv := range servers {
 				connCtx, cancel := context.WithTimeout(rootCtx, 15*time.Second)
 				cli, berr := mcpUC.BuildClient(connCtx, srv)
@@ -1990,28 +2004,15 @@ func main() {
 					continue
 				}
 				for _, mt := range mtools {
-					raw := aiopstools.NewMCPTool(srv.Name, mt.Name, mt.Description, mt.InputSchema, srv.Trusted, mcpCaller, mcpProposer, log)
-					mcpRaw = append(mcpRaw, raw)
-					mcpTools = append(mcpTools, aiopstoolsdec.Wrap(raw, mcpDeps))
+					mcpTools = append(mcpTools, aiopstoolsdec.Wrap(
+						aiopstools.NewMCPTool(srv.Name, mt.Name, mt.Description, mt.InputSchema, srv.Trusted, mcpCaller, mcpProposer, log),
+						mcpDeps))
 				}
 				log.Info("mcp: server connected", slog.String("server", srv.Name), slog.Int("tools", len(mtools)), slog.Bool("trusted", srv.Trusted))
 			}
 			if len(mcpTools) > 0 {
 				chatRT.AppendToolBag(mcpTools)
-				// MCP tools carry a JSON Schema, so (unlike SKILL.md skills) they
-				// are first-class deterministic tools: surface them in the flow
-				// tool palette too. Register the raw tools so flowToolCatalog
-				// (which rebuilds from the registry per editor load) lists them,
-				// and add the wrapped ones to the flow dispatch map so the
-				// `tool` node can actually run them.
-				toolsReg.AddExtraBaseTools(mcpRaw...)
-				for _, wt := range mcpTools {
-					if info, ierr := wt.Info(rootCtx); ierr == nil && info != nil && info.Name != "" {
-						flowInvoker.tools[info.Name] = wt
-					}
-				}
-				log.Info("mcp tools bolted onto chat bag + flow palette",
-					slog.Int("mcp_tool_count", len(mcpTools)), slog.Int("tool_count", chatRT.ToolCount()))
+				log.Info("mcp tools bolted onto chat runtime bag", slog.Int("mcp_tool_count", len(mcpTools)), slog.Int("tool_count", chatRT.ToolCount()))
 			}
 		}
 	}
@@ -3642,9 +3643,13 @@ func (s mcpProposerShim) ProposeMCPCall(ctx context.Context, server, tool string
 
 type flowToolInvoker struct {
 	tools map[string]aiopstoolsbase.BaseTool
+	// mcp dispatches mcp__ tool nodes LIVE (resolve the current server/tool +
+	// run directly, NO human approval). Wired post-construction once mcpUC
+	// exists. nil → mcp tool nodes error cleanly ("unknown tool").
+	mcp *flowMCPSource
 }
 
-func newFlowToolInvoker(reg *aiopstools.Registry, registerer prometheus.Registerer) flowToolInvoker {
+func newFlowToolInvoker(reg *aiopstools.Registry, registerer prometheus.Registerer) *flowToolInvoker {
 	deps := aiopstoolsdec.Deps{
 		Timeout:    15 * time.Second,
 		Limiter:    aiopstoolsdec.NewTokenBucketLimiter(0),
@@ -3663,10 +3668,18 @@ func newFlowToolInvoker(reg *aiopstools.Registry, registerer prometheus.Register
 			m[info.Name] = aiopstoolsdec.Wrap(t, deps)
 		}
 	}
-	return flowToolInvoker{tools: m}
+	return &flowToolInvoker{tools: m}
 }
 
-func (s flowToolInvoker) InvokeTool(ctx context.Context, name string, args json.RawMessage) (json.RawMessage, error) {
+func (s *flowToolInvoker) InvokeTool(ctx context.Context, name string, args json.RawMessage) (json.RawMessage, error) {
+	// MCP tool nodes dispatch LIVE through the mcp source (resolve the current
+	// server/tool, run directly without an approval card — placing the node in
+	// a published flow IS the human authorization; a per-run inbox approval is
+	// the wrong model for a deterministic, human-authored step). A removed
+	// server/tool surfaces as a clean error → the node's error port.
+	if s.mcp != nil && strings.HasPrefix(name, aiopstools.MCPToolNamePrefix) {
+		return s.mcp.call(ctx, name, args)
+	}
 	t, ok := s.tools[name]
 	if !ok {
 		return nil, fmt.Errorf("unknown tool %q", name)
@@ -3680,6 +3693,133 @@ func (s flowToolInvoker) InvokeTool(ctx context.Context, name string, args json.
 		return nil, err
 	}
 	return json.RawMessage(out), nil
+}
+
+// flowMCPSource live-queries the registered MCP servers (HLD-018) so the flow
+// tool palette and the `tool` node always reflect the CURRENT tool universe —
+// add/remove a server and it shows up / drops out without a restart (n8n's
+// McpClient live-listSearch pattern). MCP tools carry a JSON inputSchema, so
+// they are first-class deterministic nodes (skills, lacking a schema, are not).
+type flowMCPSource struct {
+	uc  *managerbizmcp.Usecase
+	log *slog.Logger
+}
+
+// mcpEntry is one live MCP tool: its wire name + the (server, bareTool) needed
+// to dispatch it, plus the schema for the node's param form.
+type mcpEntry struct {
+	wire   string
+	server string
+	bare   string
+	desc   string
+	schema json.RawMessage
+}
+
+// enumerate connects to every enabled server and lists its tools. Best-effort:
+// an unreachable server is logged and skipped (degradation, not a hard fail).
+func (m *flowMCPSource) enumerate(ctx context.Context) []mcpEntry {
+	if m == nil || m.uc == nil {
+		return nil
+	}
+	servers, err := m.uc.ListEnabled(ctx)
+	if err != nil {
+		return nil
+	}
+	var out []mcpEntry
+	for _, srv := range servers {
+		cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		cli, berr := m.uc.BuildClient(cctx, srv)
+		if berr == nil {
+			berr = cli.Initialize(cctx)
+		}
+		var tools []mcpclient.Tool
+		if berr == nil {
+			tools, berr = cli.ListTools(cctx)
+		}
+		cancel()
+		if berr != nil {
+			if m.log != nil {
+				m.log.Warn("flow mcp: list failed, skipping server", slog.String("server", srv.Name), slog.Any("err", berr))
+			}
+			continue
+		}
+		for _, t := range tools {
+			out = append(out, mcpEntry{
+				wire:   aiopstools.MCPToolName(srv.Name, t.Name),
+				server: srv.Name,
+				bare:   t.Name,
+				desc:   t.Description,
+				schema: t.InputSchema,
+			})
+		}
+	}
+	return out
+}
+
+// metas returns the live MCP tools as flow palette entries.
+func (m *flowMCPSource) metas(ctx context.Context) []managerbizflow.ToolMeta {
+	entries := m.enumerate(ctx)
+	out := make([]managerbizflow.ToolMeta, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, managerbizflow.ToolMeta{
+			Name:        e.wire,
+			DisplayZh:   e.bare,
+			Description: e.desc,
+			Class:       "destructive", // human-authored node; gated at authoring, not per-run
+			Category:    "integration",
+			Parameters:  e.schema,
+		})
+	}
+	return out
+}
+
+// call resolves a wire name to its current (server, bareTool) and dispatches
+// directly via the usecase (NO approval). Narrows by server prefix first so it
+// only lists the one matching server's tools, not all of them.
+func (m *flowMCPSource) call(ctx context.Context, wire string, args json.RawMessage) (json.RawMessage, error) {
+	if m == nil || m.uc == nil {
+		return nil, fmt.Errorf("unknown tool %q", wire)
+	}
+	servers, err := m.uc.ListEnabled(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("mcp: list servers: %w", err)
+	}
+	for _, srv := range servers {
+		if !strings.HasPrefix(wire, aiopstools.MCPToolName(srv.Name, "")) {
+			continue
+		}
+		cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		cli, berr := m.uc.BuildClient(cctx, srv)
+		if berr == nil {
+			berr = cli.Initialize(cctx)
+		}
+		var tools []mcpclient.Tool
+		if berr == nil {
+			tools, berr = cli.ListTools(cctx)
+		}
+		cancel()
+		if berr != nil {
+			return nil, fmt.Errorf("mcp %q: server %q unreachable: %w", wire, srv.Name, berr)
+		}
+		for _, t := range tools {
+			if aiopstools.MCPToolName(srv.Name, t.Name) != wire {
+				continue
+			}
+			var argMap map[string]any
+			if len(args) > 0 {
+				if uerr := json.Unmarshal(args, &argMap); uerr != nil {
+					return nil, fmt.Errorf("mcp %q: bad args: %w", wire, uerr)
+				}
+			}
+			res, cerr := m.uc.CallTool(ctx, srv.Name, t.Name, argMap)
+			if cerr != nil {
+				return nil, fmt.Errorf("mcp %q: %w", wire, cerr)
+			}
+			return json.RawMessage(res), nil
+		}
+		return nil, fmt.Errorf("mcp %q: tool no longer exists on server %q", wire, srv.Name)
+	}
+	return nil, fmt.Errorf("mcp %q: no enabled server matches", wire)
 }
 
 // flowAgentRunner implements bizflow.AgentRunner over the chatruntime —
@@ -3789,8 +3929,12 @@ func (s flowNotifierShim) Notify(ctx context.Context, channelIDs []uint64, title
 // registry — surfaces every registered BaseTool to the canvas palette so
 // each becomes a draggable, form-driven `tool` node. Rebuilds the bag per
 // call (cheap, low-frequency: editor load) so newly registered tools show
-// up without a restart.
-type flowToolCatalog struct{ reg *aiopstools.Registry }
+// up without a restart. mcp (optional) live-queries the registered MCP
+// servers each call so their tools appear/disappear without a restart too.
+type flowToolCatalog struct {
+	reg *aiopstools.Registry
+	mcp *flowMCPSource
+}
 
 func (c flowToolCatalog) ListTools() []managerbizflow.ToolMeta {
 	bag := c.reg.BuildBaseTools()
@@ -3825,6 +3969,11 @@ func (c flowToolCatalog) ListTools() []managerbizflow.ToolMeta {
 			Category:      categorizeFlowTool(info.Name),
 			Parameters:    info.Parameters,
 		})
+	}
+	// Live MCP tools (HLD-018) — queried fresh per editor load so adding /
+	// removing a server is reflected without a restart.
+	if c.mcp != nil {
+		out = append(out, c.mcp.metas(ctx)...)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Category != out[j].Category {

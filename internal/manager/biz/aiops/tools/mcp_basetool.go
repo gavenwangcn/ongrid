@@ -56,9 +56,14 @@ func NewMCPTool(server, bareName, desc string, schema json.RawMessage, trusted b
 	}
 }
 
+// MCPToolNamePrefix is the wire-name prefix every MCP tool carries. Callers
+// use it to recognise an MCP tool by name (e.g. the flow invoker routes these
+// to the live MCP dispatch path).
+const MCPToolNamePrefix = "mcp__"
+
 // MCPToolName builds the LLM-facing wire name, sanitizing both segments.
 func MCPToolName(server, tool string) string {
-	return "mcp__" + sanitizeMCPSeg(server) + "__" + sanitizeMCPSeg(tool)
+	return MCPToolNamePrefix + sanitizeMCPSeg(server) + "__" + sanitizeMCPSeg(tool)
 }
 
 func sanitizeMCPSeg(s string) string {
