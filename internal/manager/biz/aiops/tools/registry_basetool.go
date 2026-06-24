@@ -214,6 +214,12 @@ func (r *Registry) BuildBaseTools() *ToolBag {
 		out = append(out, NewCloudBashTool(r.cloudBashProposer, r.log))
 	}
 
+	// Dynamically-discovered tools (MCP server tools, HLD-018) registered via
+	// AddExtraBaseTools. They carry their own JSON Schema, so they're
+	// first-class tools — surfaced to the LLM, /v1/skills, and the flow palette
+	// alike. Appended last so they never shadow a built-in on name collision.
+	out = append(out, r.extraTools...)
+
 	threshold := envIntDefault("ONGRID_TOOLBAG_DEFERRAL_THRESHOLD", defaultDeferralThreshold)
 	bag := NewToolBag(out, threshold)
 

@@ -1594,8 +1594,11 @@ func main() {
 	// still work; only agent nodes degrade with a clear error.
 	flowRepo := managerflowdata.NewRepo(db)
 	flowRunRepo := managerflowdata.NewRunRepo(db)
+	// Captured so MCP tools (discovered later, after mcpUC exists) can be
+	// appended to the same dispatch map the flow engine uses.
+	flowInvoker := newFlowToolInvoker(toolsReg, reg)
 	flowExec := managerbizflow.Executors{
-		Tools:  newFlowToolInvoker(toolsReg, reg),
+		Tools:  flowInvoker,
 		Notify: flowNotifierShim{channels: alertRepo, router: notifyRouter},
 		LLM:    flowLLMRunner{client: llmClient},
 	}
@@ -1969,7 +1972,8 @@ func main() {
 		mcpCaller := mcpCallerShim{uc: mcpUC}
 		mcpProposer := mcpProposerShim{uc: approvalUC}
 		if servers, err := mcpUC.ListEnabled(rootCtx); err == nil {
-			var mcpTools []aiopstoolsbase.BaseTool
+			var mcpTools []aiopstoolsbase.BaseTool // wrapped — chat + flow dispatch
+			var mcpRaw []aiopstoolsbase.BaseTool   // raw — registry (flow palette / v1 skills)
 			for _, srv := range servers {
 				connCtx, cancel := context.WithTimeout(rootCtx, 15*time.Second)
 				cli, berr := mcpUC.BuildClient(connCtx, srv)
@@ -1986,15 +1990,28 @@ func main() {
 					continue
 				}
 				for _, mt := range mtools {
-					mcpTools = append(mcpTools, aiopstoolsdec.Wrap(
-						aiopstools.NewMCPTool(srv.Name, mt.Name, mt.Description, mt.InputSchema, srv.Trusted, mcpCaller, mcpProposer, log),
-						mcpDeps))
+					raw := aiopstools.NewMCPTool(srv.Name, mt.Name, mt.Description, mt.InputSchema, srv.Trusted, mcpCaller, mcpProposer, log)
+					mcpRaw = append(mcpRaw, raw)
+					mcpTools = append(mcpTools, aiopstoolsdec.Wrap(raw, mcpDeps))
 				}
 				log.Info("mcp: server connected", slog.String("server", srv.Name), slog.Int("tools", len(mtools)), slog.Bool("trusted", srv.Trusted))
 			}
 			if len(mcpTools) > 0 {
 				chatRT.AppendToolBag(mcpTools)
-				log.Info("mcp tools bolted onto chat runtime bag", slog.Int("mcp_tool_count", len(mcpTools)), slog.Int("tool_count", chatRT.ToolCount()))
+				// MCP tools carry a JSON Schema, so (unlike SKILL.md skills) they
+				// are first-class deterministic tools: surface them in the flow
+				// tool palette too. Register the raw tools so flowToolCatalog
+				// (which rebuilds from the registry per editor load) lists them,
+				// and add the wrapped ones to the flow dispatch map so the
+				// `tool` node can actually run them.
+				toolsReg.AddExtraBaseTools(mcpRaw...)
+				for _, wt := range mcpTools {
+					if info, ierr := wt.Info(rootCtx); ierr == nil && info != nil && info.Name != "" {
+						flowInvoker.tools[info.Name] = wt
+					}
+				}
+				log.Info("mcp tools bolted onto chat bag + flow palette",
+					slog.Int("mcp_tool_count", len(mcpTools)), slog.Int("tool_count", chatRT.ToolCount()))
 			}
 		}
 	}
@@ -3848,6 +3865,8 @@ func categorizeFlowTool(name string) string {
 		return "control"
 	}
 	switch {
+	case strings.HasPrefix(name, "mcp__"):
+		return "integration" // MCP server tools (HLD-018)
 	case strings.HasPrefix(name, "query_"):
 		return "observability"
 	case strings.HasPrefix(name, "host_") || strings.HasPrefix(name, "get_host_") || strings.Contains(name, "restart_service"):

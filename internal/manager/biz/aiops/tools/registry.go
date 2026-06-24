@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/ongridio/ongrid/internal/manager/biz/aiops/tools/basetool"
 	devicebiz "github.com/ongridio/ongrid/internal/manager/biz/device"
 	edgebiz "github.com/ongridio/ongrid/internal/manager/biz/edge"
 	topologybiz "github.com/ongridio/ongrid/internal/manager/biz/topology"
@@ -116,8 +117,27 @@ type Registry struct {
 	// nil → cloud_bash is NOT registered.
 	cloudBashProposer CloudBashProposer
 
+	// extraTools are dynamically-discovered BaseTools (e.g. MCP server tools,
+	// HLD-018) registered post-construction so BuildBaseTools includes them
+	// uniformly — the chat toolbag, /v1/skills, AND the flow tool palette all
+	// see them. They carry their own JSON Schema, so they're first-class tools
+	// like any built-in. Appended verbatim (already a BaseTool); the caller
+	// decorates at bag-build time like the rest.
+	extraTools []basetool.BaseTool
+
 	log   *slog.Logger
 	tools map[string]Tool
+}
+
+// AddExtraBaseTools appends dynamically-discovered BaseTools (MCP server
+// tools, …) so every BuildBaseTools call yields them. Idempotent-ish: call
+// once after discovery. Safe to call with nothing.
+func (r *Registry) AddExtraBaseTools(ts ...basetool.BaseTool) {
+	for _, t := range ts {
+		if t != nil {
+			r.extraTools = append(r.extraTools, t)
+		}
+	}
 }
 
 // SetCloudBashProposer wires the cloud_bash → approval-inbox seam. Call
