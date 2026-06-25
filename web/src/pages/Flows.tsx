@@ -9,6 +9,7 @@ import { createFlow, deleteFlow, listFlows, runFlow, toggleFlow, type Flow } fro
 import { useI18n } from '@/i18n/locale';
 import { useAuth } from '@/store/auth';
 import { PageHeader, Button } from '@/components/ui';
+import { cn } from '@/lib/cn';
 
 export default function FlowsPage() {
   const { tr } = useI18n();
@@ -179,23 +180,23 @@ export default function FlowsPage() {
       ) : shown.length === 0 ? (
         <div className="py-16 text-center text-xs text-zinc-500">{tr('无匹配的工作流', 'No matching workflows')}</div>
       ) : (
-        <div className="space-y-2">
+        <div className="divide-y divide-zinc-800 overflow-hidden rounded-lg border border-zinc-800">
           {shown.map((f) => (
             <div
               key={f.id}
-              className="flex cursor-pointer items-center gap-4 rounded-lg border border-zinc-800 bg-zinc-900/40 px-4 py-3 transition-colors hover:border-zinc-700"
+              className="flex cursor-pointer items-center gap-3 px-4 py-2.5 transition-colors hover:bg-zinc-900/40"
               onClick={() => navigate(`/workflows/${f.id}`)}
             >
-              <WorkflowIcon size={18} className={f.enabled ? 'text-indigo-400' : 'text-zinc-600'} />
+              <WorkflowIcon size={15} className={cn('shrink-0', f.enabled ? 'text-indigo-400' : 'text-zinc-600')} />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span className="truncate text-sm font-medium text-zinc-200">{f.name}</span>
-                  <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[11px] text-zinc-500">v{f.version}</span>
+                  <span className="truncate text-[13px] font-medium text-zinc-200">{f.name}</span>
+                  <span className="rounded bg-zinc-800 px-1 py-0.5 text-[10px] text-zinc-500">v{f.version}</span>
                   {!f.enabled && (
-                    <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[11px] text-zinc-500">{tr('已停用', 'Disabled')}</span>
+                    <span className="rounded bg-zinc-800 px-1 py-0.5 text-[10px] text-zinc-500">{tr('已停用', 'Disabled')}</span>
                   )}
                 </div>
-                {f.description && <div className="mt-0.5 truncate text-[12px] text-zinc-500">{f.description}</div>}
+                {f.description && <div className="truncate text-[11px] text-zinc-500">{f.description}</div>}
               </div>
               {canWrite && (
                 <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
