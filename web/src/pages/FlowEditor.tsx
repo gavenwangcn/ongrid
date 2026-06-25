@@ -26,6 +26,7 @@ import {
   ArrowLeft,
   Bell,
   Bot,
+  Braces,
   ChevronDown,
   ChevronRight,
   CircleDot,
@@ -866,6 +867,7 @@ export default function FlowEditorPage() {
                 schema={tools.find((t) => t.name === selected.data.config.tool)}
                 disabled={!canWrite}
                 onChange={(args) => patchSelected({ config: { ...selected.data.config, args } })}
+                refs={pickerRefsFrom(selected.id, nodes, edges, activeRun?.nodes?.length ? activeRun.nodes : lastRunNodes, nodeSpecs, locale)}
               />
             ) : (
               configFieldsFor(selected.data.flowType, nodeSpecs).map((f) => (
@@ -1229,6 +1231,7 @@ function ToolArgsForm({
   disabled,
   onChange,
   section = 'fields',
+  refs = [],
 }: {
   toolName: string;
   args: Record<string, unknown>;
@@ -1238,6 +1241,8 @@ function ToolArgsForm({
   // 'desc' renders only the tool name + description; 'fields' only the input
   // form. The drawer renders the two parts in different sections.
   section?: 'desc' | 'fields';
+  // upstream variable refs for the per-field click-to-insert picker.
+  refs?: PickerRef[];
 }) {
   const { tr, locale } = useI18n();
   const props = schema?.parameters?.properties;
@@ -1340,19 +1345,24 @@ function ToolArgsForm({
           : '{{…}}';
         return (
           <label key={key} className="mb-3 block">
-            <span className="mb-1 block text-[12px] text-zinc-500">
+            <div className="mb-1 flex items-center gap-1 text-[12px] text-zinc-500">
               <span className="font-mono text-zinc-400">{key}</span>
               {required.has(key) ? (
-                <span className="ml-1 text-red-400">*</span>
+                <span className="text-red-400">*</span>
               ) : (
-                <span className="ml-1 text-[10px] text-zinc-600">{tr('可选', 'optional')}</span>
+                <span className="text-[10px] text-zinc-600">{tr('可选', 'optional')}</span>
               )}
-              {typeBadge && <span className="ml-1 rounded bg-zinc-800 px-1 text-[9px] text-zinc-500">{typeBadge}</span>}
-              {(() => {
-                const desc = locale === 'en-US' ? paramDescEn[toolName]?.[key] ?? spec.description : spec.description;
-                return desc ? <span className="ml-1 text-zinc-600">— {desc}</span> : null;
-              })()}
-            </span>
+              {typeBadge && <span className="rounded bg-zinc-800 px-1 text-[9px] text-zinc-500">{typeBadge}</span>}
+              {!disabled && refs.length > 0 && (
+                <span className="ml-auto">
+                  <VarPicker refs={refs} onInsert={(ref) => setArg(key, ref, type)} />
+                </span>
+              )}
+            </div>
+            {(() => {
+              const desc = locale === 'en-US' ? paramDescEn[toolName]?.[key] ?? spec.description : spec.description;
+              return desc ? <div className="mb-1 text-[11px] leading-snug text-zinc-600">{desc}</div> : null;
+            })()}
             {isEnum ? (
               <select
                 value={val}
@@ -1671,6 +1681,103 @@ function shapeEntries(
   return staticOutputHints(flowType, config, specShape).map((path) => ({ path }));
 }
 
+// buildUpstreamRefs lists each upstream node's output fields (live values when
+// the node ran, else its static shape). Shared by the UpstreamRefs panel and
+// the per-field variable picker.
+function buildUpstreamRefs(
+  selectedId: string,
+  nodes: CanvasNode[],
+  edges: Edge[],
+  runNodes: FlowRunNode[],
+  nodeSpecs: Record<string, NodeType>,
+) {
+  const set = upstreamOf(selectedId, edges);
+  const runByID = new Map(runNodes.map((r) => [r.node_id, r]));
+  return nodes
+    .filter((n) => set.has(n.id))
+    .map((n) => {
+      const ran = runByID.get(n.id);
+      let entries: OutputEntry[];
+      let live = false;
+      if (ran && ran.output && Object.keys(ran.output).length) {
+        entries = flattenEntries(ran.output);
+        live = true;
+      } else {
+        entries = shapeEntries(n.data.flowType, n.data.config ?? {}, nodeSpecs[n.data.flowType]?.output_shape);
+      }
+      return { id: n.id, label: n.data.label, type: n.data.flowType, entries, live };
+    })
+    .filter((u) => u.entries.length > 0);
+}
+
+export type PickerRef = { nodeLabel: string; fieldLabel: string; ref: string };
+
+// pickerRefsFrom flattens the upstream refs into a click-to-insert list.
+function pickerRefsFrom(
+  selectedId: string,
+  nodes: CanvasNode[],
+  edges: Edge[],
+  runNodes: FlowRunNode[],
+  nodeSpecs: Record<string, NodeType>,
+  locale: string,
+): PickerRef[] {
+  return buildUpstreamRefs(selectedId, nodes, edges, runNodes, nodeSpecs).flatMap((u) =>
+    u.entries.map((e) => ({
+      nodeLabel: u.label,
+      fieldLabel: friendlyFieldLabel(e.path, locale),
+      ref: `{{nodes.${u.id}.output.${e.path}}}`,
+    })),
+  );
+}
+
+// VarPicker is the per-field "insert upstream variable" button + dropdown.
+// Clicking a variable fills its {{…}} reference straight into the field.
+function VarPicker({ refs, onInsert }: { refs: PickerRef[]; onInsert: (ref: string) => void }) {
+  const { tr } = useI18n();
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative shrink-0">
+      <button
+        type="button"
+        title={tr('插入上游变量', 'Insert upstream variable')}
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex items-center gap-0.5 rounded border border-zinc-800 bg-zinc-900 px-1 py-0.5 text-[9px] text-zinc-500 transition-colors hover:border-zinc-700 hover:text-indigo-400"
+      >
+        <Braces size={10} />
+        {tr('引用', 'ref')}
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 z-20 mt-1 max-h-56 w-60 overflow-auto rounded-md border border-zinc-700 bg-zinc-900 p-1 shadow-xl">
+            {refs.length === 0 ? (
+              <div className="px-2 py-1.5 text-[11px] text-zinc-600">
+                {tr('无上游变量——先把上游节点连进来', 'No upstream variables — wire an upstream node in first')}
+              </div>
+            ) : (
+              refs.map((r) => (
+                <button
+                  key={r.ref}
+                  type="button"
+                  title={r.ref}
+                  onClick={() => {
+                    onInsert(r.ref);
+                    setOpen(false);
+                  }}
+                  className="block w-full truncate rounded px-2 py-1 text-left text-[11px] text-zinc-300 transition-colors hover:bg-zinc-800"
+                >
+                  <span className="text-zinc-500">{r.nodeLabel} › </span>
+                  {r.fieldLabel}
+                </button>
+              ))
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function UpstreamRefs({
   selectedId,
   nodes,
@@ -1689,25 +1796,10 @@ function UpstreamRefs({
   copied: string;
 }) {
   const { tr, locale } = useI18n();
-  const ups = useMemo(() => {
-    const set = upstreamOf(selectedId, edges);
-    const runByID = new Map(runNodes.map((r) => [r.node_id, r]));
-    return nodes
-      .filter((n) => set.has(n.id))
-      .map((n) => {
-        const ran = runByID.get(n.id);
-        let entries: OutputEntry[];
-        let live = false;
-        if (ran && ran.output && Object.keys(ran.output).length) {
-          entries = flattenEntries(ran.output);
-          live = true;
-        } else {
-          entries = shapeEntries(n.data.flowType, n.data.config ?? {}, nodeSpecs[n.data.flowType]?.output_shape);
-        }
-        return { id: n.id, label: n.data.label, type: n.data.flowType, entries, live };
-      })
-      .filter((u) => u.entries.length > 0);
-  }, [selectedId, nodes, edges, runNodes, nodeSpecs]);
+  const ups = useMemo(
+    () => buildUpstreamRefs(selectedId, nodes, edges, runNodes, nodeSpecs),
+    [selectedId, nodes, edges, runNodes, nodeSpecs],
+  );
 
   if (ups.length === 0) {
     return (
