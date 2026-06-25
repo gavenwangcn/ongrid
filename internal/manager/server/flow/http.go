@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -68,6 +69,8 @@ type flowDTO struct {
 	Graph       json.RawMessage `json:"graph"`
 	Enabled     bool            `json:"enabled"`
 	Version     int             `json:"version"`
+	NodeCount   int             `json:"node_count"`
+	TriggerType string          `json:"trigger_type,omitempty"`
 	CreatedAt   string          `json:"created_at"`
 	UpdatedAt   string          `json:"updated_at"`
 }
@@ -81,6 +84,25 @@ func toFlowDTO(f *model.Flow, withGraph bool) flowDTO {
 		Version:     f.Version,
 		CreatedAt:   f.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 		UpdatedAt:   f.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+	}
+	// Cheap graph summary so the list can show node count + trigger without
+	// shipping the whole graph. GraphJSON is on the model even when the list
+	// omits the serialized graph.
+	if len(f.GraphJSON) > 0 {
+		var g struct {
+			Nodes []struct {
+				Type string `json:"type"`
+			} `json:"nodes"`
+		}
+		if json.Unmarshal([]byte(f.GraphJSON), &g) == nil {
+			d.NodeCount = len(g.Nodes)
+			for _, n := range g.Nodes {
+				if strings.HasPrefix(n.Type, "trigger.") {
+					d.TriggerType = n.Type
+					break
+				}
+			}
+		}
 	}
 	if withGraph {
 		d.Graph = json.RawMessage(f.GraphJSON)

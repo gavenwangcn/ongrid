@@ -32,6 +32,26 @@ export default function FlowsPage() {
     return f.name.toLowerCase().includes(q) || (f.description ?? '').toLowerCase().includes(q);
   });
 
+  const triggerLabel = (t?: string) => {
+    switch (t) {
+      case 'trigger.manual': return tr('手动', 'Manual');
+      case 'trigger.cron': return tr('定时', 'Schedule');
+      case 'trigger.alert_fired': return tr('告警', 'Alert');
+      default: return t ? t.replace('trigger.', '') : '—';
+    }
+  };
+  const relTime = (iso: string) => {
+    const sec = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+    if (sec < 60) return tr('刚刚', 'just now');
+    const min = Math.floor(sec / 60);
+    if (min < 60) return tr(`${min} 分钟前`, `${min}m ago`);
+    const hr = Math.floor(min / 60);
+    if (hr < 24) return tr(`${hr} 小时前`, `${hr}h ago`);
+    const day = Math.floor(hr / 24);
+    if (day < 30) return tr(`${day} 天前`, `${day}d ago`);
+    return new Date(iso).toLocaleDateString();
+  };
+
   const refresh = useCallback(async () => {
     try {
       const r = await listFlows({ limit: 100 });
@@ -180,56 +200,93 @@ export default function FlowsPage() {
       ) : shown.length === 0 ? (
         <div className="py-16 text-center text-xs text-zinc-500">{tr('无匹配的工作流', 'No matching workflows')}</div>
       ) : (
-        <div className="divide-y divide-zinc-800 overflow-hidden rounded-lg border border-zinc-800">
-          {shown.map((f) => (
-            <div
-              key={f.id}
-              className="flex cursor-pointer items-center gap-3 px-4 py-2.5 transition-colors hover:bg-zinc-900/40"
-              onClick={() => navigate(`/workflows/${f.id}`)}
-            >
-              <WorkflowIcon size={15} className={cn('shrink-0', f.enabled ? 'text-indigo-400' : 'text-zinc-600')} />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="truncate text-[13px] font-medium text-zinc-200">{f.name}</span>
-                  <span className="rounded bg-zinc-800 px-1 py-0.5 text-[10px] text-zinc-500">v{f.version}</span>
-                  {!f.enabled && (
-                    <span className="rounded bg-zinc-800 px-1 py-0.5 text-[10px] text-zinc-500">{tr('已停用', 'Disabled')}</span>
-                  )}
-                </div>
-                {f.description && <div className="truncate text-[11px] text-zinc-500">{f.description}</div>}
-              </div>
-              {canWrite && (
-                <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                  <button
-                    type="button"
-                    title={tr('运行', 'Run')}
-                    disabled={busyId === f.id || !f.enabled}
-                    onClick={() => void onRun(f)}
-                    className="rounded-md p-1.5 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-indigo-400 disabled:opacity-40"
-                  >
-                    <Play size={15} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void onToggle(f)}
-                    disabled={busyId === f.id}
-                    className="rounded-md px-2 py-1 text-[12px] text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-200"
-                  >
-                    {f.enabled ? tr('停用', 'Disable') : tr('启用', 'Enable')}
-                  </button>
-                  <button
-                    type="button"
-                    title={tr('删除', 'Delete')}
-                    disabled={busyId === f.id}
-                    onClick={() => void onDelete(f)}
-                    className="rounded-md p-1.5 text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-red-400"
-                  >
-                    <Trash2 size={15} />
-                  </button>
-                </div>
-              )}
-            </div>
-          ))}
+        <div className="overflow-hidden rounded-xl border border-zinc-800/60 bg-zinc-900/30">
+          <table className="w-full text-left">
+            <thead className="border-b border-zinc-800/60 bg-zinc-950/40 text-[11px] uppercase tracking-wider text-zinc-500">
+              <tr>
+                <th className="px-4 py-2.5 font-medium">{tr('名称', 'Name')}</th>
+                <th className="px-4 py-2.5 font-medium">{tr('触发器', 'Trigger')}</th>
+                <th className="px-4 py-2.5 font-medium">{tr('节点', 'Nodes')}</th>
+                <th className="px-4 py-2.5 font-medium">{tr('状态', 'Status')}</th>
+                <th className="px-4 py-2.5 font-medium">{tr('更新', 'Updated')}</th>
+                <th className="px-4 py-2.5 text-right font-medium">{tr('操作', 'Actions')}</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-800/40">
+              {shown.map((f) => (
+                <tr
+                  key={f.id}
+                  className="cursor-pointer transition-colors hover:bg-zinc-900/40"
+                  onClick={() => navigate(`/workflows/${f.id}`)}
+                >
+                  <td className="px-4 py-2.5">
+                    <div className="flex items-center gap-2.5">
+                      <WorkflowIcon size={15} className={cn('shrink-0', f.enabled ? 'text-indigo-400' : 'text-zinc-600')} />
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="truncate text-[13px] font-medium text-zinc-200">{f.name}</span>
+                          <span className="shrink-0 rounded bg-zinc-800 px-1 py-0.5 text-[10px] text-zinc-500">v{f.version}</span>
+                        </div>
+                        {f.description && <div className="truncate text-[11px] text-zinc-500">{f.description}</div>}
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-4 py-2.5">
+                    <span className="inline-flex items-center rounded-md bg-zinc-800/60 px-1.5 py-0.5 text-[11px] text-zinc-400">
+                      {triggerLabel(f.trigger_type)}
+                    </span>
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-2.5 text-[12px] tabular-nums text-zinc-400">
+                    {f.node_count ?? 0} {tr('节点', 'nodes')}
+                  </td>
+                  <td className="px-4 py-2.5">
+                    {f.enabled ? (
+                      <span className="inline-flex items-center rounded-md bg-emerald-500/10 px-1.5 py-0.5 text-[11px] text-emerald-300 ring-1 ring-inset ring-emerald-500/30">
+                        {tr('启用', 'Enabled')}
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center rounded-md bg-zinc-800 px-1.5 py-0.5 text-[11px] text-zinc-500">
+                        {tr('停用', 'Disabled')}
+                      </span>
+                    )}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-2.5 text-[11px] text-zinc-500">{relTime(f.updated_at)}</td>
+                  <td className="px-4 py-2.5">
+                    {canWrite && (
+                      <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          type="button"
+                          title={tr('运行', 'Run')}
+                          disabled={busyId === f.id || !f.enabled}
+                          onClick={() => void onRun(f)}
+                          className="rounded-md p-1.5 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-indigo-400 disabled:opacity-40"
+                        >
+                          <Play size={15} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void onToggle(f)}
+                          disabled={busyId === f.id}
+                          className="rounded-md px-2 py-1 text-[12px] text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-200"
+                        >
+                          {f.enabled ? tr('停用', 'Disable') : tr('启用', 'Enable')}
+                        </button>
+                        <button
+                          type="button"
+                          title={tr('删除', 'Delete')}
+                          disabled={busyId === f.id}
+                          onClick={() => void onDelete(f)}
+                          className="rounded-md p-1.5 text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-red-400"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
       </div>

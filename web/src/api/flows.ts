@@ -47,6 +47,8 @@ export type Flow = {
   graph?: FlowGraph;
   enabled: boolean;
   version: number;
+  node_count?: number;
+  trigger_type?: string;
   created_at: string;
   updated_at: string;
 };
