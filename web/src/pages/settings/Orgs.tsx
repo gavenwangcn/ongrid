@@ -270,7 +270,7 @@ export default function SettingsOrgs() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 p-6">
       <PageHeader
         title={
           <span className="inline-flex items-center gap-2">
