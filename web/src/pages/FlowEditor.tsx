@@ -1236,6 +1236,10 @@ function ToolArgsForm({
 
   return (
     <div>
+      <div className="mb-2 flex items-center gap-1.5">
+        <span className="text-[11px] text-zinc-500">{tr('工具', 'Tool')}</span>
+        <span className="rounded bg-zinc-800 px-1.5 py-0.5 font-mono text-[11px] text-zinc-300">{toolName}</span>
+      </div>
       <div className="mb-2 rounded-md bg-zinc-900/60 p-2 text-[11px] leading-relaxed text-zinc-500">
         {locale === 'zh-CN' ? schema?.description_zh || schema?.description : schema?.description}
         <div className="mt-1 text-zinc-600">
@@ -1315,7 +1319,6 @@ function ToolArgsForm({
           </label>
         );
       })}
-      <div className="mt-1 text-[11px] text-zinc-600">{tr('工具', 'Tool')}: <span className="font-mono">{toolName}</span></div>
     </div>
   );
 }
@@ -1732,6 +1735,8 @@ function SelfOutputRefs({
     };
   }, [node, testOutput, runNodes, nodeSpecs]);
   const hasValues = source === 'test' || source === 'live';
+  const toolName = typeof node.data.config?.tool === 'string' ? (node.data.config.tool as string) : '';
+  const isMcp = toolName.startsWith('mcp__');
 
   if (entries.length === 0) return null;
 
@@ -1752,6 +1757,14 @@ function SelfOutputRefs({
       <div className="mb-1.5 text-[10px] leading-relaxed text-zinc-600">
         {tr('本节点输出的字段（友好名），供下游引用。点字段复制 {{…}}。', "This node's output fields (friendly names), for downstream refs. Click to copy {{…}}.")}
       </div>
+      {isMcp && (
+        <div className="mb-1.5 rounded bg-sky-900/20 px-1.5 py-1 text-[10px] leading-relaxed text-sky-300/90">
+          {tr(
+            'MCP 工具多返回文本：整体引用 {{…output.result}}，或接 Agent / LLM 节点解析后再用结构化字段。',
+            'MCP tools often return plain text — reference it whole via {{…output.result}}, or feed it to an Agent / LLM node to parse into structured fields.',
+          )}
+        </div>
+      )}
       <div className="flex flex-wrap gap-1">
         {entries.map((e) => {
           const ref = `{{nodes.${node.id}.output.${e.path}}}`;
