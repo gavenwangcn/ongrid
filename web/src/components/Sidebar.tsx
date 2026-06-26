@@ -10,6 +10,7 @@ import {
   LayoutDashboard,
   Server,
   Boxes,
+  AppWindow,
   Database,
   Network,
   Bot,
@@ -515,6 +516,10 @@ export function Sidebar() {
           <SidebarNavItem to="/logs" icon={FileText} label={tr('日志', 'Logs')} />
           <SidebarNavItem to="/traces" icon={Waypoints} label={tr('链路', 'Traces')} />
           <SidebarNavItem to="/alerts" icon={Siren} label={tr('告警', 'Alerts')} badge={incidentOpen} />
+        </CollapsibleSection>
+
+        <CollapsibleSection storageKey="operations" title={tr('运营', 'Operations')} defaultOpen={false}>
+          <SidebarNavItem to="/pages" icon={AppWindow} label={tr('产物', 'Artifacts')} />
           <SidebarNavItem to="/reports" icon={FileBarChart} label={tr('报告', 'Reports')} />
         </CollapsibleSection>
 

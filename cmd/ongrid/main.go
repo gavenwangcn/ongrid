@@ -1953,10 +1953,11 @@ func main() {
 	if d := os.Getenv("ONGRID_PAGES_DIR"); d != "" {
 		pagesDir = d
 	}
+	pageStore := filePageStore{dir: pagesDir, log: log.With(slog.String("comp", "serve_page"))}
 	if err := os.MkdirAll(pagesDir, 0o755); err != nil {
 		log.Warn("serve_page: mkdir pages dir failed; serve_page disabled", slog.String("dir", pagesDir), slog.Any("err", err))
 	} else {
-		toolsReg.SetPageStore(filePageStore{dir: pagesDir, log: log.With(slog.String("comp", "serve_page"))})
+		toolsReg.SetPageStore(pageStore)
 	}
 	// The chat runtime's tool bag was compiled far above (line ~1274)
 	// BEFORE the cloud_bash proposer existed, so that BuildBaseTools didn't
@@ -2164,13 +2165,18 @@ func main() {
 				http.NotFound(w, r)
 				return
 			}
-			b, err := os.ReadFile(filepath.Join(pagesDir, id+".html"))
+			b, err := pageStore.readPageHTML(id)
 			if err != nil {
 				http.NotFound(w, r)
 				return
 			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.Header().Set("X-Content-Type-Options", "nosniff")
+			// The HTML is LLM-generated and served same-origin as the SPA. The
+			// sandbox directive loads it in an opaque origin with scripts
+			// disabled, so a malicious/buggy page can't read the SPA's JWT from
+			// localStorage. Inline styles + images still render.
+			w.Header().Set("Content-Security-Policy", "sandbox allow-popups allow-downloads")
 			_, _ = w.Write(b)
 		})
 		// (admin endpoints registered inside the protected group below)
@@ -2185,6 +2191,24 @@ func main() {
 			protected.Get("/v1/version", func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("content-type", "application/json")
 				_, _ = w.Write([]byte(`{"manager_version":"` + version + `"}`))
+			})
+			// Hosted-page management (serve_page artifacts) for the operations
+			// UI. The page CONTENT is served publicly by token at
+			// /api/pages/{id}; these authed routes list + delete them.
+			protected.Get("/v1/pages", func(w http.ResponseWriter, r *http.Request) {
+				items, err := pageStore.List(r.Context())
+				if err != nil {
+					items = []pageMeta{}
+				}
+				w.Header().Set("content-type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]any{"items": items, "total": len(items)})
+			})
+			protected.Delete("/v1/pages/{id}", func(w http.ResponseWriter, r *http.Request) {
+				if err := pageStore.Delete(r.Context(), chi.URLParam(r, "id")); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				w.WriteHeader(http.StatusNoContent)
 			})
 			iamHandler.RegisterProtected(protected)
 			edgeHandler.Register(protected)
@@ -4083,16 +4107,112 @@ type filePageStore struct {
 	log *slog.Logger
 }
 
-func (s filePageStore) SavePage(_ context.Context, _ string, html string) (string, string, error) {
+// pageMeta is the sidecar record for a hosted page, written next to its HTML so
+// the operations UI can list pages with a title + timestamp without parsing
+// every document.
+type pageMeta struct {
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	CreatedAt string `json:"created_at"` // RFC3339
+	URL       string `json:"url"`
+	SizeBytes int64  `json:"size_bytes,omitempty"`
+}
+
+// SavePage hosts an assistant-generated HTML page under its own directory
+// (pages/<id>/index.html) with a meta.json sidecar — so the operations UI can
+// list / preview / delete it, and a page can ship assets later. The random id
+// is the capability.
+func (s filePageStore) SavePage(_ context.Context, title, html string) (string, string, error) {
 	var rb [12]byte
 	if _, err := crand.Read(rb[:]); err != nil {
 		return "", "", fmt.Errorf("rand: %w", err)
 	}
 	id := hex.EncodeToString(rb[:])
-	if err := os.WriteFile(filepath.Join(s.dir, id+".html"), []byte(html), 0o644); err != nil {
+	dir := filepath.Join(s.dir, id)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", "", fmt.Errorf("mkdir page dir: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte(html), 0o644); err != nil {
 		return "", "", fmt.Errorf("write page: %w", err)
 	}
-	return id, "/api/pages/" + id, nil
+	url := "/api/pages/" + id
+	meta := pageMeta{ID: id, Title: strings.TrimSpace(title), CreatedAt: time.Now().UTC().Format(time.RFC3339), URL: url, SizeBytes: int64(len(html))}
+	if mb, err := json.Marshal(meta); err == nil {
+		_ = os.WriteFile(filepath.Join(dir, "meta.json"), mb, 0o644)
+	}
+	return id, url, nil
+}
+
+// readPageHTML returns the hosted HTML for id, supporting both the directory
+// layout (pages/<id>/index.html) and the legacy flat file (pages/<id>.html).
+func (s filePageStore) readPageHTML(id string) ([]byte, error) {
+	if b, err := os.ReadFile(filepath.Join(s.dir, id, "index.html")); err == nil {
+		return b, nil
+	}
+	return os.ReadFile(filepath.Join(s.dir, id+".html"))
+}
+
+// List returns hosted pages newest-first for the operations UI.
+func (s filePageStore) List(_ context.Context) ([]pageMeta, error) {
+	ents, err := os.ReadDir(s.dir)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]pageMeta, 0, len(ents))
+	for _, e := range ents {
+		var id string
+		if e.IsDir() {
+			id = e.Name()
+		} else if strings.HasSuffix(e.Name(), ".html") {
+			id = strings.TrimSuffix(e.Name(), ".html") // legacy flat page
+		} else {
+			continue
+		}
+		if !isHexToken(id) {
+			continue
+		}
+		m := pageMeta{ID: id, URL: "/api/pages/" + id}
+		if mb, err := os.ReadFile(filepath.Join(s.dir, id, "meta.json")); err == nil {
+			_ = json.Unmarshal(mb, &m)
+			m.ID, m.URL = id, "/api/pages/"+id // identity always derived, never trusted from sidecar
+		}
+		if m.Title == "" {
+			if b, err := s.readPageHTML(id); err == nil {
+				m.Title = extractHTMLTitle(b)
+			}
+		}
+		if m.CreatedAt == "" {
+			if info, err := e.Info(); err == nil {
+				m.CreatedAt = info.ModTime().UTC().Format(time.RFC3339)
+			}
+		}
+		out = append(out, m)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt > out[j].CreatedAt })
+	return out, nil
+}
+
+// Delete removes a hosted page (directory layout or legacy flat file).
+func (s filePageStore) Delete(_ context.Context, id string) error {
+	if !isHexToken(id) {
+		return fmt.Errorf("%w: invalid page id", errs.ErrInvalid)
+	}
+	_ = os.Remove(filepath.Join(s.dir, id+".html")) // legacy flat
+	return os.RemoveAll(filepath.Join(s.dir, id))
+}
+
+// extractHTMLTitle best-effort pulls <title> out of a page that has no sidecar.
+func extractHTMLTitle(b []byte) string {
+	lo := strings.ToLower(string(b))
+	i := strings.Index(lo, "<title>")
+	if i < 0 {
+		return ""
+	}
+	j := strings.Index(lo[i+7:], "</title>")
+	if j < 0 {
+		return ""
+	}
+	return strings.TrimSpace(string(b)[i+7 : i+7+j])
 }
 
 // isHexToken guards the /pages/{id} route against path traversal — id must be
