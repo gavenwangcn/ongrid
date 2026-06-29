@@ -27,14 +27,16 @@ import (
 	"gorm.io/plugin/soft_delete"
 )
 
-// Kind enumerates the schedule cadence presets. daily/weekly/monthly
-// drive a quick UI picker that generates the matching CronSpec; custom
-// lets the user supply a raw cron expression directly. The evaluator
-// always fires off CronSpec — Kind is for UI + period derivation only.
+// Kind enumerates the schedule cadence presets. daily/weekly/monthly/
+// yearly drive a quick UI picker that generates the matching CronSpec;
+// custom lets the user supply a raw cron expression directly. The
+// evaluator always fires off CronSpec — Kind is for UI + period
+// derivation only.
 const (
 	KindDaily   = "daily"
 	KindWeekly  = "weekly"
 	KindMonthly = "monthly"
+	KindYearly  = "yearly"
 	KindCustom  = "custom"
 )
 

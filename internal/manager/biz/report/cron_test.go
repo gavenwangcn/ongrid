@@ -54,7 +54,7 @@ func TestCronNext_BadSpec(t *testing.T) {
 }
 
 func TestCronSpecForKind(t *testing.T) {
-	for _, kind := range []string{model.KindDaily, model.KindWeekly, model.KindMonthly} {
+	for _, kind := range []string{model.KindDaily, model.KindWeekly, model.KindMonthly, model.KindYearly} {
 		spec, err := CronSpecForKind(kind)
 		if err != nil {
 			t.Fatalf("%s: %v", kind, err)

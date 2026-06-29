@@ -36,6 +36,7 @@ func CronNext(spec string, loc *time.Location, after time.Time) (time.Time, erro
 //	daily   → 09:00 every day
 //	weekly  → 09:00 every Monday
 //	monthly → 09:00 on the 1st
+//	yearly  → 09:00 on Jan 1st
 func CronSpecForKind(kind string) (string, error) {
 	switch kind {
 	case model.KindDaily:
@@ -44,6 +45,8 @@ func CronSpecForKind(kind string) (string, error) {
 		return "0 9 * * 1", nil
 	case model.KindMonthly:
 		return "0 9 1 * *", nil
+	case model.KindYearly:
+		return "0 9 1 1 *", nil
 	case model.KindCustom:
 		return "", errors.Join(errs.ErrInvalid, errors.New("custom kind requires an explicit cron spec"))
 	default:
