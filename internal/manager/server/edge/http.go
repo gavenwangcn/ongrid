@@ -348,6 +348,7 @@ type hostInfoDTO struct {
 	KernelVersion string `json:"kernel_version,omitempty"`
 	CPUCount      int    `json:"cpu_count,omitempty"`
 	MemTotalBytes uint64 `json:"mem_total_bytes,omitempty"`
+	IPAddress     string `json:"ip_address,omitempty"`
 }
 
 type listItem struct {
@@ -876,6 +877,7 @@ func deviceToHostInfo(d *devicemodel.Device) *hostInfoDTO {
 		KernelVersion: d.KernelVersion,
 		CPUCount:      d.CPUCount,
 		MemTotalBytes: d.MemTotalBytes,
+		IPAddress:     d.IPAddress,
 	}
 }
 

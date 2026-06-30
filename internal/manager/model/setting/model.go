@@ -43,6 +43,16 @@ const (
 	CategoryWebSearch = "websearch" // built-in web_search skill: Tavily key + future provider knobs
 	CategoryReport    = "report"    // scheduled report worker LLM pin
 	CategoryAlert     = "alert"     // alert notification routing knobs
+	CategoryAgent     = "agent"     // AI agent behaviour toggles (write-action gate, …)
+)
+
+// Well-known keys under CategoryAgent.
+const (
+	// KeyAgentWriteEnabled gates whether the chat agent may use write/mutating
+	// tools. "false" → read-only (only Class=="read" tools exposed to the LLM,
+	// even the propose-confirm ones are hidden). Unset / any other value →
+	// enabled (the default preserves existing behaviour).
+	KeyAgentWriteEnabled = "write_enabled"
 )
 
 // (CategoryGit + KeyGitGitHubToken removed HTTPS git
