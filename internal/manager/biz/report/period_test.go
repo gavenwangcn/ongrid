@@ -86,33 +86,6 @@ func TestPeriodFor_Monthly_JanCrossesYear(t *testing.T) {
 	}
 }
 
-func TestPeriodFor_Yearly(t *testing.T) {
-	loc := mustLoc(t, "Asia/Shanghai")
-	// Fire 2026-01-01 09:00 → previous calendar year = 2025.
-	fire := time.Date(2026, 1, 1, 9, 0, 0, 0, loc)
-	p, err := PeriodFor(model.KindYearly, fire, loc, time.Time{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantStart := time.Date(2025, 1, 1, 0, 0, 0, 0, loc)
-	wantEnd := time.Date(2026, 1, 1, 0, 0, 0, 0, loc)
-	if !p.Start.Equal(wantStart) || !p.End.Equal(wantEnd) {
-		t.Errorf("yearly = [%s, %s), want [%s, %s)", p.Start, p.End, wantStart, wantEnd)
-	}
-}
-
-func TestPeriodFor_Yearly_MidYearFire(t *testing.T) {
-	loc := mustLoc(t, "Asia/Shanghai")
-	// Firing mid-year still reports the previous full calendar year,
-	// mirroring monthly's "always the previous complete period" rule.
-	fire := time.Date(2026, 6, 15, 9, 0, 0, 0, loc)
-	p, _ := PeriodFor(model.KindYearly, fire, loc, time.Time{})
-	wantStart := time.Date(2025, 1, 1, 0, 0, 0, 0, loc)
-	if !p.Start.Equal(wantStart) {
-		t.Errorf("yearly mid-year start = %s, want 2025-01-01", p.Start)
-	}
-}
-
 func TestPeriodFor_Custom_WithPrevFire(t *testing.T) {
 	loc := mustLoc(t, "Asia/Shanghai")
 	prev := time.Date(2026, 6, 8, 9, 0, 0, 0, loc)
@@ -164,19 +137,5 @@ func TestTitleFor(t *testing.T) {
 	// 2026-06-01 is ISO week 23.
 	if got != "周报 · 2026 W23 (06-01 – 06-07)" {
 		t.Errorf("weekly title = %q", got)
-	}
-}
-
-func TestTitleFor_Yearly(t *testing.T) {
-	loc := mustLoc(t, "Asia/Shanghai")
-	yearly := Period{
-		Start: time.Date(2025, 1, 1, 0, 0, 0, 0, loc),
-		End:   time.Date(2026, 1, 1, 0, 0, 0, 0, loc),
-	}
-	if got := TitleFor(model.KindYearly, yearly, "zh"); got != "年报 · 2025" {
-		t.Errorf("yearly zh title = %q", got)
-	}
-	if got := TitleFor(model.KindYearly, yearly, "en"); got != "Yearly · 2025" {
-		t.Errorf("yearly en title = %q", got)
 	}
 }

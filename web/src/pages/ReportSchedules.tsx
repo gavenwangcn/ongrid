@@ -35,7 +35,6 @@ const KINDS: { key: ReportKind; zh: string; en: string }[] = [
   { key: 'daily', zh: '日报', en: 'Daily' },
   { key: 'weekly', zh: '周报', en: 'Weekly' },
   { key: 'monthly', zh: '月报', en: 'Monthly' },
-  { key: 'yearly', zh: '年报', en: 'Yearly' },
   { key: 'custom', zh: '自定义', en: 'Custom' },
 ];
 

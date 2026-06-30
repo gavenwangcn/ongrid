@@ -47,14 +47,12 @@ const KIND_FILTERS: { key: string; zh: string; en: string }[] = [
   { key: 'daily', zh: '日报', en: 'Daily' },
   { key: 'weekly', zh: '周报', en: 'Weekly' },
   { key: 'monthly', zh: '月报', en: 'Monthly' },
-  { key: 'yearly', zh: '年报', en: 'Yearly' },
 ];
 
 const GENERATE_KINDS: { key: ReportKind; zh: string; en: string }[] = [
   { key: 'daily', zh: '日报', en: 'Daily' },
   { key: 'weekly', zh: '周报', en: 'Weekly' },
   { key: 'monthly', zh: '月报', en: 'Monthly' },
-  { key: 'yearly', zh: '年报', en: 'Yearly' },
 ];
 
 const GENERATE_KIND_HINT: Record<ReportKind, { zh: string; en: string }> = {
@@ -70,10 +68,6 @@ const GENERATE_KIND_HINT: Record<ReportKind, { zh: string; en: string }> = {
     zh: '统计上一自然月。',
     en: 'Covers the previous calendar month.',
   },
-  yearly: {
-    zh: '统计上一自然年。',
-    en: 'Covers the previous calendar year.',
-  },
   custom: {
     zh: '按自定义周期统计。',
     en: 'Covers a custom period.',
@@ -84,12 +78,11 @@ const GENERATE_KIND_ACTION: Record<ReportKind, { zh: string; en: string }> = {
   daily: { zh: '生成日报', en: 'Generate daily' },
   weekly: { zh: '生成周报', en: 'Generate weekly' },
   monthly: { zh: '生成月报', en: 'Generate monthly' },
-  yearly: { zh: '生成年报', en: 'Generate yearly' },
   custom: { zh: '生成报告', en: 'Generate report' },
 };
 
-const KIND_ZH: Record<string, string> = { daily: '日报', weekly: '周报', monthly: '月报', yearly: '年报', custom: '自定义' };
-const KIND_EN: Record<string, string> = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly', yearly: 'Yearly', custom: 'Custom' };
+const KIND_ZH: Record<string, string> = { daily: '日报', weekly: '周报', monthly: '月报', custom: '自定义' };
+const KIND_EN: Record<string, string> = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly', custom: 'Custom' };
 
 const STATUS_ZH: Record<ReportStatus, string> = { ready: '已就绪', generating: '生成中', pending: '待生成', failed: '失败' };
 const STATUS_EN: Record<ReportStatus, string> = { ready: 'Ready', generating: 'Generating', pending: 'Pending', failed: 'Failed' };

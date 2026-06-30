@@ -29,7 +29,6 @@ type Period struct {
 //   - daily   → the full previous calendar day [00:00, 24:00) of fireAt-1d
 //   - weekly  → the previous ISO week, Monday 00:00 → Sunday 24:00
 //   - monthly → the previous calendar month, 1st 00:00 → next 1st 00:00
-//   - yearly  → the previous calendar year, Jan 1 00:00 → next Jan 1 00:00
 //   - custom  → [prevFireAt, fireAt); caller supplies prevFireAt
 //
 // For custom, prevFireAt must be non-zero (the schedule's LastFireAt);
@@ -55,13 +54,6 @@ func PeriodFor(kind string, fireAt time.Time, loc *time.Location, prevFireAt tim
 		// Previous calendar month.
 		firstThis := startOfMonth(f)
 		start := firstThis.AddDate(0, -1, 0)
-		return Period{Start: start, End: firstThis}, nil
-	case model.KindYearly:
-		// Previous calendar year — mirrors monthly's "previous period"
-		// logic but at year granularity. Data collection reuses the same
-		// facts pipeline; only the window widens to a full year.
-		firstThis := startOfYear(f)
-		start := firstThis.AddDate(-1, 0, 0)
 		return Period{Start: start, End: firstThis}, nil
 	case model.KindCustom:
 		end := f
@@ -99,9 +91,6 @@ func TitleFor(kind string, p Period, locale string) string {
 			p.Start.Format("01-02"), p.End.AddDate(0, 0, -1).Format("01-02"))
 	case model.KindMonthly:
 		return fmt.Sprintf("%s · %s", mtr("月报", "Monthly"), p.Start.Format("2006-01"))
-	case model.KindYearly:
-		// 年报以年份为周期标签，与月报以 "2006-01" 标注一致。
-		return fmt.Sprintf("%s · %s", mtr("年报", "Yearly"), p.Start.Format("2006"))
 	case model.KindCustom:
 		return fmt.Sprintf("%s · %s – %s", mtr("报告", "Report"),
 			p.Start.Format("2006-01-02 15:04"), p.End.Format("2006-01-02 15:04"))
@@ -146,12 +135,6 @@ func startOfDay(t time.Time) time.Time {
 
 func startOfMonth(t time.Time) time.Time {
 	return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, t.Location())
-}
-
-// startOfYear returns Jan 1 00:00 of the year containing t, in t's
-// location. Used by the yearly period derivation (mirrors startOfMonth).
-func startOfYear(t time.Time) time.Time {
-	return time.Date(t.Year(), 1, 1, 0, 0, 0, 0, t.Location())
 }
 
 // startOfISOWeek returns Monday 00:00 of the week containing t.

@@ -7,7 +7,7 @@ import { request } from './client';
 import type { EnvironmentTag } from './environment';
 
 export type ReportStatus = 'pending' | 'generating' | 'ready' | 'failed';
-export type ReportKind = 'daily' | 'weekly' | 'monthly' | 'yearly' | 'custom';
+export type ReportKind = 'daily' | 'weekly' | 'monthly' | 'custom';
 
 export type ReportScope = {
   system_name?: string;
