@@ -25,7 +25,7 @@ func TestCoordinatorRosterHasCodeTools(t *testing.T) {
 	}
 	// Lightweight read-only deep-dive tools stay on the coordinator so simple
 	// top-N / snapshot questions don't have to bounce through AgentTool.
-	for _, want := range []string{"get_edge_summary", "get_host_load", "get_host_processes", "rank_edges", "find_outlier_edges"} {
+	for _, want := range []string{"get_edge_summary", "get_host_load", "get_host_processes", "host_bash", "rank_edges", "find_outlier_edges"} {
 		if !slices.Contains(coordinatorToolNames, want) {
 			t.Errorf("coordinator roster missing lightweight read tool %q", want)
 		}
@@ -34,7 +34,7 @@ func TestCoordinatorRosterHasCodeTools(t *testing.T) {
 
 func TestBasePromptAllowsLightweightCoordinatorReads(t *testing.T) {
 	prompt := ongridBasePrompt()
-	for _, want := range []string{"轻量只读查询", "rank_edges", "get_host_load", "get_host_processes"} {
+	for _, want := range []string{"轻量只读查询", "rank_edges", "get_host_load", "get_host_processes", "已知文件删除", "host_bash"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("base prompt missing lightweight-read guidance %q", want)
 		}

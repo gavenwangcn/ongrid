@@ -1902,6 +1902,14 @@ func main() {
 		})
 		return string(out), nil
 	})
+	approvalUC.RegisterExecutor("host_bash", func(ctx context.Context, payloadJSON string) (string, error) {
+		var p hostBashPayload
+		if err := json.Unmarshal([]byte(payloadJSON), &p); err != nil {
+			return "", err
+		}
+		tool := aiopstools.NewBashToolWithProposer(fbClient, edgeUC, deviceUC, nil, log)
+		return tool.RunApproved(ctx, p.DeviceIDs, p.Command, p.TimeoutSeconds)
+	})
 	// HLD-018 P2: mcp_call executor — on approve, connect the server and run
 	// the tool. Trusted servers skip this and run synchronously in the tool.
 	approvalUC.RegisterExecutor("mcp_call", func(ctx context.Context, payloadJSON string) (string, error) {
@@ -1945,6 +1953,7 @@ func main() {
 		return string(out), nil
 	})
 	toolsReg.SetCloudBashProposer(cloudBashProposerShim{uc: approvalUC})
+	toolsReg.SetHostBashProposer(hostBashProposerShim{uc: approvalUC})
 	// send_im_message: the assistant can proactively push to a configured
 	// channel (飞书/钉钉/…), reusing the same BuildSenderFromChannel path the
 	// alert notifier + flow notify node use.
@@ -1997,12 +2006,13 @@ func main() {
 			Registerer: reg,
 		}
 		chatRT.AppendToolBag([]aiopstoolsbase.BaseTool{
+			aiopstoolsdec.Wrap(aiopstools.NewBashToolWithProposer(fbClient, edgeUC, deviceUC, hostBashProposerShim{uc: approvalUC}, log), cbDeps),
 			aiopstoolsdec.Wrap(aiopstools.NewCloudBashTool(cloudBashProposerShim{uc: approvalUC}, log), cbDeps),
 			aiopstoolsdec.Wrap(aiopstools.NewInstallSkillTool(installSkillProposerShim{uc: approvalUC}, log), cbDeps),
 			aiopstoolsdec.Wrap(aiopstools.NewServePageTool(pageStore, log), quickDeps),
 			aiopstoolsdec.Wrap(aiopstools.NewSendIMMessageTool(imSenderShim{channels: alertRepo, router: notifyRouter}, log), quickDeps),
 		})
-		log.Info("cloud_bash + install_skill + serve_page + send_im_message bolted onto chat runtime bag", slog.Int("tool_count", chatRT.ToolCount()))
+		log.Info("host_bash + cloud_bash + install_skill + serve_page + send_im_message bolted onto chat runtime bag", slog.Int("tool_count", chatRT.ToolCount()))
 		// HLD-017: wire the active-skill → bound-credentials resolver so
 		// cloud_bash auto-injects the credentials an active skill was bound
 		// to at install time (design-time binding, no run-time choice).
@@ -3047,6 +3057,7 @@ var coordinatorToolNames = []string{
 	"get_edge_summary",
 	"get_host_load",
 	"get_host_processes",
+	"host_bash",
 	"rank_edges",
 	"find_outlier_edges",
 	"list_database_sources",
@@ -3404,6 +3415,7 @@ func ongridBasePrompt() string {
    **默认助理可以直接做的轻量只读查询**：
    - 设备 / 拓扑 / incident 列表：` + bt + `query_devices` + bt + `、` + bt + `get_topology` + bt + `、` + bt + `query_incidents` + bt + `
    - 单台或批量资源快照：` + bt + `get_edge_summary` + bt + `、` + bt + `get_host_load` + bt + `、` + bt + `get_host_processes` + bt + `
+   - 用户明确要求对某台 edge 主机执行**已知命令 / 已知文件删除**：` + bt + `host_bash(device_ids=[...], cmd="...")` + bt + `。读命令直接走只读 sandbox；写命令会自动弹出内置确认卡，批准后才执行。不要为了已知文件删除再派 AgentTool。
    - fleet topN / 排名 / 离群：` + bt + `rank_edges` + bt + `、` + bt + `find_outlier_edges` + bt + `
    - 指标目录 / 知识库 / 代码只读查询：` + bt + `list_metric_catalog` + bt + `、` + bt + `query_knowledge` + bt + `、` + bt + `list_repo_sources` + bt + `、` + bt + `read_source` + bt + `、` + bt + `grep_source` + bt + `
 
@@ -3411,6 +3423,7 @@ func ongridBasePrompt() string {
    - "全部机器 CPU 使用率 top 20" → ` + bt + `rank_edges(by="cpu", direction="top", limit=20)` + bt + `
    - "device_id=1 当前 CPU / 内存多少" → ` + bt + `get_host_load(device_ids=[1])` + bt + `
    - "这台机器 top 进程" → ` + bt + `get_host_processes(device_ids=[1])` + bt + `
+   - "把刚才找到的 edge-bundle 安装包删了" → ` + bt + `host_bash(device_ids=[1], cmd="rm /opt/ongrid/edge/edge-bundle-linux-amd64-v0.9.0.tar.gz")` + bt + `，让内置确认卡处理风险
 
    **必须派 AgentTool 的场景**：
    - 用户问"为什么 / 根因 / 怎么处理 / 是否误报 / 影响面 / 排查一下"这类需要多步判断的问题
@@ -3422,7 +3435,7 @@ func ongridBasePrompt() string {
    | 任务 | 派给 |
    |---|---|
    | 网络 / OVS / 防火墙 / 路由 / iptables / netns / 流表 / DNS / TLS / MTU / 连通性 | ` + bt + `specialist-network` + bt + ` |
-   | 磁盘 / 容量 / 大文件 / inode / du / 文件系统 | ` + bt + `specialist-disk` + bt + ` |
+   | 磁盘 / 容量 / 大文件 / inode / du / 文件系统诊断 | ` + bt + `specialist-disk` + bt + ` |
    | CPU / 内存 / load / 进程 / OOM / 调度 / NUMA / 上下文切换 | ` + bt + `specialist-compute` + bt + ` |
    | SLO / 黄金信号 / 错误预算 / 趋势 / 异常机器 / 优先级 / 集群健康判断 | ` + bt + `specialist-sre` + bt + ` |
    | 服务状态 / systemctl / journalctl / 重启 / 部署 / cron / 配置 | ` + bt + `specialist-ops` + bt + ` |
@@ -3431,7 +3444,7 @@ func ongridBasePrompt() string {
    **AgentTool 模板**（同步调用，不传 background）：
    ` + bt + `AgentTool(description="磁盘满诊断 host-3", subagent_type="specialist-disk", prompt="device_id=3 上 disk_used_pct 91%。定位最大目录 + 最大文件，给清理建议。")` + bt + `
 
-   worker 看不到你的对话，prompt 必须自包含。不要把简单 topN / 快照查询绕进 AgentTool，太慢也更容易失败。
+   worker 看不到你的对话，prompt 必须自包含。不要把简单 topN / 快照查询、用户已明确要求的单个主机命令/文件删除绕进 AgentTool，太慢也更容易失败。
 
    **对话式配置例外**：自然语言创建告警规则不派专家、不查 KB、不读代码、不调 list_database_sources。指标型告警先 list_metric_catalog 一次；必要时 analyze_database_status 一次；catalog 有可用指标后再 draft_config_change；catalog 为空/不可用时停止说明缺失，不能输出文字草案。draft_config_change 返回 config_validation_failed 时必须读取 validation.issues，修正规则参数后在同一轮重新调用 draft_config_change；只有返回 config_draft/draft_hash 才算草稿成功，此时停止工具调用并等待确认；确认后只能调用 apply_config_change，并使用 config_draft 原始 payload/draft_hash apply。具体 rule kind 与表达式规范交给工具 schema 和后端 compiler。更新/启用/禁用/删除告警规则，或配置通知渠道、IM bot、LLM 模型集成不属于 v1，直接说明暂不支持。
 
@@ -3558,6 +3571,15 @@ type cloudBashPayload struct {
 	SessionID string `json:"session_id,omitempty"`
 }
 
+// hostBashPayload is the approval payload for mutating host_bash commands.
+// Read-only host_bash calls never create approvals; this payload is only for
+// user-requested host mutations such as deleting a known file.
+type hostBashPayload struct {
+	DeviceIDs      []uint64 `json:"device_ids"`
+	Command        string   `json:"command"`
+	TimeoutSeconds int      `json:"timeout_seconds,omitempty"`
+}
+
 // approvalWaitTimeout bounds how long a synchronous-blocking tool (HLD-021,
 // cloud_bash) waits for a human decision before giving up and returning a
 // terminal timeout blob. The decorator timeout that wraps the tool is set a
@@ -3675,6 +3697,40 @@ func (s cloudBashProposerShim) ProposeAndAwait(ctx context.Context, command stri
 		})
 	}
 	return s.awaitDecision(ctx, a.ID)
+}
+
+// hostBashProposerShim adapts mutating host_bash commands to the same inline
+// approval card flow as cloud_bash.
+type hostBashProposerShim struct{ uc *managerbizapproval.Usecase }
+
+func (s hostBashProposerShim) ProposeAndAwait(ctx context.Context, deviceIDs []uint64, command string, timeoutSeconds int, sessionID, toolCallID string, userID uint64) (string, error) {
+	title := fmt.Sprintf("host_bash device_ids=%v %s", deviceIDs, command)
+	if len(title) > 100 {
+		title = title[:100] + "…"
+	}
+	a, err := s.uc.Propose(ctx, managerbizapproval.ProposeInput{
+		Kind:       "host_bash",
+		Title:      title,
+		Summary:    fmt.Sprintf("device_ids=%v", deviceIDs),
+		Payload:    hostBashPayload{DeviceIDs: deviceIDs, Command: command, TimeoutSeconds: timeoutSeconds},
+		Source:     "agent",
+		SessionID:  sessionID,
+		ProposedBy: userID,
+	})
+	if err != nil {
+		return "", err
+	}
+	if emit := aiopschatruntime.EmitFromContext(ctx); emit != nil {
+		emit(aiopschatruntime.Event{
+			Type: aiopschatruntime.EventApprovalPending,
+			Approval: &aiopschatruntime.ApprovalPending{
+				ApprovalID: a.ID,
+				ToolCallID: toolCallID,
+				Command:    fmt.Sprintf("device_ids=%v %s", deviceIDs, command),
+			},
+		})
+	}
+	return cloudBashProposerShim{uc: s.uc}.awaitDecision(ctx, a.ID)
 }
 
 // awaitDecision blocks until the approval row reaches a terminal state, then
