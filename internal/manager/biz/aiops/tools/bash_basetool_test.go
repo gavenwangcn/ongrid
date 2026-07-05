@@ -110,6 +110,23 @@ func TestBashTool_MutatingCommandUsesApprovalInsteadOfDispatch(t *testing.T) {
 	}
 }
 
+func TestBashTool_ReadCommandWithShellSyntaxDoesNotUseApproval(t *testing.T) {
+	fc := &fakeCaller{respBody: mustMarshal(tunnel.BashExecResponse{Allowed: false, Reason: "unsupported shell operator"})}
+	prop := &recHostBashProposer{}
+	tool := &BashTool{caller: fc, resolver: &fakeHostFilesResolver{mapping: map[uint64]uint64{1: 7}}, proposer: prop}
+	ctx := basetool.WithHostWriteAllowed(context.Background(), true)
+	_, err := tool.InvokableRun(ctx, `{"device_ids":[1],"cmd":"docker system df 2>/dev/null && echo \"---\""}`)
+	if err != nil {
+		t.Fatalf("InvokableRun: %v", err)
+	}
+	if prop.called {
+		t.Fatalf("read command with unsupported shell syntax should be handled by cmdpolicy, not approval")
+	}
+	if fc.lastName != tunnel.MethodBashExec {
+		t.Fatalf("expected direct bash dispatch, got %q", fc.lastName)
+	}
+}
+
 func TestBashTool_BatchHappy(t *testing.T) {
 	fc := &fakeCaller{
 		respBody: mustMarshal(tunnel.BashExecResponse{

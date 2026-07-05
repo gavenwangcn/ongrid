@@ -385,7 +385,7 @@ func isHostBashWriteCommand(cmd string) bool {
 			}
 		}
 	}
-	return strings.Contains(cmd, ">") || strings.Contains(cmd, "&&") || strings.Contains(cmd, ";")
+	return false
 }
 
 // AppendBashTool registers the bash BaseTool onto the provided slice

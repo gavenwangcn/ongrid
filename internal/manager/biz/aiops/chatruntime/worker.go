@@ -203,6 +203,7 @@ const EventApprovalPending EventType = "approval_pending"
 type ApprovalPending struct {
 	ApprovalID  string
 	ToolCallID  string
+	Kind        string
 	Command     string
 	Credentials []string
 }

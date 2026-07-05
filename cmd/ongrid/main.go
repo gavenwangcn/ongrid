@@ -3691,6 +3691,7 @@ func (s cloudBashProposerShim) ProposeAndAwait(ctx context.Context, command stri
 			Approval: &aiopschatruntime.ApprovalPending{
 				ApprovalID:  a.ID,
 				ToolCallID:  toolCallID,
+				Kind:        "cloud_bash",
 				Command:     command,
 				Credentials: credentials,
 			},
@@ -3726,6 +3727,7 @@ func (s hostBashProposerShim) ProposeAndAwait(ctx context.Context, deviceIDs []u
 			Approval: &aiopschatruntime.ApprovalPending{
 				ApprovalID: a.ID,
 				ToolCallID: toolCallID,
+				Kind:       "host_bash",
 				Command:    fmt.Sprintf("device_ids=%v %s", deviceIDs, command),
 			},
 		})
