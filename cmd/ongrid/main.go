@@ -3045,51 +3045,53 @@ func loadBootstrapRegistries(log *slog.Logger) (*aiopschatruntime.SkillRegistry,
 // ONGRID_AGENT_KERNEL=graph. Returns (nil, err) on failure so the
 // caller can fall back to the legacy kernel without a panic.
 //
-// coordinatorToolNames is the "default" chat coordinator's curated tool
-// whitelist (see the agentReg.Add below). Hoisted to a package var so a test
-// can guard it — the read-code tools (HLD-012) once shipped registered in the
-// toolbag but ABSENT from this list, so the chat coordinator answered "我没有
-// 读代码的能力"; TestCoordinatorRosterHasCodeTools pins them here.
-var coordinatorToolNames = []string{
-	"query_devices",
-	"query_incidents",
-	"get_topology",
-	"get_edge_summary",
-	"get_host_load",
-	"get_host_processes",
+// coordinatorExtraToolNames are policy exceptions that are intentionally
+// coordinator-owned even though they are not registry core tools in every
+// deployment. The rest of the coordinator whitelist is derived from the
+// registered ToolBag core tier so new core read/query tools do not need a
+// second hard-coded entry here.
+var coordinatorExtraToolNames = []string{
+	// Lightweight direct reads added by this routing fix: cheap snapshots /
+	// rankings should not bounce through AgentTool.
 	"host_bash",
 	"rank_edges",
 	"find_outlier_edges",
-	"list_database_sources",
-	"analyze_database_status",
-	"list_metric_catalog",
-	"query_knowledge",
+	// Legacy / optional tools that are appended after the initial registry bag,
+	// or still live outside the BaseTool registry in some deployments.
 	"search_web",
-	"list_repo_sources",
-	"read_source",
-	"grep_source",
-	// cloud_bash is safe to expose directly on the coordinator: it never
-	// executes — every call only QUEUES a proposal into the human approval
-	// inbox (rendered inline in chat). So the coordinator can offer "run
-	// this in the cloud" without violating the dispatch-only rule.
+	// Approval/output primitives: these do not execute infrastructure changes
+	// without a human approval or an explicit pre-configured channel/page sink.
 	"cloud_bash",
-	// install_skill is safe on the coordinator for the same reason as
-	// cloud_bash: it never installs directly — every call only QUEUES an
-	// approval. Lets the agent extend itself ("install this skill from <url>")
-	// with a human approving the actual install.
 	"install_skill",
-	"draft_config_change",
-	"apply_config_change",
-	// Output/communication primitives — the coordinator is usually the one
-	// that just produced the HTML report or the message text, so let it host
-	// / send directly instead of bouncing through a specialist. Both are
-	// low-risk: serve_page only publishes an internal page, send_im_message
-	// only delivers to a pre-configured channel. Without these here the
-	// persona whitelist strips them out of the coordinator's session bag even
-	// though they're registered in the runtime toolbag (the exact reason the
-	// agent kept saying "I don't have a serve_page tool").
 	"serve_page",
 	"send_im_message",
+}
+
+func buildCoordinatorToolNames(registered []aiopstoolsbase.BaseTool) []string {
+	names := aiopstools.CoreToolNames(registered)
+	return appendUniqueToolNames(names, coordinatorExtraToolNames...)
+}
+
+func appendUniqueToolNames(names []string, extra ...string) []string {
+	seen := make(map[string]bool, len(names)+len(extra))
+	out := make([]string, 0, len(names)+len(extra))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	for _, name := range extra {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	return out
 }
 
 // Heavy on parameters because every dep flows through this site
@@ -3267,35 +3269,22 @@ func buildAIOpsRuntime(
 	// internal/manager/biz/aiops/chatruntime/worker.go).
 	//
 	// Coordinator whitelist:
-	//   - query_devices — device id resolution / existence check
-	//   - query_incidents — list active incidents (triage input)
-	//   - get_topology — single-shot cluster overview
-	//   - list_database_sources — configured DB metrics source inventory
-	//   - analyze_database_status — high-level DB health summary from
-	//     databasemetrics / database-tagged custommetrics
-	//   - list_metric_catalog — arbitrary Prometheus/custommetrics metric
-	//     name discovery for natural-language alert drafting
-	//   - get_edge_summary / get_host_load / get_host_processes —
-	//     single/batch read-only resource snapshots and top processes
-	//   - rank_edges / find_outlier_edges — fleet top-N / anomaly lookup
-	//   - query_knowledge — RAG / KB lookup (T4-class questions)
-	//   - search_web — web search for general doc Qs
-	//   - list_repo_sources / read_source / grep_source — read SOURCE of
-	//     registered git repos (HLD-012). These are read-only lookup-class
-	//     tools (same tier as query_knowledge), NOT deep cluster queries, so
-	//     they belong on the coordinator: correlating an alert/log's
-	//     file:line / function to code is a triage-time lookup the
-	//     coordinator should do inline, not a specialist dispatch.
+	//   - registered core tools from ToolBag metadata — query_* observability,
+	//     knowledge/code lookup, topology, incident lists, config draft tools,
+	//     and output primitives that advertise themselves as always-loaded core
+	//   - coordinatorExtraToolNames — narrow policy exceptions that are safe or
+	//     intentionally cheap enough to keep on the coordinator even when they
+	//     are not part of the core tier in every deployment.
 	//
-	// Everything else (query_promql, query_logql, host_*, correlate_incident,
-	// file/network probes, mutating tools, ...) should be reached via
-	// AgentTool dispatch into a specialist unless it is a narrow
-	// coordinator-owned operation listed above.
+	// Everything else (host file probes, mutating tools, broad deep-dive
+	// diagnostics, etc.) should be reached via AgentTool dispatch into a
+	// specialist unless it is registered as core or listed as a narrow
+	// coordinator-owned exception above.
 	agentReg.Add(&aiopschatruntime.Agent{
 		Name:        "default",
 		Description: "默认助理",
 		WhenToUse:   "首页发起的会话默认绑定它；适合任何运维 / 排查 / 知识库查询场景。",
-		Tools:       coordinatorToolNames,
+		Tools:       buildCoordinatorToolNames(bag.AllTools()),
 		// Coordinator's ReAct ceiling. 30 (the global default) lets
 		// a runaway LLM rack up 120+ tool calls per turn before the
 		// graph aborts; 10 is enough for "1-3 dispatches + 1
@@ -3410,7 +3399,7 @@ func ongridBasePrompt() string {
 
 ## 路由
 
-- 轻量只读查询直接查：` + bt + `query_devices/get_topology/query_incidents/get_edge_summary/get_host_load/get_host_processes/rank_edges/find_outlier_edges/query_knowledge/list_repo_sources/read_source/grep_source` + bt + `。
+- 轻量只读查询直接查：` + bt + `query_devices/get_topology/query_incidents/get_edge_summary/get_host_load/get_host_processes/rank_edges/find_outlier_edges/query_knowledge/list_repo_sources/read_source/grep_source` + bt + `；工具名或参数不确定时先用 ` + bt + `ToolSearch` + bt + ` 按能力描述查找。
 - 已知 edge 主机命令或已知文件删除：直接 ` + bt + `host_bash(device_ids=[...], cmd="...")` + bt + `；读命令走只读 sandbox，写命令自动弹内置确认卡。不要为已知删除再派 AgentTool。
 - 复杂诊断、根因、影响面、处置建议、跨域问题或预计超过 2-3 个工具步骤：用 ` + bt + `AgentTool` + bt + ` 派专家。worker 看不到本对话，prompt 必须自包含。
 - 专家选择：网络→` + bt + `specialist-network` + bt + `；磁盘/文件系统→` + bt + `specialist-disk` + bt + `；CPU/内存/load/进程→` + bt + `specialist-compute` + bt + `；SLO/趋势/优先级→` + bt + `specialist-sre` + bt + `；服务/systemctl/journalctl/部署→` + bt + `specialist-ops` + bt + `；明确 incident_id 端到端 RCA→` + bt + `incident-investigator` + bt + `。
@@ -3429,7 +3418,8 @@ func ongridBasePrompt() string {
 
 ## 知识库与配置
 
-- 运维/排障/部署/配置/网络/系统类问答先 ` + bt + `query_knowledge` + bt + ` 一次；命中就按 KB 回答并标注 ` + bt + `（参考 KB: <title>）` + bt + `；同主题不重复查。
+- KB 只优先回答 runbook / how-to / playbook / 部署步骤 / 制度流程类问题；命中就按 KB 回答并标注 ` + bt + `（参考 KB: <title>）` + bt + `；同主题不重复查。
+- 用户给了实时对象或数据源标识（incident/device/edge/service/metric/log/trace/span/id/时间窗等）时，先用对应注册工具；不确定用 ` + bt + `ToolSearch` + bt + ` 发现工具，不要先查 KB。
 - 创建告警规则例外：不查 KB/代码，不调 list_database_sources。指标告警先 list_metric_catalog 一次，必要时 ` + bt + `analyze_database_status` + bt + ` 一次；catalog 有可用指标后再 ` + bt + `draft_config_change` + bt + `，catalog 为空/不可用时停止说明缺失，catalog 为空/不可用时说明缺失。` + bt + `config_validation_failed` + bt + ` 时按 validation.issues 修复并重试。禁止只输出文字草案；只有拿到 ` + bt + `config_draft/draft_hash` + bt + ` 才能让用户确认；确认后只用原始 payload/draft_hash 调 ` + bt + `apply_config_change` + bt + `。具体 rule kind 与表达式规范交给工具 schema 和后端 compiler。
 
 ## 云端执行

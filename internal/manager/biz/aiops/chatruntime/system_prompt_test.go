@@ -110,6 +110,7 @@ func TestComposeSystemPrompt_EmptyPromptBody(t *testing.T) {
 func TestBuildToolCapabilityDigest_IncludesDynamicTools(t *testing.T) {
 	bag := []basetool.BaseTool{
 		&originTool{name: "query_devices", class: "read", origin: basetool.OriginBuiltin},
+		&originTool{name: "query_traceql", class: "read", origin: basetool.OriginBuiltin},
 		&originTool{name: "mcp__k8s__namespaces_list", class: "read", origin: basetool.OriginMCP},
 		&originTool{name: "skill__custom__foo", class: "read", origin: basetool.OriginSkill},
 		&originTool{name: "internal_big_tool", class: "read", origin: basetool.OriginBuiltin},
@@ -118,6 +119,7 @@ func TestBuildToolCapabilityDigest_IncludesDynamicTools(t *testing.T) {
 	for _, want := range []string{
 		"本轮可见能力",
 		"query_devices [builtin/read]",
+		"query_traceql [builtin/read]",
 		"mcp__k8s__namespaces_list [mcp/read]",
 		"skill__custom__foo [skill/read]",
 		"mcp/read=1",

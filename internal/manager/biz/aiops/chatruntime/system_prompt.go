@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	aiopstools "github.com/ongridio/ongrid/internal/manager/biz/aiops/tools"
 	"github.com/ongridio/ongrid/internal/manager/biz/aiops/tools/basetool"
 )
 
@@ -184,15 +185,7 @@ func buildToolCapabilityDigest(tools []basetool.BaseTool) string {
 }
 
 func isDigestBuiltin(name string) bool {
-	switch name {
-	case "AgentTool", "ToolSearch", "query_devices", "query_incidents", "get_topology",
-		"get_edge_summary", "get_host_load", "get_host_processes", "rank_edges",
-		"find_outlier_edges", "host_bash", "cloud_bash", "list_metric_catalog",
-		"query_knowledge", "list_repo_sources", "read_source", "grep_source":
-		return true
-	default:
-		return false
-	}
+	return aiopstools.IsCoreToolName(name)
 }
 
 func compactOneLine(s string, max int) string {
