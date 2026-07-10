@@ -208,6 +208,7 @@ const EventApprovalPending EventType = "approval_pending"
 type ApprovalPending struct {
 	ApprovalID  string
 	ToolCallID  string
+	Kind        string
 	Command     string
 	Credentials []string
 }
@@ -382,7 +383,7 @@ func (rt *Runtime) SpawnWorker(ctx context.Context, req SpawnRequest) (*Worker, 
 		// coordinator. SendToWorker's runWorker callsite uses ctx as-is
 		// because SendTo inherits the coordinator's ctx directly.
 		workerCtx = basetool.WithLLMChoice(workerCtx, req.Provider, req.Model)
-		result, err := rt.runWorker(workerCtx, agentDef, sessID, req.Prompt, req.Locale, req)
+		result, err := rt.runWorker(workerCtx, agentDef, sessID, req.Prompt, req.Locale, req, id)
 
 		if req.SessionKind == "report" {
 			rt.logReportAgentSummary(context.WithoutCancel(workerCtx), sessID, req, agentDef.Name)
@@ -492,7 +493,7 @@ func (rt *Runtime) SendToWorker(ctx context.Context, workerID, message string) e
 
 	// SendToWorker has no SpawnRequest; inherit locale from ctx
 	// (chat coordinator threads it via basetool.WithLocale).
-	result, err := rt.runWorker(ctx, agentDef, sessID, message, basetool.LocaleFromContext(ctx), SpawnRequest{})
+	result, err := rt.runWorker(ctx, agentDef, sessID, message, basetool.LocaleFromContext(ctx), SpawnRequest{}, w.ID)
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -565,7 +566,7 @@ func (rt *Runtime) GetWorker(workerID string) (*Worker, bool) {
 // coordinator's). The user-role prompt is persisted up-front here,
 // matching Handle()'s "user message lands on disk before the LLM call"
 // invariant — same survival semantics on a graph crash.
-func (rt *Runtime) runWorker(ctx context.Context, agentDef *Agent, sessID, userText, locale string, req SpawnRequest) (string, error) {
+func (rt *Runtime) runWorker(ctx context.Context, agentDef *Agent, sessID, userText, locale string, req SpawnRequest, workerID string) (string, error) {
 	workerTools := filterToolsForAgent(rt.cfg.ToolBag, agentDef, false)
 
 	// Thread the persona-filtered tool view onto ctx so ToolSearch
@@ -575,6 +576,9 @@ func (rt *Runtime) runWorker(ctx context.Context, agentDef *Agent, sessID, userT
 	ctx = basetool.WithFilteredTools(ctx, workerTools)
 
 	systemPrompt := ComposeSystemPrompt(rt.cfg.BasePrompt, nil, agentDef)
+	if digest := buildToolCapabilityDigest(workerTools); digest != "" {
+		systemPrompt = systemPrompt + "\n\n" + digest
+	}
 
 	// KB-first prologue. Weak coordinator models (GLM-4 etc) don't
 	// reliably follow "rule 0 — query_knowledge before any other
@@ -637,9 +641,12 @@ func (rt *Runtime) runWorker(ctx context.Context, agentDef *Agent, sessID, userT
 		if deps.Persistence.Repo == nil {
 			deps.Persistence.Repo = rt.cfg.Sessions
 		}
-		// Workers don't stream to the parent SSE channel directly; their
-		// terminal status fans back through req.ParentEmit's task_notification.
-		deps.SSE = nil
+		// Persist worker messages under the worker session, but mirror
+		// tool lifecycle frames to the parent stream so AgentTool's
+		// internal work is visible while the synchronous dispatch runs.
+		// Assistant frames stay private to the worker transcript; only
+		// tool_start/tool_end are UI breadcrumbs for the parent chat.
+		deps.SSE = workerToolForwarder(req.ParentEmit, workerID)
 		if req.SessionKind == "report" || strings.TrimSpace(req.TraceKind) != "" {
 			deps.Audit.SessionID = sessID
 			if tk := strings.TrimSpace(req.TraceKind); tk != "" {
@@ -707,6 +714,51 @@ func (rt *Runtime) runWorker(ctx context.Context, agentDef *Agent, sessID, userT
 		return "", nil
 	}
 	return out.AssistantMessage.Content, nil
+}
+
+func workerToolForwarder(parent Emit, workerID string) callbacks.SSEEmitter {
+	if parent == nil {
+		return nil
+	}
+	return func(ev callbacks.SSEEvent) {
+		if ev.Tool == nil {
+			return
+		}
+		switch ev.Type {
+		case callbacks.SSEEventToolStart:
+			parent(Event{Type: EventToolStart, Tool: &ToolEvent{
+				ToolCallID: scopedWorkerToolCallID(workerID, ev.Tool.ToolCallID),
+				Name:       ev.Tool.Name,
+				ArgsJSON:   ev.Tool.ArgsJSON,
+				Status:     ev.Tool.Status,
+				StartedAt:  ev.Tool.StartedAt,
+			}})
+		case callbacks.SSEEventToolEnd:
+			parent(Event{Type: EventToolEnd, Tool: &ToolEvent{
+				ToolCallID: scopedWorkerToolCallID(workerID, ev.Tool.ToolCallID),
+				Name:       ev.Tool.Name,
+				ArgsJSON:   ev.Tool.ArgsJSON,
+				Status:     ev.Tool.Status,
+				StartedAt:  ev.Tool.StartedAt,
+				EndedAt:    ev.Tool.EndedAt,
+				DurationMs: ev.Tool.DurationMs,
+				Error:      ev.Tool.Error,
+				ResultJSON: ev.Tool.ResultJSON,
+			}})
+		}
+	}
+}
+
+func scopedWorkerToolCallID(workerID, toolCallID string) string {
+	workerID = strings.TrimSpace(workerID)
+	toolCallID = strings.TrimSpace(toolCallID)
+	if workerID == "" {
+		return toolCallID
+	}
+	if toolCallID == "" {
+		return workerID
+	}
+	return workerID + ":" + toolCallID
 }
 
 // notificationFor produces a task_notification Event for the given
