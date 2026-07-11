@@ -27,7 +27,7 @@ jobs:
 
           const event = JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
           const body = event.pull_request?.body || '';
-          const required = 'I have read and agree to the project contribution guide in CONTRIBUTING.md.';
+          const required = 'I have read and agree to the project contribution guide in [CONTRIBUTING.md](CONTRIBUTING.md).';
           const escaped = required.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
           const checked = new RegExp(`^- \\[[xX]\\] ${escaped}\\s*$`, 'm').test(body);
           const author = event.pull_request?.user?.login;
