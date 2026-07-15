@@ -2622,7 +2622,7 @@ func (i k8sEdgeIdentityIssuer) CreateEdgeIdentity(ctx context.Context, name stri
 	if i.svc == nil {
 		return nil, errs.ErrNotWiredYet
 	}
-	out, err := i.svc.Create(ctx, name, createdBy)
+	out, err := i.svc.Create(ctx, managerbizedge.CreateParams{Name: name}, createdBy)
 	if err != nil {
 		return nil, err
 	}
