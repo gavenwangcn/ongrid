@@ -574,10 +574,10 @@ export default function EdgesPage() {
           )}
 
           <div className="overflow-x-auto rounded-xl border border-zinc-800/60 bg-zinc-900/40">
-            <table className="w-full min-w-[1260px] text-sm">
+            <table className="w-max text-sm">
               <thead className="border-b border-zinc-800/60 bg-zinc-950/40 text-[11px] uppercase tracking-wider text-zinc-500">
                 <tr>
-                  <th className="px-2.5 py-2.5 text-left">
+                  <th className="whitespace-nowrap px-2.5 py-2.5 text-left">
                     <input
                       type="checkbox"
                       aria-label={tr("全选", "Select all")}
@@ -591,35 +591,35 @@ export default function EdgesPage() {
                       onChange={toggleAllVisible}
                     />
                   </th>
-                  <th className="px-2.5 py-2.5 text-left">ID</th>
-                  <th className="min-w-[360px] px-2.5 py-2.5 text-left">
+                  <th className="whitespace-nowrap px-2.5 py-2.5 text-left">ID</th>
+                  <th className="whitespace-nowrap px-2.5 py-2.5 text-left">
                     {tr("名称", "Name")}
                   </th>
-                  <th className="px-2.5 py-2.5 text-left">
+                  <th className="whitespace-nowrap px-2.5 py-2.5 text-left">
                     {tr("系统名称", "System")}
                   </th>
-                  <th className="px-2.5 py-2.5 text-left">
+                  <th className="whitespace-nowrap px-2.5 py-2.5 text-left">
                     {tr("环境标签", "Environment")}
                   </th>
-                  <th className="px-2.5 py-2.5 text-left">
+                  <th className="whitespace-nowrap px-2.5 py-2.5 text-left">
                     {tr("设备 IP", "Device IP")}
                   </th>
-                  <th className="min-w-[220px] px-2.5 py-2.5 text-left">
+                  <th className="whitespace-nowrap px-2.5 py-2.5 text-left">
                     {tr("主机名", "Hostname")}
                   </th>
-                  <th className="px-2.5 py-2.5 text-left">IP</th>
-                  <th className="px-2.5 py-2.5 text-left">
+                  <th className="whitespace-nowrap px-2.5 py-2.5 text-left">IP</th>
+                  <th className="whitespace-nowrap px-2.5 py-2.5 text-left">
                     {tr("角色", "Roles")}
                   </th>
-                  <th className="px-2.5 py-2.5 text-left">
+                  <th className="whitespace-nowrap px-2.5 py-2.5 text-left">
                     {tr("状态", "Status")}
                   </th>
-                  <th className="px-2.5 py-2.5 text-left">
+                  <th className="whitespace-nowrap px-2.5 py-2.5 text-left">
                     {tr("最后心跳", "Last heartbeat")}
                   </th>
-                  <th className="px-2.5 py-2.5 text-left">Access Key</th>
-                  <th className="px-2.5 py-2.5 text-left">Edge</th>
-                  <th className="sticky right-0 min-w-[176px] border-l border-zinc-800/60 bg-zinc-950 px-2.5 py-2.5 text-left">
+                  <th className="whitespace-nowrap px-2.5 py-2.5 text-left">Access Key</th>
+                  <th className="whitespace-nowrap px-2.5 py-2.5 text-left">Edge</th>
+                  <th className="sticky right-0 whitespace-nowrap border-l border-zinc-800/60 bg-zinc-950 px-2.5 py-2.5 text-left">
                     {tr("操作", "Actions")}
                   </th>
                 </tr>
@@ -671,14 +671,11 @@ export default function EdgesPage() {
                           navigate(`/devices/${encodeURIComponent(d.id)}`)
                         }
                       >
-                        {/* Identity columns are pinned `whitespace-nowrap`
-                          — when the table is squeezed (sidebar + many
-                          columns) we'd rather let the action column
-                          wrap than have a name break across lines.
-                          Heartbeat / access-key / agent are short and
-                          formatted to a known width. */}
+                        {/* Columns use whitespace-nowrap so each field sizes to
+                          its content; the wrapper scrolls horizontally when the
+                          sidebar + many columns exceed the viewport. */}
                         <td
-                          className="px-2.5 py-2.5"
+                          className="whitespace-nowrap px-2.5 py-2.5"
                           onClick={(ev) => ev.stopPropagation()}
                         >
                           {managedByK8s ? (
@@ -704,12 +701,12 @@ export default function EdgesPage() {
                             />
                           )}
                         </td>
-                        <td className="truncate whitespace-nowrap px-2.5 py-2.5 font-mono text-xs text-zinc-400">
+                        <td className="whitespace-nowrap px-2.5 py-2.5 font-mono text-xs text-zinc-400">
                           {d.id}
                         </td>
-                        <td className="min-w-[360px] px-2.5 py-2.5 text-zinc-100">
-                          <div className="flex min-w-0 items-center gap-1.5">
-                            <span className="min-w-0 flex-1 truncate">
+                        <td className="whitespace-nowrap px-2.5 py-2.5 text-zinc-100">
+                          <span className="inline-flex items-center gap-1.5">
+                            <span title={displayName || undefined}>
                               {displayName || (
                                 <span className="italic text-zinc-500">
                                   {tr("（待主机上线）", "(waiting for host)")}
@@ -717,23 +714,23 @@ export default function EdgesPage() {
                               )}
                             </span>
                             <EdgeAccessMeta attachments={attachments} />
-                          </div>
+                          </span>
                         </td>
-                        <td className="truncate whitespace-nowrap px-2.5 py-2.5 text-zinc-400">
+                        <td className="whitespace-nowrap px-2.5 py-2.5 text-zinc-400">
                           {d.system_name?.trim() || edge?.system_name?.trim() || "—"}
                         </td>
-                        <td className="truncate whitespace-nowrap px-2.5 py-2.5 text-zinc-400">
+                        <td className="whitespace-nowrap px-2.5 py-2.5 text-zinc-400">
                           {environmentTagLabel(d.environment_tag || edge?.environment_tag, tr)}
                         </td>
-                        <td className="truncate whitespace-nowrap px-2.5 py-2.5 font-mono text-xs text-zinc-400">
+                        <td className="whitespace-nowrap px-2.5 py-2.5 font-mono text-xs text-zinc-400">
                           {d.device_ip?.trim() || edge?.device_ip?.trim() || "—"}
                         </td>
-                        <td className="max-w-[260px] min-w-[220px] truncate whitespace-nowrap px-2.5 py-2.5 text-zinc-400">
+                        <td className="whitespace-nowrap px-2.5 py-2.5 text-zinc-400">
                           {d.hostname ||
                             extractHostname(edge?.host_info) ||
                             "—"}
                         </td>
-                        <td className="truncate whitespace-nowrap px-2.5 py-2.5 font-mono text-xs text-zinc-400">
+                        <td className="whitespace-nowrap px-2.5 py-2.5 font-mono text-xs text-zinc-400">
                           {d.ip_address || extractIP(edge?.host_info) || "—"}
                         </td>
                         <td
@@ -762,10 +759,10 @@ export default function EdgesPage() {
                             status={d.online ? "online" : "offline"}
                           />
                         </td>
-                        <td className="truncate whitespace-nowrap px-2.5 py-2.5 text-zinc-400">
+                        <td className="whitespace-nowrap px-2.5 py-2.5 text-zinc-400">
                           {d.last_seen_at ? relativeTime(d.last_seen_at) : "—"}
                         </td>
-                        <td className="truncate whitespace-nowrap px-2.5 py-2.5 font-mono text-xs text-zinc-400">
+                        <td className="whitespace-nowrap px-2.5 py-2.5 font-mono text-xs text-zinc-400">
                           {edge ? (
                             <span className="rounded bg-zinc-800/60 px-1.5 py-0.5">
                               {edge.access_key_id.slice(0, 8)}…
@@ -774,14 +771,14 @@ export default function EdgesPage() {
                             "—"
                           )}
                         </td>
-                        <td className="truncate whitespace-nowrap px-2.5 py-2.5 font-mono text-xs text-zinc-400">
+                        <td className="whitespace-nowrap px-2.5 py-2.5 font-mono text-xs text-zinc-400">
                           <AgentVersionCell
                             agentVersion={edge?.agent_version}
                             managerVersion={managerVersion}
                           />
                         </td>
                         <td
-                          className="sticky right-0 min-w-[176px] whitespace-nowrap border-l border-zinc-800/60 bg-zinc-900 px-2.5 py-2.5 text-left"
+                          className="sticky right-0 whitespace-nowrap border-l border-zinc-800/60 bg-zinc-900 px-2.5 py-2.5 text-left"
                           onClick={(ev) => ev.stopPropagation()}
                         >
                           {managedByK8s ? (
@@ -953,7 +950,7 @@ function EdgeAccessMeta({ attachments }: { attachments: K8sEdgeAttachment[] }) {
   }
   const clusters = uniqueAttachmentClusters(attachments);
   return (
-    <div className="flex min-w-0 shrink-0 items-center gap-1">
+    <div className="inline-flex shrink-0 items-center gap-1">
       {attachments.map((item) => (
         <EdgeAccessPill
           key={`${item.kind}:${item.clusterId}:${item.nodeName ?? ""}`}
