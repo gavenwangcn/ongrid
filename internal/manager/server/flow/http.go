@@ -7,6 +7,7 @@ package flow
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -429,7 +430,7 @@ func (h *Handler) listTools(w http.ResponseWriter, r *http.Request) {
 			WhenToUse:     m.WhenToUse,
 			Class:         m.Class,
 			Category:      m.Category,
-			Parameters:    m.Parameters,
+			Parameters:    validJSONRaw(m.Parameters),
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
@@ -501,11 +502,28 @@ func atoiDefault(s string, def int) int {
 
 func writeJSON(w http.ResponseWriter, code int, body any) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
 	if body == nil {
+		w.WriteHeader(code)
 		return
 	}
-	_ = json.NewEncoder(w).Encode(body)
+	// Marshal before WriteHeader so a bad json.RawMessage (e.g. malformed
+	// MCP inputSchema) cannot leave a 200 with Content-Length: 0.
+	b, err := json.Marshal(body)
+	if err != nil {
+		writeErr(w, fmt.Errorf("encode response: %w", err))
+		return
+	}
+	w.WriteHeader(code)
+	_, _ = w.Write(b)
+}
+
+// validJSONRaw keeps json.RawMessage embeddable in the response. Invalid
+// tool schemas are dropped to null rather than breaking the whole list.
+func validJSONRaw(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 || json.Valid(raw) {
+		return raw
+	}
+	return json.RawMessage("null")
 }
 
 type errorBody struct {

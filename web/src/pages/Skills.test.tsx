@@ -71,4 +71,17 @@ describe('SkillsPage', () => {
     expect(screen.getByText(/不可在线编辑/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /保存|编辑/ })).not.toBeInTheDocument();
   });
+
+  it('flow-tools 返回空 body 时不报错', async () => {
+    server.use(
+      http.get('/api/v1/flow-tools', () => new HttpResponse(null, { status: 200, headers: { 'Content-Type': 'application/json' } })),
+    );
+    render(
+      <MemoryRouter>
+        <SkillsPage />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText('analyze_database_status')).toBeInTheDocument();
+    expect(screen.queryByText(/加载失败/)).not.toBeInTheDocument();
+  });
 });

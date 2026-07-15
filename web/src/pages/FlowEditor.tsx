@@ -410,7 +410,7 @@ export default function FlowEditorPage() {
     let alive = true;
     listFlowTools()
       .then((r) => {
-        if (alive) setTools(r.items ?? []);
+        if (alive) setTools(r?.items ?? []);
       })
       .catch(() => {
         /* tools palette is best-effort; canvas works without it */

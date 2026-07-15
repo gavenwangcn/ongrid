@@ -206,10 +206,10 @@ function CatalogTab() {
         listSkills(),
         listFlowTools().catch(() => ({ items: [] as FlowToolMeta[] })),
       ]);
-      const base = (sk.items ?? []).map(localizedSkill);
-      const mcp = (ft.items ?? []).filter((t) => t.name.startsWith('mcp__')).map(mcpToSkill);
+      const base = (sk?.items ?? []).map(localizedSkill);
+      const mcp = (ft?.items ?? []).filter((t) => t.name.startsWith('mcp__')).map(mcpToSkill);
       const zh: Record<string, string> = {};
-      for (const t of ft.items ?? []) if (t.display_zh) zh[t.name] = t.display_zh;
+      for (const t of ft?.items ?? []) if (t.display_zh) zh[t.name] = t.display_zh;
       setZhNames(zh);
       setItems([...base, ...mcp]);
       setErr(null);
