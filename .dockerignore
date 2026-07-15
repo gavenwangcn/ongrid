@@ -6,6 +6,7 @@ local/
 .cache/
 tmp/
 .codegraph/
+output/
 
 bin/
 dist/
