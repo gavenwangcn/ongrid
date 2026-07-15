@@ -1133,13 +1133,6 @@ func truncateReportAgentText(s string, max int) string {
 	return s[:max] + "…"
 }
 
-func firstNonEmpty(a, b string) string {
-	if strings.TrimSpace(a) != "" {
-		return strings.TrimSpace(a)
-	}
-	return strings.TrimSpace(b)
-}
-
 // workerChatModelOpts mirrors chatModelOpts but reads the (provider,
 // model) pair from ctx instead of a *Request, so SpawnWorker and
 // SendToWorker (which has no Request) share the same plumbing.
