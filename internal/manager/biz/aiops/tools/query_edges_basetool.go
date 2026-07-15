@@ -36,7 +36,7 @@ func NewQueryEdgesTool(devices *devicebiz.Usecase, edges *edgebiz.Usecase, log *
 // queryEdgesWhenToUse — usually the FIRST tool in any incident triage
 // chain. Reverse-guards against drilling into specific signals before
 // pinning the device id.
-const queryEdgesWhenToUse = "When the user wants the LIST of devices / hosts (filter by role / online / freshness / name substring), " +
+const queryEdgesWhenToUse = "When the user wants the LIST of devices / hosts (filter by role / online / freshness / name substring / IP address), " +
 	"or as the FIRST step to grab a device_id you'll then feed into get_host_load / query_promql / get_edge_summary. " +
 	"NOT for the per-device deep dive (use get_edge_summary or correlate_incident). " +
 	"NOT for log/metric/trace content (use the matching query_* tool)."
@@ -76,6 +76,7 @@ func (t *QueryEdgesTool) InvokableRun(ctx context.Context, argsJSON string, _ ..
 		f := devicebiz.ListFilter{
 			Name:       in.NameContains,
 			SystemName: in.SystemName,
+			IPAddress:  in.IPContains,
 			Limit:      in.Limit,
 		}
 		switch in.Status {

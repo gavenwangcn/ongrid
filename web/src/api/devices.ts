@@ -11,8 +11,19 @@ export type Device = {
   system_name?: string;
   device_ip?: string;
   environment_tag?: EnvironmentTag | '';
+  ip_address?: string;
+  os?: string;
+  os_version?: string;
+  arch?: string;
+  kernel_version?: string;
+  cpu_count?: number;
+  mem_total_bytes?: number;
+  disk_total_bytes?: number;
+  cpu_usage_pct?: number;
+  mem_usage_pct?: number;
+  disk_usage_pct?: number;
   roles?: string[];
-  scope: DeviceRole;
+  scope?: DeviceRole;
   online?: boolean;
   last_seen_at?: string | null;
   created_at?: string;
@@ -22,8 +33,18 @@ export type Device = {
   node_id?: number | null;
 };
 
-export function listDevices() {
-  return request<{ items: Device[]; total: number }>('GET', '/devices');
+export type DeviceEdgeLink = {
+  edge_id: number;
+  device_id: number;
+  type: DeviceRole | 'unknown';
+  created_at: string;
+};
+
+export function listDevices(params?: { roles?: string }) {
+  const qs = params?.roles
+    ? `?${new URLSearchParams({ roles: params.roles }).toString()}`
+    : '';
+  return request<{ items: Device[]; total: number }>('GET', `/devices${qs}`);
 }
 
 export function getDevice(id: string | number) {
@@ -41,4 +62,15 @@ export function updateDevice(
   },
 ) {
   return request<void>('PATCH', `/devices/${encodeURIComponent(String(id))}`, input);
+}
+
+export function deleteDevice(id: string | number) {
+  return request<void>('DELETE', `/devices/${encodeURIComponent(String(id))}`);
+}
+
+export function listDeviceEdges(id: string | number) {
+  return request<{ items: DeviceEdgeLink[] }>(
+    'GET',
+    `/devices/${encodeURIComponent(String(id))}/edges`,
+  );
 }

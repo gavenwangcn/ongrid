@@ -119,13 +119,15 @@ func (u *Usecase) UpdateOperatorMeta(ctx context.Context, id uint64, systemName,
 	return u.repo.UpdateOperatorMeta(ctx, id, systemName, deviceIP, environmentTag)
 }
 
-// Delete hard-deletes a device. Junction rows are NOT auto-removed —
-// edge deletion cascades through edge usecase instead.
+// Delete removes an offline device plus its linked Edge identities. Online
+// devices are rejected so a live host cannot lose its access key while it is
+// still connected. The repository owns the transaction because it touches
+// devices, edge_devices, and edges together.
 func (u *Usecase) Delete(ctx context.Context, id uint64) error {
 	if u.repo == nil {
 		return errs.ErrNotWiredYet
 	}
-	return u.repo.Delete(ctx, id)
+	return u.repo.DeleteOfflineWithLinkedEdges(ctx, id)
 }
 
 // LookupHostDevice resolves edge → host device_id. Returns 0,

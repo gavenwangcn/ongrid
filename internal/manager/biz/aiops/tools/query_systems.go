@@ -67,6 +67,7 @@ func deviceToEdgeRow(d *devicemodel.Device) EdgeRow {
 		SystemName:     d.SystemName,
 		DeviceIP:       d.DeviceIP,
 		EnvironmentTag: d.EnvironmentTag,
+		IPAddress:      d.IPAddress,
 		Online:         d.Online,
 		Roles:          devicemodel.DecodeRoles(d.Roles),
 		LastSeenAt:     d.LastSeenAt,
