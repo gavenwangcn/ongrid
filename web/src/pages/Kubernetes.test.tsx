@@ -4,6 +4,7 @@ import { http, HttpResponse } from 'msw';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import KubernetesPage, { KubernetesClusterDetailPage } from './Kubernetes';
+import { invalidateGrafanaRootCache } from '@/lib/drilldown';
 import { server } from '@/test/msw-server';
 
 vi.mock('@/store/me', () => ({
@@ -58,6 +59,7 @@ function renderKubernetesDetail(initialEntry = '/kubernetes/1', includeChatRoute
 describe('KubernetesPage', () => {
   beforeEach(() => {
     localStorage.setItem('ongrid-locale', 'zh-CN');
+    invalidateGrafanaRootCache();
     Element.prototype.scrollIntoView = vi.fn();
     server.use(
       http.get('/api/v1/k8s/clusters', () =>
@@ -399,6 +401,58 @@ describe('KubernetesPage', () => {
     expect(screen.getAllByText('Loki').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Tempo').length).toBeGreaterThan(0);
     expect(screen.getAllByText('查询详情').length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('K8s 指标使用 Grafana 11 Explore 深链打开 Prometheus 查询', async () => {
+    let launchPayload: { expr?: string } | null = null;
+    const replace = vi.fn();
+    const open = vi.spyOn(window, 'open').mockReturnValue({
+      closed: false,
+      location: { replace },
+    } as unknown as Window);
+    server.use(
+      http.get('/api/v1/system-settings', () => HttpResponse.json({
+        items: [{
+          category: 'grafana',
+          key: 'root_url',
+          value: 'http://grafana:3000/grafana',
+          sensitive: false,
+          updated_at: '2026-06-29T10:00:00Z',
+        }],
+        total: 1,
+      })),
+      http.post('/api/v1/prometheus/launch', async ({ request }) => {
+        launchPayload = await request.json() as { expr?: string };
+        return HttpResponse.json({ url: '/prometheus/graph?g0.expr=up' });
+      }),
+    );
+
+    renderKubernetesDetail('/kubernetes/1');
+
+    const openButtons = await screen.findAllByRole('button', { name: '打开图表' });
+    fireEvent.click(openButtons[0]);
+
+    await waitFor(() => {
+      expect(launchPayload).toEqual({ expr: 'up' });
+      expect(replace).toHaveBeenCalledOnce();
+    });
+    expect(open).toHaveBeenCalledWith('about:blank', '_blank');
+
+    const target = new URL(String(replace.mock.calls[0][0]));
+    expect(target.pathname).toBe('/grafana/explore');
+    expect(target.searchParams.get('schemaVersion')).toBe('1');
+    const panes = JSON.parse(target.searchParams.get('panes') || '{}');
+    expect(panes.og.datasource).toBe('ongrid-prometheus');
+    expect(panes.og.queries[0].datasource).toEqual({
+      type: 'prometheus',
+      uid: 'ongrid-prometheus',
+    });
+    expect(panes.og.queries[0].queryType).toBe('range');
+    expect(panes.og.queries[0].expr).toBe(
+      'sum by (namespace, phase) (kube_pod_status_phase{cluster_id="1",ongrid_source=~"k8s:.*"} == 1)',
+    );
+
+    open.mockRestore();
   });
 
   it('集群详情提供 Helm 升级命令', async () => {

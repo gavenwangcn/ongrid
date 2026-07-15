@@ -61,12 +61,12 @@ controller:
       memory: 512Mi
 
 kubeStateMetrics:
-  enabled: false
+  enabled: true
   serviceAccountName: ""
   image:
-    # Optional image is not bundled in the offline release. Mirror it to a
-    # registry reachable by the cluster before enabling this component.
-    repository: ""
+    # Ongrid-maintained mirror used by the default online installation.
+    # Offline installations can override this with their internal registry.
+    repository: docker.cnb.cool/ongridio/ongrid-edge/kube-state-metrics
     tag: v2.16.0
     pullPolicy: IfNotPresent
   port: 8080
@@ -81,8 +81,9 @@ kubeStateMetrics:
       memory: 256Mi
 
 telemetryGateway:
-  # Set true to expose the controller OTLP receiver.
-  enabled: null
+  # Expose the controller OTLP receiver by default so instrumented workloads
+  # can export cluster-scoped traces, logs, and metrics without extra Helm flags.
+  enabled: true
   service:
     type: ClusterIP
     grpcPort: 4317

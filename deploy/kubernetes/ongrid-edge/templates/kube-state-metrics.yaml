@@ -1,7 +1,7 @@
 {{- $ksm := default dict .Values.kubeStateMetrics -}}
-{{- if default false $ksm.enabled }}
+{{- if eq (include "ongrid-edge.kubeStateMetricsEnabled" .) "true" }}
 {{- $image := default dict $ksm.image -}}
-{{- $imageRepository := required "kubeStateMetrics.image.repository is required when kubeStateMetrics.enabled=true; use an offline mirror reachable by the cluster" $image.repository -}}
+{{- $imageRepository := default "docker.cnb.cool/ongridio/ongrid-edge/kube-state-metrics" $image.repository -}}
 {{- $resources := default dict $ksm.resources -}}
 {{- $port := default 8080 $ksm.port -}}
 {{- $telemetryPort := default 8081 $ksm.telemetryPort -}}
