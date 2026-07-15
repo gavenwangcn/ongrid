@@ -118,7 +118,7 @@ services:
       # Override/blank the password when pointing at an external Grafana.
       ONGRID_GRAFANA_INTERNAL_URL: ${ONGRID_GRAFANA_INTERNAL_URL:-http://grafana:3000/grafana}
       ONGRID_GRAFANA_BOOTSTRAP_USER: ${ONGRID_GRAFANA_BOOTSTRAP_USER:-${GRAFANA_ADMIN_USER:-admin}}
-      ONGRID_GRAFANA_BOOTSTRAP_PASSWORD: ${ONGRID_GRAFANA_BOOTSTRAP_PASSWORD-${GRAFANA_ADMIN_PASSWORD:-admin}}
+      ONGRID_GRAFANA_BOOTSTRAP_PASSWORD: ${ONGRID_GRAFANA_BOOTSTRAP_PASSWORD:-${GRAFANA_ADMIN_PASSWORD:-admin}}
       ONGRID_GRAFANA_TLS_INSECURE: ${ONGRID_GRAFANA_TLS_INSECURE:-false}
       # Public URL the manager hands out to edges as the data-plane
       # endpoint for plugin telemetry (ADR-014 / ADR-015).
