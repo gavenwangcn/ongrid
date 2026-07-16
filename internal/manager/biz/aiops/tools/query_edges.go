@@ -61,7 +61,6 @@ var QueryEdgesSchema = json.RawMessage(`{
       "type": "string",
       "description": "Substring filter against device IP address. Optional."
     },
-    },
     "limit": {
       "type": "integer",
       "minimum": 1,
