@@ -29,6 +29,12 @@ OUT         := dist/out
 PACKAGE_CLEAN ?= 1
 # Local builds default to amd64. Release publishing produces one multi-arch
 # manifest independently of the manager package architecture.
+CLOUD_IMAGE_PLATFORMS ?= linux/amd64,linux/arm64
+CLOUD_IMAGE_REPO ?= docker.cnb.cool/ongridio/ongrid
+CLOUD_MANAGER_IMAGE_REF ?= $(CLOUD_IMAGE_REPO):$(VERSION)
+CLOUD_WEB_IMAGE_REF ?= $(CLOUD_IMAGE_REPO)/ongrid-web:$(VERSION)
+FRONTIER_VERSION ?= v1.2.4
+CNB_FRONTIER_IMAGE_REF ?= $(CLOUD_IMAGE_REPO)/frontier:$(FRONTIER_VERSION)
 K8S_EDGE_IMAGE_PLATFORM ?= linux/amd64
 K8S_EDGE_IMAGE_PLATFORMS ?= linux/amd64,linux/arm64
 K8S_EDGE_IMAGE_TAG ?= $(VERSION)
@@ -180,16 +186,16 @@ run-ongrid-edge: ## 本地直接跑 ongrid-edge
 # ----------------------------------------------------------------------------
 # Release / packaging
 # ----------------------------------------------------------------------------
-# Produces a single, self-contained tarball ready to scp to any Linux box with
-# docker + docker compose installed:
+# Produces a release tarball ready to scp to any Linux box with docker +
+# docker compose installed. Compose runtime images are pulled from CNB:
 #
 #     dist/out/ongrid-$(VERSION)-linux-amd64.tar.xz
 #     dist/out/ongrid-$(VERSION)-linux-arm64.tar.xz  (make package TARGET_ARCH=arm64)
 #
 # Pipeline (wired via `make package`):
-#   1. build-edge-all   — cross-compile ongrid-edge for 4 targets.
-#   2. docker-build     — docker build ongrid:$(VERSION) for $(PLATFORM).
-#   3. dist/package.sh  — stage + docker save + tar.xz + sha256.
+#   1. build-edge-all   — cross-compile ongrid-edge targets.
+#   2. dist/package.sh  — extract systemd binaries from the published CNB
+#                        images, stage files, then emit tar.xz + sha256.
 
 .PHONY: build-linux
 build-linux: ## [release] 交叉编译 ongrid linux/amd64
@@ -257,6 +263,23 @@ docker-build-web: ## [release] 构建 ongrid-web:$(VERSION) 镜像（前端 SPA 
 		$(DOCKER_BUILD_WEB_CACHE_ARGS) \
 		--load .
 
+.PHONY: docker-push-cloud-images docker-push-release-images release-image-refs verify-release-images
+docker-push-cloud-images: ## [release] 发布 manager + Web 多架构镜像到 CNB
+	docker buildx build \
+		--platform $(CLOUD_IMAGE_PLATFORMS) \
+		--build-arg VERSION=$(VERSION) \
+		-t $(CLOUD_MANAGER_IMAGE_REF) \
+		-f deploy/Dockerfile.ongrid \
+		$(DOCKER_BUILD_CACHE_ARGS) \
+		--push .
+	docker buildx build \
+		--platform $(CLOUD_IMAGE_PLATFORMS) \
+		--build-arg VERSION=$(VERSION) \
+		-t $(CLOUD_WEB_IMAGE_REF) \
+		-f deploy/Dockerfile.web \
+		$(DOCKER_BUILD_WEB_CACHE_ARGS) \
+		--push .
+
 .PHONY: docker-build-k8s-edge docker-push-k8s-edge k8s-edge-image-ref
 docker-build-k8s-edge: ## [dev] 构建本地 Kubernetes ongrid-edge 镜像（默认 linux/amd64）
 	docker buildx build \
@@ -286,15 +309,31 @@ docker-push-k8s-edge: ## [release] 发布 Kubernetes ongrid-edge 多架构镜像
 k8s-edge-image-ref:
 	@printf '%s\n' "$(K8S_EDGE_IMAGE_REF)"
 
-# Frontier broker is upstream singchia/frontier (ADR-007). Docker Hub pull
-# is unreliable in some networks, so we build the image locally from the
-# upstream source and ship it in the release tarball.
+docker-push-release-images: docker-push-cloud-images docker-push-k8s-edge ## [release] 发布全部项目自身多架构镜像
+
+release-image-refs: ## [release] 打印本次发布的项目自身镜像
+	@printf '%s\n' "$(CLOUD_MANAGER_IMAGE_REF)" "$(CLOUD_WEB_IMAGE_REF)" "$(K8S_EDGE_IMAGE_REF)"
+
+verify-release-images: ## [release] 校验项目自身镜像均包含 amd64 + arm64 manifest
+	@command -v jq >/dev/null 2>&1 || { echo "jq is required" >&2; exit 1; }
+	@for image in $(CLOUD_MANAGER_IMAGE_REF) $(CLOUD_WEB_IMAGE_REF) $(K8S_EDGE_IMAGE_REF); do \
+		echo "[verify] $$image"; \
+		docker buildx imagetools inspect --raw "$$image" \
+			| jq -e '[.manifests[].platform | "\(.os)/\(.architecture)"] \
+				| index("linux/amd64") != null and index("linux/arm64") != null' >/dev/null; \
+	done
+
+.PHONY: verify-compose-images
+verify-compose-images: ## [test] 渲染并校验 Compose 运行镜像全部按预期指向 CNB
+	bash scripts/verify-cnb-compose-images.sh
+
+# Optional local-dev fallback for rebuilding the upstream Frontier broker.
+# Release packages and Compose deployments use the existing CNB mirror.
 FRONTIER_SRC     ?= $(HOME)/frontier
-FRONTIER_VERSION ?= v1.2.4
 FRONTIER_BUILD_FORCE ?= 1
 
 .PHONY: docker-build-broker
-docker-build-broker: ## [release] 本地构建 singchia/frontier:$(FRONTIER_VERSION)
+docker-build-broker: ## [dev] 从上游源码本地构建 singchia/frontier:$(FRONTIER_VERSION)
 	@existing_platform=$$(docker image inspect -f '{{.Os}}/{{.Architecture}}' singchia/frontier:$(FRONTIER_VERSION) 2>/dev/null || true); \
 	if [ "$(FRONTIER_BUILD_FORCE)" != "1" ] && [ "$$existing_platform" = "$(PLATFORM)" ]; then \
 		echo "[broker] singchia/frontier:$(FRONTIER_VERSION) already present for $(PLATFORM) — skipping rebuild"; \
@@ -307,12 +346,6 @@ docker-build-broker: ## [release] 本地构建 singchia/frontier:$(FRONTIER_VERS
 			$(DOCKER_BUILD_BROKER_CACHE_ARGS) \
 			--load $(FRONTIER_SRC); \
 	fi
-
-.PHONY: docker-save
-docker-save: ## [release] docker save ongrid:$(VERSION) 到 stage
-	@mkdir -p $(STAGE)/images
-	docker save ongrid:$(VERSION) -o $(STAGE)/images/ongrid.tar
-	@echo "saved $(STAGE)/images/ongrid.tar"
 
 # Promtail bundle (ADR-012 / ADR-015 logs plugin).
 # Cached under bin/<os>-<arch>/promtail to avoid re-downloading on every build.
@@ -505,10 +538,8 @@ fetch-mongodb-exporter: ## [release] 下载 mongodb_exporter 到 bin/<os>-<arch>
 	done
 
 # package deps deliberately exclude `build-linux` and `build-web`:
-#   - build-linux produces a host-side ongrid binary which dist/package.sh
-#     never consumes (the manager binary inside ongrid:VERSION docker
-#     image is what's shipped; the host-side cross-compile was dead
-#     code costing ~1-3 min per run).
+#   - dist/package.sh extracts the systemd manager binary and ONNX runtime
+#     from the already-published, architecture-matched CNB image.
 #   - build-web produces web/dist/ which docker-build-web doesn't use
 #     either — the web Dockerfile runs its own `npm ci && npm run
 #     build` inside the builder stage. Removing the host-side npm pass
@@ -564,11 +595,14 @@ check-release-target:
 # For offline RAG (ONGRID_EMBEDDING_PROVIDER=local) run
 # `make fetch-embedding-model` once before `make package`, otherwise
 # dist/package.sh warns and ships a tarball without the model.
-package: check-release-target fetch-promtail fetch-otelcol fetch-node-exporter fetch-process-exporter fetch-db-exporters build-edge-all docker-build docker-build-broker docker-build-web ## [release] 打单架构 release tarball 到 dist/out/（TARGET_ARCH 可覆盖）
+package: check-release-target fetch-promtail fetch-otelcol fetch-node-exporter fetch-process-exporter fetch-db-exporters build-edge-all ## [release] 打单架构 release tarball 到 dist/out/（TARGET_ARCH 可覆盖）
 	@if [ "$(PACKAGE_CLEAN)" = "1" ]; then rm -rf dist/stage dist/out; fi
 	@mkdir -p dist/stage dist/out
 	@$(MAKE) --no-print-directory build-edge-bundle
-	PACKAGE_TARGET="$(PACKAGE_TARGET)" DOCKER_PLATFORM="$(PLATFORM)" bash dist/package.sh "$(VERSION)" "$(STAGE)" "$(OUT)"
+	PACKAGE_TARGET="$(PACKAGE_TARGET)" DOCKER_PLATFORM="$(PLATFORM)" \
+		ONGRID_IMAGE_REF="$(CLOUD_MANAGER_IMAGE_REF)" \
+		FRONTIER_IMAGE_REF="$(CNB_FRONTIER_IMAGE_REF)" \
+		bash dist/package.sh "$(VERSION)" "$(STAGE)" "$(OUT)"
 	@echo ""
 	@echo "=== release artefact ==="
 	@ls -lh $(OUT)/ongrid-$(VERSION)-$(PACKAGE_TARGET).tar.xz

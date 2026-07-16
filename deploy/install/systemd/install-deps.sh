@@ -352,7 +352,7 @@ fi
 # --- libonnxruntime.so (local ONNX embedder, ADR-027 Phase-2) ---
 # The ongrid manager binary is the CGO build (fastembed-go → onnxruntime_go)
 # and dlopens this .so at runtime via ONNX_PATH=/usr/lib/libonnxruntime.so
-# (set in ongrid.service). package.sh extracted it from the docker image
+# (set in ongrid.service). package.sh extracted it from the published CNB image
 # into bin/; install it to /usr/lib + the SONAME symlinks + ldconfig so the
 # loader resolves it. Without this, ONGRID_EMBEDDING_PROVIDER=local fails to
 # load the model. Compose mode bundles the .so inside the image instead.

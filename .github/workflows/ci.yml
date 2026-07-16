@@ -101,7 +101,10 @@ jobs:
         uses: azure/setup-helm@v4
 
       - name: Check release scripts
-        run: bash -n dist/package.sh dist/package-k8s-chart.sh deploy/install/install.sh deploy/install/upgrade.sh
+        run: bash -n dist/package.sh dist/package-k8s-chart.sh deploy/install/install.sh deploy/install/upgrade.sh deploy/install/uninstall.sh scripts/verify-cnb-compose-images.sh
+
+      - name: Verify Compose image routing
+        run: make verify-compose-images
 
       - name: Lint and render Kubernetes chart
         run: |
