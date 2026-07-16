@@ -14,6 +14,8 @@
 # Optional env:
 #   PACKAGE_TARGET  linux-amd64 (default) or linux-arm64
 #   DOCKER_PLATFORM linux/amd64 (default) or linux/arm64
+#   ONGRID_IMAGE_REF published manager image to extract for systemd mode
+#   FRONTIER_IMAGE_REF mirrored frontier image to extract for systemd mode
 #
 # The script is tolerant of missing deploy/install/* files: it warns and
 # continues so the pipeline is testable before the on-target scripts land.
@@ -69,7 +71,7 @@ die()  { printf '[pkg] error: %s\n' "$*" >&2; exit 1; }
 
 # --- docker presence check --------------------------------------------------
 if ! command -v docker >/dev/null 2>&1; then
-    die "docker not found in PATH — required to 'docker save' the ongrid image"
+    die "docker not found in PATH — required to extract systemd binaries from the published images"
 fi
 
 # --- xz presence check ------------------------------------------------------
@@ -82,7 +84,6 @@ fi
 log "target ${PACKAGE_TARGET} (${DOCKER_PLATFORM})"
 log "staging ${PKG_NAME} into ${STAGE_DIR}"
 mkdir -p "${STAGE_DIR}" \
-         "${STAGE_DIR}/images" \
          "${STAGE_DIR}/edge" \
          "${STAGE_DIR}/prometheus" \
          "${STAGE_DIR}/grafana/provisioning/datasources"
@@ -137,9 +138,8 @@ else
 fi
 
 # --- manager + frontier binaries (for --mode=systemd) -----------------------
-# Bundled separately from the docker image. We extract them after the
-# docker save step further down so we know the images are present —
-# search for "bin/ongrid" below.
+# Bundled separately from the Compose runtime. They are extracted from the
+# exact architecture of the already-published CNB images below.
 
 # --- nginx config + certs scaffold (ADR-008) --------------------------------
 # nginx.conf is bind-mounted into the nginx container at runtime; certs/ is
@@ -184,7 +184,7 @@ else
     warn "${REPO_ROOT}/deploy/install/searxng missing; skipping"
 fi
 
-# --- docker image tars ------------------------------------------------------
+# --- docker image tars (local/offline compose installs) ---------------------
 IMAGE_REF="ongrid:${VERSION}"
 log "saving docker image ${IMAGE_REF} -> images/ongrid.tar"
 if ! docker image inspect "${IMAGE_REF}" >/dev/null 2>&1; then
@@ -205,8 +205,21 @@ docker save "${FRONTIER_REF}" -o "${STAGE_DIR}/images/frontier.tar"
 
 # --- raw manager + frontier binaries (for systemd mode) ---------------------
 # install-systemd.sh installs these to /usr/local/bin/ when --mode=systemd.
-# Extract from the docker images we just saved so we don't drift from the
-# compose-mode artefact (single source of truth = the docker image).
+# Pull and extract from the release images so the systemd and Compose modes
+# use the same binaries without embedding image tarballs in the package.
+ONGRID_IMAGE_REF="${ONGRID_IMAGE_REF:-docker.cnb.cool/ongridio/ongrid:${VERSION}}"
+FRONTIER_IMAGE_REF="${FRONTIER_IMAGE_REF:-docker.cnb.cool/ongridio/ongrid/frontier:v1.2.4}"
+
+pull_image_for_platform() {
+    local image="$1"
+    log "pulling ${image} for ${DOCKER_PLATFORM}"
+    docker pull --platform "${DOCKER_PLATFORM}" "${image}" >/dev/null \
+        || die "could not pull ${image} for ${DOCKER_PLATFORM}"
+}
+
+pull_image_for_platform "${ONGRID_IMAGE_REF}"
+pull_image_for_platform "${FRONTIER_IMAGE_REF}"
+
 mkdir -p "${STAGE_DIR}/bin"
 extract_bin_from_image() {
     # extract_bin_from_image <image-ref> <dst> <candidate-path...>
@@ -235,9 +248,9 @@ extract_bin_from_image() {
     fi
     return $rc
 }
-extract_bin_from_image "${IMAGE_REF}"    "${STAGE_DIR}/bin/ongrid" \
+extract_bin_from_image "${ONGRID_IMAGE_REF}" "${STAGE_DIR}/bin/ongrid" \
     "/ongrid"
-extract_bin_from_image "${FRONTIER_REF}" "${STAGE_DIR}/bin/ongrid-frontier" \
+extract_bin_from_image "${FRONTIER_IMAGE_REF}" "${STAGE_DIR}/bin/ongrid-frontier" \
     "/usr/bin/frontier" "/usr/local/bin/frontier" "/frontier"
 
 # libonnxruntime.so for the local ONNX embedder (systemd mode). The ongrid
@@ -247,7 +260,7 @@ extract_bin_from_image "${FRONTIER_REF}" "${STAGE_DIR}/bin/ongrid-frontier" \
 # /usr/lib + symlinks + ldconfig. Keep ONNXRUNTIME_VERSION in lockstep with
 # deploy/Dockerfile.ongrid.
 ONNXRUNTIME_VERSION="${ONNXRUNTIME_VERSION:-1.20.1}"
-extract_bin_from_image "${IMAGE_REF}" \
+extract_bin_from_image "${ONGRID_IMAGE_REF}" \
     "${STAGE_DIR}/bin/libonnxruntime.so.${ONNXRUNTIME_VERSION}" \
     "/usr/lib/libonnxruntime.so.${ONNXRUNTIME_VERSION}"
 
@@ -367,16 +380,6 @@ if [[ "$BUNDLE_EMB" == "1" ]]; then
         log "  + embeddings/fast-bge-small-zh-v1.5/ ($(du -sh "$EMB_CACHE_HOST" | awk '{print $1}'))"
     fi
 fi
-
-# Frontend + nginx image (ADR-008). Bakes web/dist/ + nginx.conf into the
-# image; nginx.conf and TLS certs are bind-mounted by docker-compose at
-# runtime so operators can edit them without rebuilding.
-WEB_REF="ongrid-web:${VERSION}"
-log "saving docker image ${WEB_REF} -> images/ongrid-web.tar"
-if ! docker image inspect "${WEB_REF}" >/dev/null 2>&1; then
-    die "docker image ${WEB_REF} not found; run 'make docker-build-web' first"
-fi
-docker save "${WEB_REF}" -o "${STAGE_DIR}/images/ongrid-web.tar"
 
 # --- edge binaries -----------------------------------------------------------
 # Edges are amd64-only in our deployments (the user's directive), so we ship a

@@ -186,8 +186,12 @@ log_info "removing $INSTALL_DIR"
 rm -rf "$INSTALL_DIR"
 
 if [[ -n "$VERSION_FROM_FILE" ]]; then
-    log_info "removing ongrid:${VERSION_FROM_FILE} image"
-    docker image rm "ongrid:${VERSION_FROM_FILE}" 2>/dev/null || true
+    for image in \
+        "docker.cnb.cool/ongridio/ongrid:${VERSION_FROM_FILE}" \
+        "docker.cnb.cool/ongridio/ongrid/ongrid-web:${VERSION_FROM_FILE}"; do
+        log_info "removing $image"
+        docker image rm "$image" 2>/dev/null || true
+    done
 fi
 
 # Co-resident edge daemon — when the operator installed ongrid-edge on

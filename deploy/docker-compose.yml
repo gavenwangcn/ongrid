@@ -12,7 +12,7 @@
 
 services:
   mysql:
-    image: mysql:8.0
+    image: docker.cnb.cool/ongridio/ongrid/mysql:8.0
     container_name: ongrid-mysql
     restart: unless-stopped
     environment:
@@ -242,7 +242,7 @@ services:
   # query backend for the aiops query_promql tool). Dev publishes 9090 to
   # host so you can poke PromQL from the laptop browser; prod doesn't.
   prometheus:
-    image: prom/prometheus:v2.54.0
+    image: docker.cnb.cool/ongridio/ongrid/prometheus:v2.54.0
     container_name: ongrid-prometheus
     restart: unless-stopped
     depends_on:
@@ -275,7 +275,7 @@ services:
   # 3100 — public access flows through nginx /loki/api/v1/push with
   # auth_request → manager edgeauth (ADR-014 §决策).
   loki:
-    image: grafana/loki:3.4.0
+    image: docker.cnb.cool/ongridio/ongrid/loki:3.4.0
     container_name: ongrid-loki
     restart: unless-stopped
     command:
@@ -291,7 +291,7 @@ services:
   # through nginx /v1/traces with auth_request → manager edgeauth
   # (ADR-014 §决策第 1 条).
   tempo:
-    image: grafana/tempo:2.10.0
+    image: docker.cnb.cool/ongridio/ongrid/tempo:2.10.0
     container_name: ongrid-tempo
     restart: unless-stopped
     command:
@@ -310,7 +310,7 @@ services:
   # response. Zero API key, zero quota. Only docker-internal port 8080
   # — manager reaches it at http://searxng:8080/search?q=...&format=json.
   searxng:
-    image: searxng/searxng:latest
+    image: docker.cnb.cool/ongridio/ongrid/searxng:latest
     container_name: ongrid-searxng
     restart: unless-stopped
     environment:
@@ -322,7 +322,7 @@ services:
       - ongrid_net
 
   qdrant:
-    image: qdrant/qdrant:v1.11.3
+    image: docker.cnb.cool/ongridio/ongrid/qdrant:v1.11.3
     container_name: ongrid-qdrant
     restart: unless-stopped
     volumes:
@@ -331,7 +331,7 @@ services:
       - ongrid_net
 
   grafana:
-    image: grafana/grafana-oss:11.1.4
+    image: docker.cnb.cool/ongridio/ongrid/grafana-oss:11.1.4
     container_name: ongrid-grafana
     restart: unless-stopped
     depends_on:

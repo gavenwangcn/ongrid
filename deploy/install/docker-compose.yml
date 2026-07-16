@@ -2,16 +2,15 @@
 # Do NOT add a top-level `version:` key (modern compose).
 #
 # Operator flow:
-#   1. scp ongrid-<ver>.tar.gz vps:~/
-#   2. ssh vps 'tar xzf ongrid-*.tar.gz && cd ongrid-* && sudo ./install.sh'
+#   1. scp ongrid-<ver>.tar.xz vps:~/
+#   2. ssh vps 'tar xf ongrid-*.tar.xz && cd ongrid-* && sudo ./install.sh'
 #
 # install.sh copies this file + frontier.yaml + prometheus.yml + edge/ to
-# /opt/ongrid, renders .env, docker-load the ongrid image, and brings the
-# stack up. The frontier image is pulled from Docker Hub on `compose up`
-# (see ADR-007 — ongrid no longer ships a custom broker binary).
+# /opt/ongrid, renders .env, pulls all runtime images from CNB, and brings
+# the stack up.
 #
 # Differences vs deploy/docker-compose.yml (which is for local dev):
-#   - ongrid image is loaded via `docker load -i images/ongrid.tar`; no build stanza.
+#   - ongrid and Web images are pulled from the versioned CNB repositories.
 #   - MySQL port 3306 is NOT published to host (container-network only).
 #   - All secrets come from .env (no hard-coded defaults for passwords).
 #   - prometheus is a core service (ADR-009): it receives remote_write
@@ -20,7 +19,7 @@
 
 services:
   mysql:
-    image: mysql:8.0
+    image: docker.cnb.cool/ongridio/ongrid/mysql:8.0
     container_name: ongrid-mysql
     restart: unless-stopped
     environment:
@@ -51,7 +50,7 @@ services:
         max-file: "5"
 
   ongrid:
-    image: ongrid:${ONGRID_VERSION}
+    image: docker.cnb.cool/ongridio/ongrid:${ONGRID_VERSION}
     container_name: ongrid
     restart: unless-stopped
     depends_on:
@@ -285,7 +284,7 @@ services:
   # Image bakes web/dist/ in; nginx.conf and certs/ are bind-mounted so
   # operators can edit them without rebuilding the image.
   nginx:
-    image: ongrid-web:${ONGRID_VERSION}
+    image: docker.cnb.cool/ongridio/ongrid/ongrid-web:${ONGRID_VERSION}
     container_name: ongrid-nginx
     restart: unless-stopped
     depends_on:
@@ -312,7 +311,7 @@ services:
   # tool. Not published to host — manager reaches it on the docker network
   # at http://prometheus:9090/prometheus. Retention: 90d / 20GB cap.
   prometheus:
-    image: prom/prometheus:v2.54.0
+    image: docker.cnb.cool/ongridio/ongrid/prometheus:v2.54.0
     container_name: ongrid-prometheus
     restart: unless-stopped
     command:
@@ -354,7 +353,7 @@ services:
   # 3100 — public access flows through nginx /loki/api/v1/push with
   # auth_request → manager edgeauth (ADR-014 §决策).
   loki:
-    image: grafana/loki:3.4.0
+    image: docker.cnb.cool/ongridio/ongrid/loki:3.4.0
     container_name: ongrid-loki
     restart: unless-stopped
     command:
@@ -376,7 +375,7 @@ services:
   # host. Edges push to nginx /v1/traces with auth_request → manager
   # edgeauth (ADR-014 §决策第 1 条); manager Go is NOT on this byte stream.
   tempo:
-    image: grafana/tempo:2.10.0
+    image: docker.cnb.cool/ongridio/ongrid/tempo:2.10.0
     container_name: ongrid-tempo
     restart: unless-stopped
     command:
@@ -401,7 +400,7 @@ services:
   # external port (knowledge-base writes / queries all go through the
   # manager API).
   qdrant:
-    image: qdrant/qdrant:v1.11.3
+    image: docker.cnb.cool/ongridio/ongrid/qdrant:v1.11.3
     container_name: ongrid-qdrant
     restart: unless-stopped
     volumes:
@@ -423,7 +422,7 @@ services:
   # JSON-format API is enabled in settings.yml; SearXNG's secret_key
   # is hard-coded since the service is not exposed publicly.
   searxng:
-    image: searxng/searxng:latest
+    image: docker.cnb.cool/ongridio/ongrid/searxng:latest
     container_name: ongrid-searxng
     restart: unless-stopped
     environment:
@@ -438,7 +437,7 @@ services:
         max-file: "5"
 
   grafana:
-    image: grafana/grafana-oss:11.1.4
+    image: docker.cnb.cool/ongridio/ongrid/grafana-oss:11.1.4
     container_name: ongrid-grafana
     restart: unless-stopped
     depends_on:

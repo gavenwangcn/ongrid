@@ -374,41 +374,6 @@ fi
 
 docker info >/dev/null 2>&1 || { log_error "docker daemon not reachable (permission or not running)"; exit 1; }
 
-# ---------- CN mirror auto-config ----------
-# Probe Docker Hub once. If unreachable (the typical CN-network case), drop
-# a /etc/docker/daemon.json with a battery of well-known CN mirrors. We only
-# touch the file if it does not already specify registry-mirrors — operators
-# who configured their own mirrors get to keep them.
-log_info "checking Docker Hub reachability"
-if ! curl -sS --max-time 5 -o /dev/null https://registry-1.docker.io/v2/ 2>/dev/null; then
-    if [[ -f /etc/docker/daemon.json ]] && grep -q '"registry-mirrors"' /etc/docker/daemon.json; then
-        log_info "Docker Hub unreachable but /etc/docker/daemon.json already has registry-mirrors; leaving alone"
-    else
-        log_warn "Docker Hub unreachable — configuring CN registry mirrors in /etc/docker/daemon.json"
-        mkdir -p /etc/docker
-        if [[ -f /etc/docker/daemon.json ]]; then
-            cp /etc/docker/daemon.json "/etc/docker/daemon.json.bak.$(date +%s)"
-        fi
-        cat > /etc/docker/daemon.json <<'EOF'
-{
-  "registry-mirrors": [
-    "https://docker.1ms.run",
-    "https://docker.mirrors.ustc.edu.cn",
-    "https://hub.rat.dev",
-    "https://docker.m.daocloud.io"
-  ]
-}
-EOF
-        systemctl restart docker 2>/dev/null || true
-        # Wait up to 5s for the daemon to come back; otherwise the next
-        # `docker compose` call races and fails.
-        for _ in 1 2 3 4 5; do
-            docker info >/dev/null 2>&1 && break
-            sleep 1
-        done
-    fi
-fi
-
 docker compose version >/dev/null 2>&1 || { log_error "docker compose v2 not found (need the 'docker compose' subcommand)"; exit 1; }
 
 # ---------- install dir ----------
@@ -599,28 +564,6 @@ if [[ ! -f "$INSTALL_DIR/certs/tls.crt" || ! -f "$INSTALL_DIR/certs/tls.key" ]];
     log_warn "self-signed cert: browsers will warn — replace with a real cert in $INSTALL_DIR/certs/ later"
 fi
 
-# ---------- load docker images ----------
-# Both ongrid (manager) and frontier (broker) images ship in the tarball.
-# Docker Hub pull is unreliable in some networks, so installers should not
-# depend on it. ADR-007 explains the upstream-frontier-shipped-locally choice.
-if [[ -f "$SCRIPT_DIR/images/ongrid.tar" ]]; then
-    log_info "loading ongrid image (docker load)"
-    docker load -i "$SCRIPT_DIR/images/ongrid.tar"
-else
-    log_warn "images/ongrid.tar not found; assuming image already present"
-fi
-if [[ -f "$SCRIPT_DIR/images/frontier.tar" ]]; then
-    log_info "loading frontier broker image (docker load)"
-    docker load -i "$SCRIPT_DIR/images/frontier.tar"
-else
-    log_warn "images/frontier.tar not found; assuming image already present"
-fi
-if [[ -f "$SCRIPT_DIR/images/ongrid-web.tar" ]]; then
-    log_info "loading ongrid-web (frontend + nginx) image (docker load)"
-    docker load -i "$SCRIPT_DIR/images/ongrid-web.tar"
-else
-    log_warn "images/ongrid-web.tar not found; assuming ongrid-web image already present"
-fi
 # Resolve VERSION from VERSION file or .env.example (fallback)
 VERSION_FROM_FILE=""
 if [[ -f "$INSTALL_DIR/VERSION" ]]; then
@@ -630,12 +573,6 @@ if [[ -z "$VERSION_FROM_FILE" ]]; then
     VERSION_FROM_FILE=$(grep -E '^ONGRID_VERSION=' "$SCRIPT_DIR/.env.example" | cut -d= -f2- | tr -d '[:space:]' || true)
 fi
 [[ -n "$VERSION_FROM_FILE" ]] || { log_error "cannot determine ongrid version"; exit 1; }
-
-if ! docker image inspect "ongrid:${VERSION_FROM_FILE}" >/dev/null 2>&1; then
-    log_error "docker image ongrid:${VERSION_FROM_FILE} not found after load"
-    exit 1
-fi
-log_info "ongrid:${VERSION_FROM_FILE} image ready"
 
 # ---------- secret generator ----------
 gen_secret() {
@@ -824,6 +761,27 @@ COMPOSE_ARGS=(--env-file "$ENV_FILE")
 if [[ $PROFILE_MONITORING -eq 1 ]]; then
     COMPOSE_ARGS+=(--profile monitoring)
 fi
+
+# Pull every rendered image before starting anything. All production Compose
+# images live under docker.cnb.cool/ongridio/ongrid; rendering first also
+# validates the generated .env and any operator-provided override file.
+log_info "validating and pulling runtime images from CNB"
+if ! RUNTIME_IMAGES=$(
+    cd "$INSTALL_DIR"
+    docker compose "${COMPOSE_ARGS[@]}" config --images | sort -u
+); then
+    log_error "docker-compose configuration is invalid; no containers were started"
+    exit 1
+fi
+while IFS= read -r image; do
+    [[ -n "$image" ]] || continue
+    log_info "pulling $image"
+    if ! docker pull "$image"; then
+        log_error "required runtime image is unavailable: $image"
+        log_error "fix access to docker.cnb.cool and re-run sudo ./install.sh"
+        exit 1
+    fi
+done <<<"$RUNTIME_IMAGES"
 
 log_info "starting stack: docker compose ${COMPOSE_ARGS[*]} up -d"
 (
