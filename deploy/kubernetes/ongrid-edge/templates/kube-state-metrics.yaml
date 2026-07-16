@@ -1,7 +1,7 @@
 {{- $ksm := default dict .Values.kubeStateMetrics -}}
-{{- if default false $ksm.enabled }}
+{{- if eq (include "ongrid-edge.kubeStateMetricsEnabled" .) "true" }}
 {{- $image := default dict $ksm.image -}}
-{{- $imageRepository := required "kubeStateMetrics.image.repository is required when kubeStateMetrics.enabled=true; use an offline mirror reachable by the cluster" $image.repository -}}
+{{- $imageRepository := default "docker.cnb.cool/ongridio/ongrid-edge/kube-state-metrics" $image.repository -}}
 {{- $resources := default dict $ksm.resources -}}
 {{- $port := default 8080 $ksm.port -}}
 {{- $telemetryPort := default 8081 $ksm.telemetryPort -}}
@@ -9,7 +9,7 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: {{ include "ongrid-edge.kubeStateMetricsServiceAccount" . }}
-  namespace: {{ include "ongrid-edge.namespace" . }}
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "ongrid-edge.labels" . | nindent 4 }}
     app.kubernetes.io/component: kube-state-metrics
@@ -46,13 +46,13 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: {{ include "ongrid-edge.kubeStateMetricsServiceAccount" . }}
-    namespace: {{ include "ongrid-edge.namespace" . }}
+    namespace: {{ .Release.Namespace }}
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: {{ include "ongrid-edge.kubeStateMetricsName" . }}
-  namespace: {{ include "ongrid-edge.namespace" . }}
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "ongrid-edge.labels" . | nindent 4 }}
     app.kubernetes.io/component: kube-state-metrics
@@ -74,7 +74,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "ongrid-edge.kubeStateMetricsName" . }}
-  namespace: {{ include "ongrid-edge.namespace" . }}
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "ongrid-edge.labels" . | nindent 4 }}
     app.kubernetes.io/component: kube-state-metrics

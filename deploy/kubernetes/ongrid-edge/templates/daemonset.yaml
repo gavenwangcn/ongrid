@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: {{ include "ongrid-edge.fullname" . }}-node
-  namespace: {{ include "ongrid-edge.namespace" . }}
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "ongrid-edge.labels" . | nindent 4 }}
     app.kubernetes.io/component: node
@@ -64,7 +64,7 @@ spec:
           workingDir: /
           args:
             - enter-k8s-host
-            - /proc/1/root
+            - /host/root
             - {{ .Values.podSecurity.runAsUser | quote }}
             - {{ .Values.podSecurity.runAsGroup | quote }}
           env:
@@ -139,7 +139,11 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
-              add: ["DAC_READ_SEARCH", "NET_ADMIN", "SETGID", "SETPCAP", "SETUID", "SYS_ADMIN", "SYS_CHROOT", "SYS_PTRACE"]
+              add: ["DAC_READ_SEARCH", "NET_ADMIN", "SETGID", "SETPCAP", "SETUID", "SYS_CHROOT"]
+          volumeMounts:
+            - name: host-root
+              mountPath: /host/root
+              mountPropagation: HostToContainer
       volumes:
         - name: host-root
           hostPath:

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -14,7 +15,11 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const defaultLinuxLastCapability = 63
+const (
+	defaultLinuxLastCapability = 63
+	procHostRoot               = "/proc/1/root"
+	procHostMountNamespace     = "/proc/1/ns/mnt"
+)
 
 var k8sHostCapabilities = []int{
 	unix.CAP_DAC_READ_SEARCH,
@@ -31,11 +36,14 @@ func enterK8sHost(ctx context.Context, hostRoot string, uid, gid int) error {
 	}
 	defer unix.Close(rootFD)
 
-	mountNSFD, err := unix.Open("/proc/1/ns/mnt", unix.O_RDONLY|unix.O_CLOEXEC, 0)
-	if err != nil {
-		return fmt.Errorf("open host mount namespace: %w", err)
+	mountNSFD := -1
+	if requiresHostMountNamespace(hostRoot) {
+		mountNSFD, err = unix.Open(procHostMountNamespace, unix.O_RDONLY|unix.O_CLOEXEC, 0)
+		if err != nil {
+			return fmt.Errorf("open host mount namespace: %w", err)
+		}
+		defer unix.Close(mountNSFD)
 	}
-	defer unix.Close(mountNSFD)
 	lastCapability := linuxLastCapability()
 
 	runtime.LockOSThread()
@@ -43,8 +51,10 @@ func enterK8sHost(ctx context.Context, hostRoot string, uid, gid int) error {
 	if err := unix.Unshare(unix.CLONE_FS); err != nil {
 		return fmt.Errorf("isolate host launcher filesystem context: %w", err)
 	}
-	if err := unix.Setns(mountNSFD, unix.CLONE_NEWNS); err != nil {
-		return fmt.Errorf("enter host mount namespace: %w", err)
+	if mountNSFD >= 0 {
+		if err := unix.Setns(mountNSFD, unix.CLONE_NEWNS); err != nil {
+			return fmt.Errorf("enter host mount namespace: %w", err)
+		}
 	}
 	if err := unix.Fchdir(rootFD); err != nil {
 		return fmt.Errorf("select host root: %w", err)
@@ -62,6 +72,14 @@ func enterK8sHost(ctx context.Context, hostRoot string, uid, gid int) error {
 		return fmt.Errorf("start host edge: %w", err)
 	}
 	return nil
+}
+
+// requiresHostMountNamespace preserves compatibility with older charts that
+// reached the host through hostPID's /proc/1/root. New charts pass the explicit
+// /host/root hostPath mount, which can be chrooted directly without procfs
+// ptrace checks or setns.
+func requiresHostMountNamespace(hostRoot string) bool {
+	return filepath.Clean(hostRoot) == procHostRoot
 }
 
 func linuxLastCapability() int {

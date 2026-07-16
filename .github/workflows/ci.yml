@@ -131,8 +131,11 @@ jobs:
           grep -q -- '- install-k8s-host-runtime' /tmp/ongrid-edge.yaml
           grep -A16 'name: install-host-runtime' /tmp/ongrid-edge.yaml | grep -q 'memory: 128Mi'
           grep -q -- '- enter-k8s-host' /tmp/ongrid-edge.yaml
+          test "$(grep -F -c 'mountPath: /host/root' /tmp/ongrid-edge.yaml)" -eq 2
+          grep -q 'mountPropagation: HostToContainer' /tmp/ongrid-edge.yaml
           grep -A1 'name: ONGRID_EDGE_COLLECTOR_MODE' /tmp/ongrid-edge.yaml | grep -q 'value: "off"'
           grep -q 'add: \["CHOWN", "DAC_OVERRIDE", "FOWNER"\]' /tmp/ongrid-edge.yaml
-          grep -q 'add: \["DAC_READ_SEARCH", "NET_ADMIN", "SETGID", "SETPCAP", "SETUID", "SYS_ADMIN", "SYS_CHROOT", "SYS_PTRACE"\]' /tmp/ongrid-edge.yaml
+          grep -q 'add: \["DAC_READ_SEARCH", "NET_ADMIN", "SETGID", "SETPCAP", "SETUID", "SYS_CHROOT"\]' /tmp/ongrid-edge.yaml
+          ! grep -q 'SYS_ADMIN\|SYS_PTRACE' /tmp/ongrid-edge.yaml
           ! grep -q 'privileged: true' /tmp/ongrid-edge.yaml
           ! grep -q 'supplementalGroups:' /tmp/ongrid-edge.yaml

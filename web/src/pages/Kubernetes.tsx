@@ -32,7 +32,6 @@ import {
   type MutatingProposal,
 } from '@/api/aiops';
 import { createSession } from '@/api/chat';
-import { createPrometheusLaunch } from '@/api/prometheus';
 import {
   listEdges,
   type Edge,
@@ -1696,7 +1695,7 @@ function K8sTelemetryDrilldowns({
 
   const metricsExpr = useMemo(() => {
     if (!clusterID) return '';
-    return `sum by (ongrid_source, namespace, workload_kind, workload_name) (up{cluster_id="${clusterID}",ongrid_source=~"k8s:.*"})`;
+    return `sum by (namespace, phase) (kube_pod_status_phase{cluster_id="${clusterID}",ongrid_source=~"k8s:.*"} == 1)`;
   }, [clusterID]);
   const logsQuery = useMemo(() => {
     if (!clusterID) return '';
@@ -1712,12 +1711,18 @@ function K8sTelemetryDrilldowns({
     setOpening('metrics');
     setError(null);
     try {
-      const launch = await createPrometheusLaunch({
-        expr: metricsExpr,
-        range_input: '1h',
-        step_input: '30s',
+      const base = await fetchGrafanaRootURL();
+      const now = Date.now();
+      const url = buildExploreUrl({
+        base,
+        dsType: 'prometheus',
+        dsUid: 'ongrid-prometheus',
+        query: { expr: metricsExpr, queryType: 'range' },
+        fromMs: now - 60 * 60 * 1000,
+        toMs: now,
+        orgId: grafanaOrgId,
       });
-      window.open(launch.url, '_blank', 'noopener,noreferrer');
+      await openObservabilityUrl(url);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : (e as Error).message);
     } finally {

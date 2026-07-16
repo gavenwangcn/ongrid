@@ -10,10 +10,6 @@
 {{- printf "%s" (include "ongrid-edge.name" .) -}}
 {{- end -}}
 
-{{- define "ongrid-edge.namespace" -}}
-{{- default .Release.Namespace .Values.namespace.name -}}
-{{- end -}}
-
 {{- define "ongrid-edge.labels" -}}
 app.kubernetes.io/name: {{ include "ongrid-edge.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
@@ -48,7 +44,16 @@ ongrid.io/cluster-id: {{ .Values.enrollment.clusterID | quote }}
 {{- if kindIs "bool" $gw.enabled -}}
 {{- if $gw.enabled -}}true{{- else -}}false{{- end -}}
 {{- else -}}
-false
+true
+{{- end -}}
+{{- end -}}
+
+{{- define "ongrid-edge.kubeStateMetricsEnabled" -}}
+{{- $ksm := default dict .Values.kubeStateMetrics -}}
+{{- if kindIs "bool" $ksm.enabled -}}
+{{- if $ksm.enabled -}}true{{- else -}}false{{- end -}}
+{{- else -}}
+true
 {{- end -}}
 {{- end -}}
 
@@ -60,23 +65,21 @@ false
 {{- define "ongrid-edge.kubeStateMetricsEndpoint" -}}
 {{- $ksm := default dict .Values.kubeStateMetrics -}}
 {{- $port := default 8080 $ksm.port -}}
-{{- printf "http://%s.%s.svc:%v/metrics" (include "ongrid-edge.kubeStateMetricsName" .) (include "ongrid-edge.namespace" .) $port -}}
+{{- printf "http://%s.%s.svc:%v/metrics" (include "ongrid-edge.kubeStateMetricsName" .) .Release.Namespace $port -}}
 {{- end -}}
 
 {{- define "ongrid-edge.k8sMetricsEndpoint" -}}
 {{- $controllerMetrics := default dict .Values.controller.metrics -}}
-{{- $ksm := default dict .Values.kubeStateMetrics -}}
 {{- if $controllerMetrics.endpoint -}}
 {{- $controllerMetrics.endpoint -}}
-{{- else if $ksm.enabled -}}
+{{- else if eq (include "ongrid-edge.kubeStateMetricsEnabled" .) "true" -}}
 {{- include "ongrid-edge.kubeStateMetricsEndpoint" . -}}
 {{- end -}}
 {{- end -}}
 
 {{- define "ongrid-edge.k8sMetricsEnabled" -}}
 {{- $controllerMetrics := default dict .Values.controller.metrics -}}
-{{- $ksm := default dict .Values.kubeStateMetrics -}}
-{{- if or (default false $controllerMetrics.enabled) (default false $ksm.enabled) -}}true{{- else -}}false{{- end -}}
+{{- if or (default false $controllerMetrics.enabled) (eq (include "ongrid-edge.kubeStateMetricsEnabled" .) "true") -}}true{{- else -}}false{{- end -}}
 {{- end -}}
 
 {{- define "ongrid-edge.kubeStateMetricsResources" -}}

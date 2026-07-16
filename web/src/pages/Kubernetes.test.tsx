@@ -4,6 +4,7 @@ import { http, HttpResponse } from 'msw';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import KubernetesPage, { KubernetesClusterDetailPage } from './Kubernetes';
+import { invalidateGrafanaRootCache } from '@/lib/drilldown';
 import { server } from '@/test/msw-server';
 
 vi.mock('@/store/me', () => ({
@@ -27,7 +28,7 @@ const cluster = {
   inventory_sync_duration_ms: 51,
   created_at: '2026-06-29T09:00:00Z',
   updated_at: '2026-06-29T10:00:00Z',
-  upgrade_command: "helm upgrade ongrid-edge 'https://manager.example/edge/k8s/ongrid-edge.tgz' --insecure-skip-tls-verify --namespace 'ongrid-system' --reuse-values --set-string manager.publicURL='https://manager.example' --set-string manager.tunnelAddr='manager.example:40012' --set-string manager.tlsInsecure=true",
+  upgrade_command: "helm upgrade ongrid-edge 'oci://helm.cnb.cool/ongridio/ongrid-edge' --version '0.10.0' --namespace 'ongrid-system' --reuse-values --set-string manager.publicURL='https://manager.example' --set-string manager.tunnelAddr='manager.example:40012' --set-string manager.tlsInsecure=true",
 };
 
 function ChatStateProbe() {
@@ -58,6 +59,7 @@ function renderKubernetesDetail(initialEntry = '/kubernetes/1', includeChatRoute
 describe('KubernetesPage', () => {
   beforeEach(() => {
     localStorage.setItem('ongrid-locale', 'zh-CN');
+    invalidateGrafanaRootCache();
     Element.prototype.scrollIntoView = vi.fn();
     server.use(
       http.get('/api/v1/k8s/clusters', () =>
@@ -343,7 +345,7 @@ describe('KubernetesPage', () => {
           bootstrap_token: 'g-token',
           node_bootstrap_token: 'n-token',
           install_command:
-            "helm upgrade --install ongrid-edge 'https://<manager>/edge/k8s/ongrid-edge.tgz' --insecure-skip-tls-verify --namespace ongrid-system --create-namespace --set namespace.create=false --set-string manager.publicURL='https://<manager>' --set-string manager.tunnelAddr='<manager>:40012' --set-string manager.tlsInsecure=true --set-string enrollment.clusterID=4 --set-string enrollment.controllerBootstrapToken='g-token' --set-string enrollment.nodeBootstrapToken='n-token' --set-string mode='full-node'",
+            "helm upgrade --install ongrid-edge 'oci://helm.cnb.cool/ongridio/ongrid-edge' --version '0.10.0' --namespace ongrid-system --create-namespace --set-string manager.publicURL='https://<manager>' --set-string manager.tunnelAddr='<manager>:40012' --set-string manager.tlsInsecure=true --set-string enrollment.clusterID=4 --set-string enrollment.controllerBootstrapToken='g-token' --set-string enrollment.nodeBootstrapToken='n-token' --set-string mode='full-node'",
         });
       }),
     );
@@ -401,6 +403,58 @@ describe('KubernetesPage', () => {
     expect(screen.getAllByText('查询详情').length).toBeGreaterThanOrEqual(3);
   });
 
+  it('K8s 指标使用 Grafana 11 Explore 深链打开 Prometheus 查询', async () => {
+    let launchPayload: { expr?: string } | null = null;
+    const replace = vi.fn();
+    const open = vi.spyOn(window, 'open').mockReturnValue({
+      closed: false,
+      location: { replace },
+    } as unknown as Window);
+    server.use(
+      http.get('/api/v1/system-settings', () => HttpResponse.json({
+        items: [{
+          category: 'grafana',
+          key: 'root_url',
+          value: 'http://grafana:3000/grafana',
+          sensitive: false,
+          updated_at: '2026-06-29T10:00:00Z',
+        }],
+        total: 1,
+      })),
+      http.post('/api/v1/prometheus/launch', async ({ request }) => {
+        launchPayload = await request.json() as { expr?: string };
+        return HttpResponse.json({ url: '/prometheus/graph?g0.expr=up' });
+      }),
+    );
+
+    renderKubernetesDetail('/kubernetes/1');
+
+    const openButtons = await screen.findAllByRole('button', { name: '打开图表' });
+    fireEvent.click(openButtons[0]);
+
+    await waitFor(() => {
+      expect(launchPayload).toEqual({ expr: 'up' });
+      expect(replace).toHaveBeenCalledOnce();
+    });
+    expect(open).toHaveBeenCalledWith('about:blank', '_blank');
+
+    const target = new URL(String(replace.mock.calls[0][0]));
+    expect(target.pathname).toBe('/grafana/explore');
+    expect(target.searchParams.get('schemaVersion')).toBe('1');
+    const panes = JSON.parse(target.searchParams.get('panes') || '{}');
+    expect(panes.og.datasource).toBe('ongrid-prometheus');
+    expect(panes.og.queries[0].datasource).toEqual({
+      type: 'prometheus',
+      uid: 'ongrid-prometheus',
+    });
+    expect(panes.og.queries[0].queryType).toBe('range');
+    expect(panes.og.queries[0].expr).toBe(
+      'sum by (namespace, phase) (kube_pod_status_phase{cluster_id="1",ongrid_source=~"k8s:.*"} == 1)',
+    );
+
+    open.mockRestore();
+  });
+
   it('集群详情提供 Helm 升级命令', async () => {
     renderKubernetesDetail('/kubernetes/1');
 
@@ -408,7 +462,8 @@ describe('KubernetesPage', () => {
 
     expect(screen.getByText('Helm 升级命令')).toBeInTheDocument();
     const command = screen.getByText(/helm upgrade ongrid-edge/);
-    expect(command).toHaveTextContent("'https://manager.example/edge/k8s/ongrid-edge.tgz'");
+    expect(command).toHaveTextContent("'oci://helm.cnb.cool/ongridio/ongrid-edge'");
+    expect(command).toHaveTextContent("--version '0.10.0'");
     expect(command).toHaveTextContent("--namespace 'ongrid-system'");
     expect(command).toHaveTextContent('--reuse-values');
     expect(command).toHaveTextContent("manager.tunnelAddr='manager.example:40012'");
