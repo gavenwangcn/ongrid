@@ -14,6 +14,7 @@ import {
   ChevronLeft,
   Cpu,
   HardDrive,
+  MemoryStick,
   ArrowDownRight,
   ArrowUpRight,
   ExternalLink,
@@ -112,7 +113,7 @@ type PanelData = {
   series: SeriesDescriptor[];
 };
 
-type PanelKey = 'cpu' | 'disk' | 'netRx' | 'netTx';
+type PanelKey = 'cpu' | 'mem' | 'disk' | 'netRx' | 'netTx';
 
 const EMPTY_PANEL: PanelData = { rows: [], series: [] };
 
@@ -129,6 +130,7 @@ export default function EdgeDetailPage() {
 
   const [panels, setPanels] = useState<Record<PanelKey, PanelData>>({
     cpu: EMPTY_PANEL,
+    mem: EMPTY_PANEL,
     disk: EMPTY_PANEL,
     netRx: EMPTY_PANEL,
     netTx: EMPTY_PANEL,
@@ -137,6 +139,7 @@ export default function EdgeDetailPage() {
   const [promErr, setPromErr] = useState<string | null>(null);
   const [hidden, setHidden] = useState<Record<PanelKey, Set<string>>>({
     cpu: new Set(),
+    mem: new Set(),
     disk: new Set(),
     netRx: new Set(),
     netTx: new Set(),
@@ -230,6 +233,12 @@ export default function EdgeDetailPage() {
         expr: `100 * (1 - avg by (device_id, cpu) (rate(node_cpu_seconds_total{${labelSel},mode="idle"}[5m])))`,
         nameLabel: 'cpu',
       },
+      mem: {
+        // Host-wide memory utilization. Collapse scrape/source labels via
+        // avg by (device_id) — same formula as server-detail Grafana panel.
+        expr: `100 * (1 - avg by (device_id) (node_memory_MemAvailable_bytes{${labelSel}} / node_memory_MemTotal_bytes{${labelSel}}))`,
+        nameLabel: 'device_id',
+      },
       disk: {
         // A physical filesystem can be bind-mounted at many paths (notably
         // on container hosts). Collapse mountpoint and source dimensions so
@@ -281,6 +290,7 @@ export default function EdgeDetailPage() {
     const labelSel = `device_id="${deviceID}"`;
     return {
       cpu: `100 * (1 - avg by (device_id, cpu) (rate(node_cpu_seconds_total{${labelSel},mode="idle"}[5m])))`,
+      mem: `100 * (1 - avg by (device_id) (node_memory_MemAvailable_bytes{${labelSel}} / node_memory_MemTotal_bytes{${labelSel}}))`,
       disk: `100 * max by (device_id, device) ((node_filesystem_size_bytes{${labelSel},fstype=~"ext4|xfs|btrfs|zfs|ext3|ext2|f2fs",device=~"(/dev/)?(vd|sd|xvd)[a-z]+[0-9]*|(/dev/)?nvme[0-9]+n[0-9]+(p[0-9]+)?"} - node_filesystem_avail_bytes{${labelSel},fstype=~"ext4|xfs|btrfs|zfs|ext3|ext2|f2fs",device=~"(/dev/)?(vd|sd|xvd)[a-z]+[0-9]*|(/dev/)?nvme[0-9]+n[0-9]+(p[0-9]+)?"}) / node_filesystem_size_bytes{${labelSel},fstype=~"ext4|xfs|btrfs|zfs|ext3|ext2|f2fs",device=~"(/dev/)?(vd|sd|xvd)[a-z]+[0-9]*|(/dev/)?nvme[0-9]+n[0-9]+(p[0-9]+)?"})`,
       netRx: `max by (device_id, device) (rate(node_network_receive_bytes_total{${labelSel}}[5m]))`,
       netTx: `max by (device_id, device) (rate(node_network_transmit_bytes_total{${labelSel}}[5m]))`,
@@ -392,6 +402,23 @@ export default function EdgeDetailPage() {
                 yDomain={[0, 100]}
                 onOpenDrilldown={
                   promExprs ? () => void openDrilldown(promExprs.cpu, 'CPU per core') : undefined
+                }
+              />
+
+              <MultiLinePanel
+                title={tr('内存使用率', 'Memory utilization')}
+                subtitle={tr(
+                  '最近 6 小时 · 1m 粒度 · 整机已用内存占比',
+                  'Last 6h · 1m step · host-wide used memory %',
+                )}
+                icon={MemoryStick}
+                panel={panels.mem}
+                hidden={hidden.mem}
+                onToggle={(k) => toggleSeries('mem', k)}
+                formatValue={(v) => `${v.toFixed(1)}%`}
+                yDomain={[0, 100]}
+                onOpenDrilldown={
+                  promExprs ? () => void openDrilldown(promExprs.mem, 'Memory utilization') : undefined
                 }
               />
 
