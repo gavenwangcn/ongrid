@@ -64,8 +64,6 @@
             }
           },
           "mappings": [],
-          "max": 100,
-          "min": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -113,7 +111,7 @@
             "uid": "ongrid-prometheus"
           },
           "editorMode": "code",
-          "expr": "100 * (1 - avg by (device_id, cpu) (rate(node_cpu_seconds_total{device_id=\"$device_id\",mode=\"idle\"}[5m])))",
+          "expr": "clamp_max(clamp_min(100 * sum by (device_id, cpu) (rate(node_cpu_seconds_total{device_id=\"$device_id\",mode!=\"idle\"}[5m])) / clamp_min(sum by (device_id, cpu) (rate(node_cpu_seconds_total{device_id=\"$device_id\"}[5m])), 1e-9), 0), 100)",
           "legendFormat": "cpu {{cpu}}",
           "range": true,
           "refId": "A"
