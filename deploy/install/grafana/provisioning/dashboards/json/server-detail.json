@@ -113,8 +113,8 @@
             "uid": "ongrid-prometheus"
           },
           "editorMode": "code",
-          "expr": "100 * (1 - avg by (device_id) (rate(node_cpu_seconds_total{device_id=\"$device_id\",mode=\"idle\"}[5m])))",
-          "legendFormat": "CPU",
+          "expr": "100 * (1 - avg by (device_id, cpu) (rate(node_cpu_seconds_total{device_id=\"$device_id\",mode=\"idle\"}[5m])))",
+          "legendFormat": "cpu {{cpu}}",
           "range": true,
           "refId": "A"
         }
