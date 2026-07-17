@@ -2492,7 +2492,18 @@ func main() {
 			EdgeLister:      edgeUC,
 			PromQuerier:     alertPromQuerier,
 			LogQuerier:      alertLogQuerier,
-			Log:             log.With(slog.String("comp", "alert-pipeline")),
+			DeviceIdentityResolver: func(ctx context.Context, deviceID uint64) (managerbizalert.DeviceIdentity, error) {
+				device, err := deviceUC.Get(ctx, deviceID)
+				if err != nil {
+					return managerbizalert.DeviceIdentity{}, err
+				}
+				return managerbizalert.DeviceIdentity{
+					Name:      device.Name,
+					Hostname:  device.Hostname,
+					IPAddress: device.IPAddress,
+				}, nil
+			},
+			Log: log.With(slog.String("comp", "alert-pipeline")),
 		})
 		eg.Go(func() error { return pipelineEval.Loop(egCtx) })
 
