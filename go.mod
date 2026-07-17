@@ -15,6 +15,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/larksuite/oapi-sdk-go/v3 v3.5.4
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
+	github.com/open-dingtalk/dingtalk-stream-sdk-go v0.9.1
 	github.com/prometheus/client_golang v1.20.5
 	github.com/prometheus/client_model v0.6.1
 	github.com/robfig/cron/v3 v3.0.1
@@ -22,11 +23,13 @@ require (
 	github.com/shirou/gopsutil/v3 v3.23.6
 	github.com/singchia/geminio v1.3.0-rc.2
 	github.com/testcontainers/testcontainers-go/modules/mysql v0.42.0
+	github.com/yuin/goldmark v1.8.2
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.68.0
 	go.opentelemetry.io/otel v1.43.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.43.0
 	go.opentelemetry.io/otel/sdk v1.43.0
 	golang.org/x/crypto v0.50.0
+	golang.org/x/net v0.52.0
 	golang.org/x/sync v0.20.0
 	golang.org/x/sys v0.43.0
 	golang.org/x/time v0.15.0
@@ -162,7 +165,6 @@ require (
 	github.com/singchia/frontier v1.2.4
 	github.com/singchia/go-timer/v2 v2.2.2 // indirect
 	github.com/singchia/yafsm v1.0.1 // indirect
-	golang.org/x/net v0.52.0 // indirect
 	golang.org/x/text v0.36.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260401024825-9d38bb4040a9 // indirect
 	modernc.org/libc v1.67.4 // indirect

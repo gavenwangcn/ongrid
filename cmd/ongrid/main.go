@@ -108,6 +108,7 @@ import (
 	managerbizapproval "github.com/ongridio/ongrid/internal/manager/biz/approval"
 	managerbizgrafana "github.com/ongridio/ongrid/internal/manager/biz/grafana"
 	managerbizimbridge "github.com/ongridio/ongrid/internal/manager/biz/imbridge"
+	managerbizimbridgedingtalk "github.com/ongridio/ongrid/internal/manager/biz/imbridge/provider/dingtalk"
 	managerbizimbridgefeishu "github.com/ongridio/ongrid/internal/manager/biz/imbridge/provider/feishu"
 	managerbizimbridgeslack "github.com/ongridio/ongrid/internal/manager/biz/imbridge/provider/slack"
 	managerbizimbridgetelegram "github.com/ongridio/ongrid/internal/manager/biz/imbridge/provider/telegram"
@@ -1486,11 +1487,10 @@ func main() {
 	// logs "no factory for provider — skipping" and the webhook path
 	// is still available as fallback.
 	imbridgeStreamSupervisor := managerbizimbridge.NewStreamSupervisor(imbridgeRepo, imbridgeSvc, log)
-	// Register the Feishu long-connection factory; DingTalk lands in
-	// Without registration the supervisor logs "no
-	// factory for provider — skipping" and the webhook path still
-	// works as fallback.
+	// Register long-connection providers. All connections dial out, so
+	// operators do not need to expose public webhook endpoints.
 	imbridgeStreamSupervisor.RegisterFactory("feishu", managerbizimbridgefeishu.NewStreamFactory(log))
+	imbridgeStreamSupervisor.RegisterFactory("dingtalk", managerbizimbridgedingtalk.NewStreamFactory(log))
 	// Telegram is stream-only (getUpdates long-poll, outbound → proxy-
 	// friendly behind GFW). Sender allowlist enforced in the provider
 	// (ADR-031).
@@ -2564,7 +2564,18 @@ func main() {
 			EdgeLister:      edgeUC,
 			PromQuerier:     alertPromQuerier,
 			LogQuerier:      alertLogQuerier,
-			Log:             log.With(slog.String("comp", "alert-pipeline")),
+			DeviceIdentityResolver: func(ctx context.Context, deviceID uint64) (managerbizalert.DeviceIdentity, error) {
+				device, err := deviceUC.Get(ctx, deviceID)
+				if err != nil {
+					return managerbizalert.DeviceIdentity{}, err
+				}
+				return managerbizalert.DeviceIdentity{
+					Name:      device.Name,
+					Hostname:  device.Hostname,
+					IPAddress: device.IPAddress,
+				}, nil
+			},
+			Log: log.With(slog.String("comp", "alert-pipeline")),
 		})
 		eg.Go(func() error { return pipelineEval.Loop(egCtx) })
 
