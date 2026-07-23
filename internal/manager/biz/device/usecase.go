@@ -132,8 +132,9 @@ func (u *Usecase) UpdateOperatorMeta(ctx context.Context, id uint64, systemName,
 
 // Delete removes an offline device plus its linked Edge identities. Online
 // devices are rejected so a live host cannot lose its access key while it is
-// still connected. The repository owns the database transaction; after it
-// commits, the device-owned topology node is removed as a separate subsystem.
+// still connected. The repository hard-deletes devices, edge_devices, and
+// linked edges in one transaction; after it commits, the device-owned
+// topology node is removed as a separate subsystem.
 func (u *Usecase) Delete(ctx context.Context, id uint64) error {
 	if u.repo == nil {
 		return errs.ErrNotWiredYet

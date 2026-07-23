@@ -468,16 +468,36 @@ func TestDeleteOfflineWithLinkedEdgesCleansEdgesAndCredentials(t *testing.T) {
 	}
 
 	var deletedEdge edgemodel.Edge
-	if err := db.Unscoped().First(&deletedEdge, edge.ID).Error; err != nil {
-		t.Fatalf("load unscoped edge: %v", err)
+	if err := db.Unscoped().First(&deletedEdge, edge.ID).Error; !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("linked edge should be hard-deleted, got err = %v row = %+v", err, deletedEdge)
 	}
-	if deletedEdge.DeletedAt == nil {
-		t.Fatalf("linked edge was not soft-deleted")
+}
+
+func TestDeleteOfflineWithLinkedEdgesCleansEdgeLinkedByDeviceIDPointer(t *testing.T) {
+	db := newDeviceTestDB(t)
+	if err := db.AutoMigrate(&edgemodel.Edge{}); err != nil {
+		t.Fatalf("AutoMigrate edges: %v", err)
 	}
-	if deletedEdge.AccessKeyID != "deleted-1" {
-		t.Fatalf("access key after cleanup = %q, want deleted-1", deletedEdge.AccessKeyID)
+	repo := NewRepo(db)
+	ctx := context.Background()
+
+	dev, err := repo.FindOrCreateByFingerprint(ctx, sampleDevice("delete-pointer-only"))
+	if err != nil {
+		t.Fatalf("create device: %v", err)
 	}
-	if deletedEdge.SecretKeyHash != "" {
-		t.Fatalf("secret hash after cleanup = %q, want empty", deletedEdge.SecretKeyHash)
+	edge := &edgemodel.Edge{AccessKeyID: "ak-pointer-only", SecretKeyHash: "secret-hash", Status: edgemodel.StatusOffline, DeviceID: &dev.ID}
+	if err := db.Create(edge).Error; err != nil {
+		t.Fatalf("create edge: %v", err)
+	}
+
+	if err := repo.DeleteOfflineWithLinkedEdges(ctx, dev.ID); err != nil {
+		t.Fatalf("DeleteOfflineWithLinkedEdges: %v", err)
+	}
+	if _, err := repo.Get(ctx, dev.ID); !errors.Is(err, errs.ErrNotFound) {
+		t.Fatalf("Get deleted device err = %v, want ErrNotFound", err)
+	}
+	var gotEdge edgemodel.Edge
+	if err := db.Unscoped().First(&gotEdge, edge.ID).Error; !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("edge linked only via device_id pointer should be hard-deleted, err = %v", err)
 	}
 }

@@ -427,10 +427,10 @@ func (r *Repo) Delete(ctx context.Context, id uint64) error {
 	return nil
 }
 
-// DeleteOfflineWithLinkedEdges soft-deletes an offline device, its junction
-// rows, and every linked edge identity in one database transaction. Edge
-// credentials are tombstoned before the edge row is soft-deleted so a deleted
-// installation cannot keep a reusable access/secret pair around.
+// DeleteOfflineWithLinkedEdges hard-deletes an offline device, its junction
+// rows, and every linked edge identity in one database transaction. Linked
+// edges are resolved from edge_devices and from edges.device_id so rows
+// missing a junction link (legacy create race) are still removed.
 func (r *Repo) DeleteOfflineWithLinkedEdges(ctx context.Context, id uint64) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var d model.Device
@@ -448,7 +448,10 @@ func (r *Repo) DeleteOfflineWithLinkedEdges(ctx context.Context, id uint64) erro
 		if err := tx.Where("device_id = ?", id).Find(&links).Error; err != nil {
 			return err
 		}
-		edgeIDs := uniqueEdgeIDs(links)
+		edgeIDs, err := collectLinkedEdgeIDs(tx, id, links)
+		if err != nil {
+			return err
+		}
 		if len(edgeIDs) > 0 {
 			var onlineEdges int64
 			if err := tx.Model(&edgemodel.Edge{}).
@@ -460,26 +463,20 @@ func (r *Repo) DeleteOfflineWithLinkedEdges(ctx context.Context, id uint64) erro
 				return fmt.Errorf("%w: linked edge must be offline before device deletion", errs.ErrConflict)
 			}
 		}
-		for _, edgeID := range edgeIDs {
-			res := tx.Unscoped().Model(&edgemodel.Edge{}).
-				Where("id = ?", edgeID).
-				Updates(map[string]any{
-					"access_key_id":   fmt.Sprintf("deleted-%d", edgeID),
-					"secret_key_hash": "",
-				})
-			if res.Error != nil {
-				return res.Error
+		if len(edgeIDs) > 0 && tx.Migrator().HasTable((&edgemodel.PluginConfig{}).TableName()) {
+			if err := tx.Unscoped().Where("edge_id IN ?", edgeIDs).Delete(&edgemodel.PluginConfig{}).Error; err != nil {
+				return fmt.Errorf("delete plugin configs: %w", err)
 			}
 		}
 		if len(edgeIDs) > 0 {
-			if err := tx.Where("id IN ?", edgeIDs).Delete(&edgemodel.Edge{}).Error; err != nil {
+			if err := tx.Unscoped().Where("id IN ?", edgeIDs).Delete(&edgemodel.Edge{}).Error; err != nil {
 				return err
 			}
 		}
-		if err := tx.Where("device_id = ?", id).Delete(&model.EdgeDevice{}).Error; err != nil {
+		if err := tx.Unscoped().Where("device_id = ?", id).Delete(&model.EdgeDevice{}).Error; err != nil {
 			return err
 		}
-		res := tx.Delete(&model.Device{}, id)
+		res := tx.Unscoped().Delete(&model.Device{}, id)
 		if res.Error != nil {
 			return res.Error
 		}
@@ -488,6 +485,31 @@ func (r *Repo) DeleteOfflineWithLinkedEdges(ctx context.Context, id uint64) erro
 		}
 		return nil
 	})
+}
+
+func collectLinkedEdgeIDs(tx *gorm.DB, deviceID uint64, links []*model.EdgeDevice) ([]uint64, error) {
+	edgeIDs := uniqueEdgeIDs(links)
+	var pointerEdgeIDs []uint64
+	if err := tx.Model(&edgemodel.Edge{}).
+		Where("device_id = ?", deviceID).
+		Pluck("id", &pointerEdgeIDs).Error; err != nil {
+		return nil, err
+	}
+	seen := make(map[uint64]struct{}, len(edgeIDs)+len(pointerEdgeIDs))
+	for _, edgeID := range edgeIDs {
+		seen[edgeID] = struct{}{}
+	}
+	for _, edgeID := range pointerEdgeIDs {
+		if edgeID == 0 {
+			continue
+		}
+		if _, ok := seen[edgeID]; ok {
+			continue
+		}
+		seen[edgeID] = struct{}{}
+		edgeIDs = append(edgeIDs, edgeID)
+	}
+	return edgeIDs, nil
 }
 
 func uniqueEdgeIDs(links []*model.EdgeDevice) []uint64 {

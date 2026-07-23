@@ -111,9 +111,10 @@ type Repo interface {
 	// edge deletion cascades through edge usecase instead.
 	Delete(ctx context.Context, id uint64) error
 
-	// DeleteOfflineWithLinkedEdges deletes an offline device and the Edge
-	// identities linked to it in one transaction. It must reject online
-	// devices with ErrConflict so callers never remove a live host.
+	// DeleteOfflineWithLinkedEdges hard-deletes an offline device, its
+	// edge_devices junction rows, and every linked Edge row in one
+	// transaction. It must reject online devices (and online linked
+	// edges) with ErrConflict so callers never remove a live host.
 	DeleteOfflineWithLinkedEdges(ctx context.Context, id uint64) error
 
 	// ReconcileOfflineOrphans flips online=true devices back to offline
