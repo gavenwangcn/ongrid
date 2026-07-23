@@ -180,6 +180,14 @@ resolve_dataplane_probe() {
     fi
 }
 
+# --retry-all-errors requires curl >= 7.71 (2020-07). RHEL/CentOS 7 and
+# some CCE nodes still ship curl 7.29 — detect support instead of failing
+# before the first byte is downloaded.
+CURL_RETRY_ALL_ERRORS=()
+if curl --help 2>&1 | grep -Fq -- '--retry-all-errors'; then
+    CURL_RETRY_ALL_ERRORS=(--retry-all-errors)
+fi
+
 # Large edge artefacts (promtail ~100MB, otelcol ~290MB) need resume + long
 # timeouts; a mid-stream reset otherwise leaves plugins missing silently.
 curl_fetch_file() {
@@ -189,7 +197,7 @@ curl_fetch_file() {
     for attempt in 1 2 3 4 5; do
         if curl "${CURL_TLS_FLAGS[@]}" -fL \
             --connect-timeout 30 --max-time 900 \
-            --retry 2 --retry-all-errors --retry-delay 2 \
+            --retry 2 "${CURL_RETRY_ALL_ERRORS[@]}" --retry-delay 2 \
             -C - -o "$tmp" "$url" && [[ -s "$tmp" ]]; then
             install -m 0755 -o root -g root "$tmp" "$dest"
             rm -f "$tmp"
