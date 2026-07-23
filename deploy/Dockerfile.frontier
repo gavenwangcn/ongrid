@@ -1,6 +1,16 @@
 FROM golang:1.24-alpine AS builder
 
-RUN apk add --no-cache build-base make
+# Optional Alpine mirror (mirrors.aliyun.com / mirrors.tuna.tsinghua.edu.cn).
+# Empty = keep the default dl-cdn.alpinelinux.org repos.
+ARG ALPINE_MIRROR=https://mirrors.aliyun.com
+RUN set -eux; \
+    if [ -n "${ALPINE_MIRROR}" ]; then \
+        sed -i "s|https://dl-cdn.alpinelinux.org/alpine|${ALPINE_MIRROR%/}/alpine|g" /etc/apk/repositories; \
+    fi; \
+    for i in 1 2 3 4 5; do \
+        apk add --no-cache build-base make && break; \
+        [ "$i" = 5 ] && exit 1; echo "apk attempt $i failed, retrying in 5s"; sleep 5; \
+    done
 
 ENV GO111MODULE=on \
     GOPROXY=https://goproxy.cn,https://goproxy.io,https://proxy.golang.org,direct \
@@ -13,9 +23,17 @@ RUN make DESTDIR=/tmp/install all install-frontier
 
 FROM alpine:3.20
 
-RUN apk add --no-cache ca-certificates \
-    && addgroup -S -g 65532 frontier \
-    && adduser -S -D -H -u 65532 -G frontier frontier
+ARG ALPINE_MIRROR=https://mirrors.aliyun.com
+RUN set -eux; \
+    if [ -n "${ALPINE_MIRROR}" ]; then \
+        sed -i "s|https://dl-cdn.alpinelinux.org/alpine|${ALPINE_MIRROR%/}/alpine|g" /etc/apk/repositories; \
+    fi; \
+    for i in 1 2 3 4 5; do \
+        apk add --no-cache ca-certificates && break; \
+        [ "$i" = 5 ] && exit 1; echo "apk attempt $i failed, retrying in 5s"; sleep 5; \
+    done; \
+    grep -q '^frontier:' /etc/group || addgroup -S -g 65532 frontier; \
+    grep -q '^frontier:' /etc/passwd || adduser -S -D -H -u 65532 -G frontier frontier
 
 COPY --from=builder /tmp/install/ /
 

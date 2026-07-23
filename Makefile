@@ -351,6 +351,7 @@ verify-compose-images: ## [test] 渲染并校验 Compose 运行镜像全部按�
 # Release packages and Compose deployments use the existing CNB mirror.
 FRONTIER_SRC     ?= $(HOME)/frontier
 FRONTIER_BUILD_FORCE ?= 1
+ALPINE_MIRROR    ?= https://mirrors.aliyun.com
 
 .PHONY: docker-build-broker
 docker-build-broker: ## [dev] 从上游源码本地构建 singchia/frontier:$(FRONTIER_VERSION)
@@ -363,6 +364,7 @@ docker-build-broker: ## [dev] 从上游源码本地构建 singchia/frontier:$(FR
 			--platform $(PLATFORM) \
 			-t singchia/frontier:$(FRONTIER_VERSION) \
 			-f deploy/Dockerfile.frontier \
+			--build-arg ALPINE_MIRROR=$(ALPINE_MIRROR) \
 			$(DOCKER_BUILD_BROKER_CACHE_ARGS) \
 			--load $(FRONTIER_SRC); \
 	fi

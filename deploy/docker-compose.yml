@@ -226,6 +226,8 @@ services:
       # dockerfile is relative to build context (frontier repo root), not
       # deploy/. Assumes sibling layout: ~/frontier + ~/ongrid.
       dockerfile: ${FRONTIER_DOCKERFILE:-../ongrid/deploy/Dockerfile.frontier}
+      args:
+        ALPINE_MIRROR: ${ALPINE_MIRROR:-https://mirrors.aliyun.com}
     image: singchia/frontier:${FRONTIER_VERSION:-v1.2.5}
     pull_policy: never
     container_name: ongrid-frontier
