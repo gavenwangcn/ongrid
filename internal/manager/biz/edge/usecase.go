@@ -157,6 +157,12 @@ func (u *Usecase) Create(ctx context.Context, p CreateParams, createdBy *uint64)
 	if err := u.repo.Create(ctx, e); err != nil {
 		return nil, fmt.Errorf("create edge: %w", err)
 	}
+	if err := u.seedHostDeviceOnCreate(ctx, e); err != nil {
+		if derr := u.repo.Delete(ctx, e.ID); derr != nil && u.log != nil {
+			u.log.Warn("create edge: rollback after host device seed failed", "edge_id", e.ID, "err", derr)
+		}
+		return nil, fmt.Errorf("seed host device: %w", err)
+	}
 	if u.log != nil {
 		u.log.Info("edge created", "id", e.ID, "name", e.Name, "access_key_id", e.AccessKeyID)
 	}
@@ -164,6 +170,46 @@ func (u *Usecase) Create(ctx context.Context, p CreateParams, createdBy *uint64)
 		u.seedDefaultPlugins(ctx, e.ID)
 	}
 	return &CreateResult{Edge: e, AccessKey: ak, SecretKey: sk}, nil
+}
+
+// seedHostDeviceOnCreate materialises the offline placeholder Device row
+// and edge_devices(host) junction that the SPA device list reads. Without
+// this step Create only wrote edges — the list is device-centric so new
+// credentials vanished until HandleRegister ran (or a boot-time backfill
+// caught up). The placeholder fingerprint matches the migration backfill
+// shape; HandleRegister rebinds it to the real host fingerprint in place.
+func (u *Usecase) seedHostDeviceOnCreate(ctx context.Context, e *model.Edge) error {
+	if u.devices == nil || e == nil || e.ID == 0 {
+		return nil
+	}
+	seed := &devicemodel.Device{
+		Fingerprint:    legacyEdgeFingerprint(e.ID),
+		UserID:         e.CreatedBy,
+		Name:           e.Name,
+		Hostname:       e.Name,
+		SystemName:     e.SystemName,
+		DeviceIP:       e.DeviceIP,
+		EnvironmentTag: e.EnvironmentTag,
+		Online:         false,
+	}
+	dev, err := u.devices.FindOrCreateByFingerprint(ctx, seed)
+	if err != nil {
+		return fmt.Errorf("upsert placeholder device: %w", err)
+	}
+	if u.links != nil {
+		if err := u.links.Link(ctx, e.ID, dev.ID, devicemodel.EdgeDeviceRelationHost); err != nil {
+			return fmt.Errorf("link edge<->device(host): %w", err)
+		}
+	}
+	if err := u.repo.SetDeviceID(ctx, e.ID, dev.ID); err != nil {
+		return fmt.Errorf("set device id: %w", err)
+	}
+	e.DeviceID = &dev.ID
+	return nil
+}
+
+func legacyEdgeFingerprint(edgeID uint64) string {
+	return fmt.Sprintf("legacy:edge:%d", edgeID)
 }
 
 // seedDefaultPlugins drops enabled=true rows for the five out-of-the-box
@@ -483,6 +529,12 @@ func (u *Usecase) HandleRegister(ctx context.Context, edgeID uint64, info tunnel
 	}
 
 	fp := deviceFingerprint(info)
+	// Rebind the UI-create placeholder (legacy:edge:N) to the real host
+	// fingerprint so device.ID / Prom labels stay stable across first register.
+	if err := u.devices.RebindFingerprint(ctx, legacyEdgeFingerprint(edgeID), fp); err != nil && u.log != nil {
+		u.log.Warn("device fingerprint rebind from create placeholder failed",
+			"edge_id", edgeID, "new", fp, "err", err)
+	}
 	// Migrate a device registered under the legacy HostID-derived fingerprint
 	// to the hardware fingerprint (v3) in place — so a host that previously
 	// registered under its gopsutil HostID, then upgrades to an agent that

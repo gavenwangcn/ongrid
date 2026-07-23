@@ -217,9 +217,11 @@ func (d *fakeDeviceRepo) ListSystemEnvironmentPairs(_ context.Context) ([]device
 func (d *fakeDeviceRepo) Delete(_ context.Context, id uint64) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if _, ok := d.byID[id]; !ok {
+	dev, ok := d.byID[id]
+	if !ok {
 		return errs.ErrNotFound
 	}
+	delete(d.byFP, dev.Fingerprint)
 	delete(d.byID, id)
 	return nil
 }
@@ -557,6 +559,47 @@ func TestCreateAcceptsEmptyName(t *testing.T) {
 	}
 }
 
+func TestCreateSeedsHostDevice(t *testing.T) {
+	repo := newFakeRepo()
+	devices := newFakeDeviceRepo()
+	links := newFakeEdgeDeviceRepo()
+	uc := NewUsecase(repo, devices, links, nil)
+	ctx := context.Background()
+
+	res, err := uc.Create(ctx, CreateParams{
+		Name:           "edge-pending",
+		SystemName:     "订单中心",
+		DeviceIP:       "10.0.0.8",
+		EnvironmentTag: devicemodel.EnvProd,
+	}, nil)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if res.Edge.DeviceID == nil {
+		t.Fatal("Edge.DeviceID not set after create")
+	}
+	dev, err := devices.Get(ctx, *res.Edge.DeviceID)
+	if err != nil {
+		t.Fatalf("Get device: %v", err)
+	}
+	if dev.Fingerprint != legacyEdgeFingerprint(res.Edge.ID) {
+		t.Errorf("Fingerprint = %q, want %q", dev.Fingerprint, legacyEdgeFingerprint(res.Edge.ID))
+	}
+	if dev.SystemName != "订单中心" || dev.DeviceIP != "10.0.0.8" || dev.EnvironmentTag != devicemodel.EnvProd {
+		t.Errorf("operator meta = %+v", dev)
+	}
+	if dev.Online {
+		t.Error("placeholder device should start offline")
+	}
+	hostDevID, err := links.LookupHostDevice(ctx, res.Edge.ID)
+	if err != nil {
+		t.Fatalf("LookupHostDevice: %v", err)
+	}
+	if hostDevID != dev.ID {
+		t.Errorf("host device link = %d, want %d", hostDevID, dev.ID)
+	}
+}
+
 func TestListFiltersByStatus(t *testing.T) {
 	repo := newFakeRepo()
 	uc := NewUsecase(repo, nil, nil, nil)
@@ -709,13 +752,18 @@ func TestAuthenticateSuccessReturnsSession(t *testing.T) {
 func TestHandleRegisterUpsertsDeviceAndLinksEdge(t *testing.T) {
 	repo := newFakeRepo()
 	devices := newFakeDeviceRepo()
-	uc := NewUsecase(repo, devices, nil, nil)
+	links := newFakeEdgeDeviceRepo()
+	uc := NewUsecase(repo, devices, links, nil)
 	ctx := context.Background()
 
 	res, err := uc.Create(ctx, CreateParams{Name: "edge-reg"}, nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	if res.Edge.DeviceID == nil {
+		t.Fatal("precondition: create should seed placeholder device")
+	}
+	placeholderID := *res.Edge.DeviceID
 	if res.Edge.Status != model.StatusOffline {
 		t.Fatalf("precondition: want Status=offline, got %q", res.Edge.Status)
 	}
@@ -743,15 +791,28 @@ func TestHandleRegisterUpsertsDeviceAndLinksEdge(t *testing.T) {
 	if after.DeviceID == nil {
 		t.Fatal("Edge.DeviceID not set after register")
 	}
+	if *after.DeviceID != placeholderID {
+		t.Errorf("DeviceID changed across register: got %d want %d", *after.DeviceID, placeholderID)
+	}
 	dev, err := devices.Get(ctx, *after.DeviceID)
 	if err != nil {
 		t.Fatalf("Get device: %v", err)
+	}
+	if dev.Fingerprint == legacyEdgeFingerprint(res.Edge.ID) {
+		t.Errorf("device still carries placeholder fingerprint after register")
 	}
 	if dev.Hostname != info.Hostname || dev.OS != info.OS || dev.Arch != info.Arch || dev.CPUCount != info.CPUCount {
 		t.Errorf("Device facts = %+v, want hostname/os/arch/cpu = %+v", dev, info)
 	}
 	if !dev.Online {
 		t.Errorf("Device.Online = false, want true after register")
+	}
+	hostDevID, err := links.LookupHostDevice(ctx, res.Edge.ID)
+	if err != nil {
+		t.Fatalf("LookupHostDevice: %v", err)
+	}
+	if hostDevID != placeholderID {
+		t.Errorf("host link device_id = %d, want %d", hostDevID, placeholderID)
 	}
 }
 
@@ -861,6 +922,11 @@ func TestDeleteKeepsDeviceWhenAnotherLiveEdgeUsesIt(t *testing.T) {
 	second, err := uc.Create(ctx, CreateParams{Name: "edge-delete-shared-2"}, nil)
 	if err != nil {
 		t.Fatalf("Create second: %v", err)
+	}
+	if second.Edge.DeviceID != nil {
+		if err := links.Unlink(ctx, second.Edge.ID, *second.Edge.DeviceID, devicemodel.EdgeDeviceRelationHost); err != nil {
+			t.Fatalf("Unlink second placeholder: %v", err)
+		}
 	}
 	if err := repo.SetDeviceID(ctx, second.Edge.ID, deviceID); err != nil {
 		t.Fatalf("SetDeviceID second: %v", err)
@@ -1161,6 +1227,16 @@ func TestHandleRegisterMigratesLegacyFingerprintInPlace(t *testing.T) {
 	res, err := uc.Create(ctx, CreateParams{Name: "edge-mig"}, nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
+	}
+	// Drop the UI-create placeholder so this test exercises the pre-upgrade
+	// HostID -> HardwareFingerprint rebind path in isolation.
+	if res.Edge.DeviceID != nil {
+		if err := devices.Delete(ctx, *res.Edge.DeviceID); err != nil {
+			t.Fatalf("delete placeholder: %v", err)
+		}
+		if err := repo.ClearDeviceID(ctx, res.Edge.ID); err != nil {
+			t.Fatalf("clear device id: %v", err)
+		}
 	}
 	// Upgraded agent reports BOTH HostID (info.Fingerprint) and the new
 	// HardwareFingerprint, so the manager can locate the old row and rebind.
