@@ -51,9 +51,9 @@ type ProviderInfo struct {
 // ProvidersResolver supplies a fresh provider catalog at call time. The
 // seam exists so admin-edited DB rows (system_settings.llm.*) flow into
 // the router without a manager restart. The returned slice supersedes
-// any constructor-time providers when set; an empty slice falls back to
-// constructor providers. defaultProvider, when non-empty and present in
-// the slice, becomes the new default.
+// any constructor-time providers when set; a successful empty slice is an
+// authoritative "no providers configured" result. Constructor providers are
+// used only when no resolver exists or the resolver returns an error.
 type ProvidersResolver interface {
 	ResolveProviders(ctx context.Context) (providers []ProviderConfig, defaultProvider string, err error)
 }
@@ -79,19 +79,19 @@ type MultiClient struct {
 	staticDefID string
 	fallback    Client
 
-	// Dynamic provider set — repopulated from the resolver every
-	// resolveTTL. When the resolver returns an empty slice, the static
-	// set is used. nil resolver = static-only (legacy behaviour).
-	resolver       ProvidersResolver
-	difyResolver   DifyConfigResolver
-	resolveTTL     time.Duration
+	// Dynamic provider set — repopulated from the resolver every resolveTTL.
+	// A successful empty result remains authoritative; nil/error uses the
+	// static set for backwards-compatible soft failure.
+	resolver     ProvidersResolver
+	difyResolver DifyConfigResolver
+	resolveTTL   time.Duration
 
 	mu          sync.RWMutex
 	dynSubs     map[string]Client
 	dynInfos    []ProviderInfo
 	dynDefID    string
 	dynLoadedAt time.Time
-	dynActive   bool // true after the first non-empty resolver result
+	dynActive   bool // true after any successful resolver result, including empty
 }
 
 // NewMultiClient builds a router. Providers with empty APIKey are
@@ -138,9 +138,8 @@ func NewMultiClient(providers []ProviderConfig, defaultProvider string, fallback
 
 // SetProvidersResolver wires a dynamic catalog source. Pass nil to clear.
 // The resolver is queried lazily (TTL = 60s) on each Chat / Providers /
-// Default call; an empty result falls back to the static set seeded at
-// construction. This lets cmd/main.go layer DB-backed provider configs
-// over env-seeded defaults without forcing a restart.
+// Default call. A successful empty result disables the static set; only a
+// resolver error falls back to constructor-time providers.
 func (m *MultiClient) SetProvidersResolver(r ProvidersResolver) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -199,11 +198,10 @@ func (m *MultiClient) SetResolveTTL(d time.Duration) {
 	m.mu.Unlock()
 }
 
-// activeSubs / activeInfos / activeDefID return the in-effect catalog,
-// refreshing from the resolver when its TTL has elapsed. When the
-// resolver yields nothing usable, the static set seeded at construction
-// is returned.
-func (m *MultiClient) activeSubs(ctx context.Context) (map[string]Client, []ProviderInfo, string) {
+// activeSubs returns the in-effect catalog and whether the legacy fallback
+// client may be used. A successful resolver result, including empty, is
+// authoritative and disables the constructor-time fallback.
+func (m *MultiClient) activeSubs(ctx context.Context) (map[string]Client, []ProviderInfo, string, bool) {
 	m.mu.RLock()
 	resolver := m.resolver
 	difyResolver := m.difyResolver
@@ -216,14 +214,14 @@ func (m *MultiClient) activeSubs(ctx context.Context) (map[string]Client, []Prov
 	m.mu.RUnlock()
 
 	if resolver == nil {
-		return m.staticSubs, m.staticInfos, m.staticDefID
+		return m.staticSubs, m.staticInfos, m.staticDefID, true
 	}
 	if dynActive && time.Since(loadedAt) < ttl {
-		return subs, infos, defID
+		return subs, infos, defID, false
 	}
 
 	cfgs, def, err := resolver.ResolveProviders(ctx)
-	if err != nil || len(cfgs) == 0 {
+	if err != nil {
 		// Soft-fail: fall back to static set, refresh the timestamp so a
 		// flaky resolver doesn't hammer the DB.
 		m.mu.Lock()
@@ -233,7 +231,7 @@ func (m *MultiClient) activeSubs(ctx context.Context) (map[string]Client, []Prov
 		m.dynInfos = nil
 		m.dynDefID = ""
 		m.mu.Unlock()
-		return m.staticSubs, m.staticInfos, m.staticDefID
+		return m.staticSubs, m.staticInfos, m.staticDefID, true
 	}
 
 	newSubs := make(map[string]Client, len(cfgs))
@@ -273,18 +271,15 @@ func (m *MultiClient) activeSubs(ctx context.Context) (map[string]Client, []Prov
 	m.dynInfos = newInfos
 	m.dynDefID = resolvedDef
 	m.dynLoadedAt = time.Now()
-	m.dynActive = len(newSubs) > 0
+	m.dynActive = true
 	m.mu.Unlock()
 
-	if len(newSubs) == 0 {
-		return m.staticSubs, m.staticInfos, m.staticDefID
-	}
-	return newSubs, newInfos, resolvedDef
+	return newSubs, newInfos, resolvedDef, false
 }
 
-// Invalidate forces the next Chat / Providers / Default call to refresh
-// from the resolver. Called by the LLM settings handler after a PUT so
-// admin edits apply immediately rather than on the next 60s tick.
+// Invalidate forces the next Chat / Providers / Default call to refresh from
+// the resolver. Called after an atomic LLM configuration save so admin edits
+// apply immediately rather than on the next 60s tick.
 func (m *MultiClient) Invalidate() {
 	m.mu.Lock()
 	m.dynLoadedAt = time.Time{}
@@ -298,7 +293,7 @@ func (m *MultiClient) Invalidate() {
 // Providers returns the currently-configured provider catalog.
 // Read-only; safe to share.
 func (m *MultiClient) Providers() []ProviderInfo {
-	_, infos, _ := m.activeSubs(context.Background())
+	_, infos, _, _ := m.activeSubs(context.Background())
 	out := make([]ProviderInfo, len(infos))
 	copy(out, infos)
 	return out
@@ -307,7 +302,7 @@ func (m *MultiClient) Providers() []ProviderInfo {
 // Default returns the default (provider, model) pair. Empty strings
 // when nothing is configured (caller should hide the model selector).
 func (m *MultiClient) Default() (string, string) {
-	_, infos, defID := m.activeSubs(context.Background())
+	_, infos, defID, _ := m.activeSubs(context.Background())
 	if defID == "" {
 		return "", ""
 	}
@@ -324,7 +319,7 @@ func (m *MultiClient) HasProvider(id string) bool {
 	if id == "" {
 		return false
 	}
-	subs, _, _ := m.activeSubs(context.Background())
+	subs, _, _, _ := m.activeSubs(context.Background())
 	_, ok := subs[id]
 	return ok
 }
@@ -340,7 +335,7 @@ func (m *MultiClient) HasProvider(id string) bool {
 // 2026-05-16 was invisible because the legacy metrics inside the sub
 // client tagged everything as "model=..." with no provider label).
 func (m *MultiClient) Chat(ctx context.Context, req ChatReq) (*ChatResp, error) {
-	subs, _, defID := m.activeSubs(ctx)
+	subs, _, defID, allowFallback := m.activeSubs(ctx)
 	id := strings.TrimSpace(req.Provider)
 	if id == "" {
 		id = defID
@@ -354,7 +349,7 @@ func (m *MultiClient) Chat(ctx context.Context, req ChatReq) (*ChatResp, error) 
 
 	switch {
 	case id == "":
-		if m.fallback == nil {
+		if !allowFallback || m.fallback == nil {
 			err = errors.New("llm: no providers configured")
 		} else {
 			resp, err = m.fallback.Chat(ctx, req)
