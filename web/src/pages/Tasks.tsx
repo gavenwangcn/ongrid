@@ -13,14 +13,23 @@ import { fullDateTime } from '@/lib/format';
 import { usePermissions } from '@/store/me';
 import { useI18n } from '@/i18n/locale';
 import { ApiError } from '@/api/client';
+import { listDevices } from '@/api/devices';
+import {
+  ENVIRONMENT_TAGS,
+  ENVIRONMENT_TAG_LABELS,
+  ENVIRONMENT_TAG_LABELS_EN,
+  type EnvironmentTag,
+} from '@/api/environment';
 import { listChannels, type Channel } from '@/api/alerts';
 import {
   createSchedule,
   deleteSchedule,
+  formatReportScope,
   getSchedule,
   runScheduleNow,
   toggleSchedule,
   updateSchedule,
+  uniqueSystemNames,
   type ReportKind,
   type ReportSchedule,
   type ScheduleInput,
@@ -410,20 +419,42 @@ function OneoffForm({ onClose, onCreated }: { onClose(): void; onCreated(task: U
   const { tr } = useI18n();
   const [kind, setKind] = useState<ReportKind>('weekly');
   const [title, setTitle] = useState('');
+  const [systemName, setSystemName] = useState('');
+  const [environmentTag, setEnvironmentTag] = useState<EnvironmentTag | ''>('');
+  const [systemNames, setSystemNames] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    listDevices()
+      .then((r) => {
+        if (!cancelled) setSystemNames(uniqueSystemNames(r.items ?? []));
+      })
+      .catch(() => {
+        if (!cancelled) setSystemNames([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const create = useCallback(async () => {
     setCreating(true);
     setErr(null);
     try {
-      const task = await createOneoffTask({ kind, title: title.trim() || undefined, timezone: DEFAULT_TZ });
+      const task = await createOneoffTask({
+        kind,
+        title: title.trim() || undefined,
+        timezone: DEFAULT_TZ,
+        scope_json: formatReportScope({ system_name: systemName, environment_tag: environmentTag }),
+      });
       onCreated(task);
     } catch (e) {
       setErr(reportActionError(e, tr));
       setCreating(false);
     }
-  }, [kind, title, onCreated, tr]);
+  }, [kind, title, systemName, environmentTag, onCreated, tr]);
 
   return (
     <Modal
@@ -450,6 +481,7 @@ function OneoffForm({ onClose, onCreated }: { onClose(): void; onCreated(task: U
       <div className="space-y-3">
         <p className="text-xs text-zinc-500">
           {tr('立刻生成一份报告，归到一个一次性任务下，不排期、不重复。', 'Generate a report right now under a one-shot task — no schedule, no repeat.')}
+          {tr(' 可选择系统与环境标签，仅统计匹配的设备。', ' Optionally narrow by system and environment tag.')}
         </p>
         <Field label={tr('周期', 'Cadence')}>
           <div className="flex gap-1.5">
@@ -470,6 +502,33 @@ function OneoffForm({ onClose, onCreated }: { onClose(): void; onCreated(task: U
         </Field>
         <Field label={tr('名称（可选）', 'Name (optional)')}>
           <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder={tr('如：临时巡检报告', 'e.g. Ad-hoc inspection report')} className={inputCls} />
+        </Field>
+        <Field label={tr('系统范围', 'System scope')}>
+          <select value={systemName} onChange={(e) => setSystemName(e.target.value)} className={cn(inputCls, 'text-sm')}>
+            <option value="">{tr('全部系统', 'All systems')}</option>
+            {systemNames.map((name) => (
+              <option key={name} value={name}>{name}</option>
+            ))}
+          </select>
+          {systemNames.length === 0 && (
+            <p className="mt-1 text-[11px] text-zinc-600">
+              {tr('未找到已填系统名称的设备；将统计全部设备。', 'No devices with a system name yet — report will cover all devices.')}
+            </p>
+          )}
+        </Field>
+        <Field label={tr('环境标签', 'Environment tag')}>
+          <select
+            value={environmentTag}
+            onChange={(e) => setEnvironmentTag(e.target.value as EnvironmentTag | '')}
+            className={cn(inputCls, 'text-sm')}
+          >
+            <option value="">{tr('全部环境', 'All environments')}</option>
+            {ENVIRONMENT_TAGS.map((tag) => (
+              <option key={tag} value={tag}>
+                {tr(ENVIRONMENT_TAG_LABELS[tag], ENVIRONMENT_TAG_LABELS_EN[tag])}
+              </option>
+            ))}
+          </select>
         </Field>
         {err && <div className="rounded border border-red-700/40 bg-red-900/20 px-2 py-1 text-[11px] text-red-200">{err}</div>}
       </div>
