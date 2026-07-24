@@ -3,6 +3,7 @@ package report
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -345,6 +346,51 @@ func TestExtractJSON(t *testing.T) {
 	for in, want := range cases {
 		if got := extractJSON(in); got != want {
 			t.Errorf("extractJSON(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestReportPromptScaffolding_DailyUsesDayWording(t *testing.T) {
+	loc := time.FixedZone("CST", 8*3600)
+	rpt := &model.Report{
+		Kind:        model.KindDaily,
+		PeriodStart: time.Date(2026, 7, 23, 13, 48, 0, 0, loc),
+		PeriodEnd:   time.Date(2026, 7, 24, 13, 48, 0, 0, loc),
+	}
+	intro := reportIntro(rpt.Kind, false)
+	period := reportPeriodLine(rpt, false)
+	wording := kindWordingDirective(rpt.Kind, false)
+
+	for _, want := range []string{
+		"生成一份日报",
+		"本日（过去 24 小时）",
+		"报告时间范围：2026-07-23 13:48 — 2026-07-24 13:48（日报，过去 24 小时）",
+		"措辞要求（日报）",
+		"禁止写「本周期」「本周」",
+	} {
+		block := intro + period + wording
+		if !strings.Contains(block, want) {
+			t.Errorf("daily scaffolding missing %q\nintro=%q\nperiod=%q\nwording=%q", want, intro, period, wording)
+		}
+	}
+	if strings.Contains(intro, "生成一份周报") {
+		t.Errorf("daily intro must not mention weekly cadence: %q", intro)
+	}
+}
+
+func TestReportPromptScaffolding_WeeklyUsesWeekWording(t *testing.T) {
+	rpt := &model.Report{
+		Kind:        model.KindWeekly,
+		PeriodStart: time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC),
+		PeriodEnd:   time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC),
+	}
+	intro := reportIntro(rpt.Kind, false)
+	wording := kindWordingDirective(rpt.Kind, false)
+
+	for _, want := range []string{"生成一份周报", "下面是本周已经算好", "措辞要求（周报）", "勿写成「本日」"} {
+		block := intro + wording
+		if !strings.Contains(block, want) {
+			t.Errorf("weekly scaffolding missing %q", want)
 		}
 	}
 }

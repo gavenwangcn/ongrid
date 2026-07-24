@@ -401,15 +401,16 @@ func (g *workerGenerator) buildPrompt(rpt *model.Report, facts *ReportFacts) str
 		return zh
 	}
 	var b strings.Builder
-	b.WriteString(mtr(
-		"生成一份运维报告。下面是本周期已经算好的事实数据（数字均为准确值，禁止改动或新增数字）：",
-		"Write an operations report. Below are the pre-computed facts for this period (every number is exact — do NOT change or invent any number):"))
+	b.WriteString(reportIntro(rpt.Kind, en))
 	b.WriteString("\n\n```json\n")
 	b.WriteString(factsJSON(facts))
 	b.WriteString("\n```\n\n")
-	b.WriteString(mtr(
-		fmt.Sprintf("报告周期：%s — %s（%s）。\n", rpt.PeriodStart.Format("2006-01-02"), rpt.PeriodEnd.Format("2006-01-02"), rpt.Kind),
-		fmt.Sprintf("Report period: %s — %s (%s).\n", rpt.PeriodStart.Format("2006-01-02"), rpt.PeriodEnd.Format("2006-01-02"), rpt.Kind)))
+	b.WriteString(reportPeriodLine(rpt, en))
+	if d := kindWordingDirective(rpt.Kind, en); d != "" {
+		b.WriteString("\n")
+		b.WriteString(d)
+		b.WriteString("\n")
+	}
 	if sys := strings.TrimSpace(ParseScope(rpt.ScopeJSON).SystemName); sys != "" {
 		b.WriteString(mtr(
 			fmt.Sprintf("报告范围：系统「%s」（仅统计该系统下设备）。\n", sys),
@@ -435,6 +436,112 @@ func (g *workerGenerator) buildPrompt(rpt *model.Report, facts *ReportFacts) str
 	b.WriteString(RequiredLLMOutputSchema())
 	b.WriteString("\n```\n")
 	return b.String()
+}
+
+// reportIntro is the opening line of the reporter user message, keyed by
+// cadence so daily reports don't inherit weekly "本周期" framing.
+func reportIntro(kind string, en bool) string {
+	mtr := func(zh, eng string) string {
+		if en {
+			return eng
+		}
+		return zh
+	}
+	switch kind {
+	case model.KindDaily:
+		return mtr(
+			"生成一份日报。下面是本日（过去 24 小时）已经算好的事实数据（数字均为准确值，禁止改动或新增数字）：",
+			"Write a daily operations report. Below are the pre-computed facts for the past 24 hours (every number is exact — do NOT change or invent any number):",
+		)
+	case model.KindWeekly:
+		return mtr(
+			"生成一份周报。下面是本周已经算好的事实数据（数字均为准确值，禁止改动或新增数字）：",
+			"Write a weekly operations report. Below are the pre-computed facts for this week (every number is exact — do NOT change or invent any number):",
+		)
+	case model.KindMonthly:
+		return mtr(
+			"生成一份月报。下面是本月已经算好的事实数据（数字均为准确值，禁止改动或新增数字）：",
+			"Write a monthly operations report. Below are the pre-computed facts for this month (every number is exact — do NOT change or invent any number):",
+		)
+	default:
+		return mtr(
+			"生成一份运维报告。下面是本报告周期已经算好的事实数据（数字均为准确值，禁止改动或新增数字）：",
+			"Write an operations report. Below are the pre-computed facts for this reporting window (every number is exact — do NOT change or invent any number):",
+		)
+	}
+}
+
+// reportPeriodLine renders the cadence-aware time window the facts cover.
+func reportPeriodLine(rpt *model.Report, en bool) string {
+	mtr := func(zh, eng string) string {
+		if en {
+			return eng
+		}
+		return zh
+	}
+	start, end := rpt.PeriodStart, rpt.PeriodEnd
+	switch rpt.Kind {
+	case model.KindDaily:
+		return mtr(
+			fmt.Sprintf("报告时间范围：%s — %s（日报，过去 24 小时）。\n",
+				start.Format("2006-01-02 15:04"), end.Format("2006-01-02 15:04")),
+			fmt.Sprintf("Report window: %s — %s (daily, past 24 hours).\n",
+				start.Format("2006-01-02 15:04"), end.Format("2006-01-02 15:04")),
+		)
+	case model.KindWeekly:
+		return mtr(
+			fmt.Sprintf("报告周期：%s — %s（周报）。\n",
+				start.Format("2006-01-02"), end.Format("2006-01-02")),
+			fmt.Sprintf("Report period: %s — %s (weekly).\n",
+				start.Format("2006-01-02"), end.Format("2006-01-02")),
+		)
+	case model.KindMonthly:
+		return mtr(
+			fmt.Sprintf("报告周期：%s — %s（月报）。\n",
+				start.Format("2006-01"), end.Format("2006-01")),
+			fmt.Sprintf("Report period: %s — %s (monthly).\n",
+				start.Format("2006-01"), end.Format("2006-01")),
+		)
+	default:
+		return mtr(
+			fmt.Sprintf("报告时间范围：%s — %s。\n",
+				start.Format("2006-01-02 15:04"), end.Format("2006-01-02 15:04")),
+			fmt.Sprintf("Report window: %s — %s.\n",
+				start.Format("2006-01-02 15:04"), end.Format("2006-01-02 15:04")),
+		)
+	}
+}
+
+// kindWordingDirective tells the model which temporal phrases to use in
+// narrative prose so daily reports read as "本日" rather than "本周期".
+func kindWordingDirective(kind string, en bool) string {
+	mtr := func(zh, eng string) string {
+		if en {
+			return eng
+		}
+		return zh
+	}
+	switch kind {
+	case model.KindDaily:
+		return mtr(
+			"措辞要求（日报）：叙事 headline 与段落须用「本日」「今日」「过去 24 小时」等日报表述；"+
+				"禁止写「本周期」「本周」「上周」「本周内」等周报/周期用语。",
+			"WORDING (daily): Use \"today\", \"the past 24 hours\", or \"in the last day\" in the headline and paragraphs. "+
+				"Do NOT use \"this week\", \"this period\", \"last week\", or other weekly cadence phrasing.",
+		)
+	case model.KindWeekly:
+		return mtr(
+			"措辞要求（周报）：叙事须用「本周」「本周期」等周报表述；勿写成「本日」「今日」。",
+			"WORDING (weekly): Use \"this week\" or \"this reporting week\" in the narrative. Do NOT use \"today\" or \"past 24 hours\".",
+		)
+	case model.KindMonthly:
+		return mtr(
+			"措辞要求（月报）：叙事须用「本月」「本周期」等月报表述；勿写成「本日」「本周」。",
+			"WORDING (monthly): Use \"this month\" in the narrative. Do NOT use \"today\" or \"this week\".",
+		)
+	default:
+		return ""
+	}
 }
 
 func (g *workerGenerator) schemaRetryEnabled() bool {

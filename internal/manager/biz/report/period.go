@@ -26,7 +26,7 @@ type Period struct {
 // that location.
 //
 // Boundaries (HLD-014 §已决, period 边界细节):
-//   - daily   → the full previous calendar day [00:00, 24:00) of fireAt-1d
+//   - daily   → trailing 24h ending at fireAt: [fireAt-24h, fireAt)
 //   - weekly  → the previous ISO week, Monday 00:00 → Sunday 24:00
 //   - monthly → the previous calendar month, 1st 00:00 → next 1st 00:00
 //   - custom  → [prevFireAt, fireAt); caller supplies prevFireAt
@@ -40,11 +40,13 @@ func PeriodFor(kind string, fireAt time.Time, loc *time.Location, prevFireAt tim
 	}
 	f := fireAt.In(loc)
 	switch kind {
-	case model.KindDaily:
-		// Yesterday relative to the fire moment.
-		end := startOfDay(f)              // today 00:00
-		start := end.AddDate(0, 0, -1)    // yesterday 00:00
-		return Period{Start: start, End: end}, nil
+		case model.KindDaily:
+			// Trailing 24h ending at the fire moment — ad-hoc "日报" and
+			// scheduled daily both cover the most recent day of ops activity
+			// relative to when the report is generated/fired.
+			end := f
+			start := end.Add(-24 * time.Hour)
+			return Period{Start: start, End: end}, nil
 	case model.KindWeekly:
 		// Previous ISO week: this week's Monday minus 7 days.
 		thisMon := startOfISOWeek(f)
@@ -83,8 +85,12 @@ func TitleFor(kind string, p Period, locale string) string {
 		return zh
 	}
 	switch kind {
-	case model.KindDaily:
-		return fmt.Sprintf("%s · %s", mtr("日报", "Daily"), p.Start.Format("2006-01-02"))
+		case model.KindDaily:
+			if p.Start.Format("2006-01-02") == p.End.Format("2006-01-02") {
+				return fmt.Sprintf("%s · %s", mtr("日报", "Daily"), p.End.Format("2006-01-02"))
+			}
+			return fmt.Sprintf("%s · %s – %s", mtr("日报", "Daily"),
+				p.Start.Format("2006-01-02 15:04"), p.End.Format("2006-01-02 15:04"))
 	case model.KindWeekly:
 		y, w := p.Start.ISOWeek()
 		return fmt.Sprintf("%s · %d W%02d (%s – %s)", mtr("周报", "Weekly"), y, w,

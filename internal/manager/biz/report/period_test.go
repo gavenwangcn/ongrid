@@ -18,16 +18,19 @@ func mustLoc(t *testing.T, name string) *time.Location {
 
 func TestPeriodFor_Daily(t *testing.T) {
 	loc := mustLoc(t, "Asia/Shanghai")
-	// Fire Mon 2026-06-08 09:00 +08 → covers all of Sun 2026-06-07.
-	fire := time.Date(2026, 6, 8, 9, 0, 0, 0, loc)
+	// Fire Mon 2026-07-24 13:48 +08 → trailing 24h ending at fire time.
+	fire := time.Date(2026, 7, 24, 13, 48, 0, 0, loc)
 	p, err := PeriodFor(model.KindDaily, fire, loc, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantStart := time.Date(2026, 6, 7, 0, 0, 0, 0, loc)
-	wantEnd := time.Date(2026, 6, 8, 0, 0, 0, 0, loc)
+	wantStart := fire.Add(-24 * time.Hour)
+	wantEnd := fire
 	if !p.Start.Equal(wantStart) || !p.End.Equal(wantEnd) {
 		t.Errorf("daily = [%s, %s), want [%s, %s)", p.Start, p.End, wantStart, wantEnd)
+	}
+	if d := p.End.Sub(p.Start); d != 24*time.Hour {
+		t.Errorf("daily duration = %s, want 24h", d)
 	}
 }
 
