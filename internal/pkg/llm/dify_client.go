@@ -44,7 +44,7 @@ func (c DifyConfig) Configured() bool {
 func NewDifyClient(cfg DifyConfig, budget BudgetChecker, reg *prometheus.Registry) Client {
 	log := slog.Default().With(slog.String("component", "llm-dify"))
 	if cfg.Timeout <= 0 {
-		cfg.Timeout = defaultTimeout
+		cfg.Timeout = DefaultTimeout
 	}
 	if strings.TrimSpace(cfg.User) == "" {
 		cfg.User = "ongrid"

@@ -132,24 +132,28 @@ func Install(ctx context.Context, c *Client, w Wiring) error {
 		return fmt.Errorf("frontierbound: Install: MetricIngester is required")
 	}
 
-	authenticateEdge := func(authCtx context.Context, accessKey, secretKey string) (uint64, error) {
+	authnFails := newAuthnFailTracker()
+
+	authenticateEdge := func(authCtx context.Context, accessKey, secretKey string, addr net.Addr) (uint64, error) {
 		sess, err := w.EdgeAuthn.Authenticate(authCtx, accessKey, secretKey)
 		if err != nil {
 			// AccessKeyAuthenticator already collapses all failure paths to
 			// errs.ErrUnauthorized so we don't leak enumeration here.
-			log.Warn("frontierbound: edge authn failed", slog.Any("err", err))
+			// We still log addr + per-addr fail_count to help ops find the
+			// misconfigured host; access_key suffix only when debug is on.
+			logEdgeAuthnFailed(log, authnFails, addr, accessKey, err)
 			return 0, err
 		}
 		return sess.EdgeID, nil
 	}
 
-	resolveEdgeID := func(meta []byte) (uint64, error) {
+	resolveEdgeID := func(meta []byte, addr net.Addr) (uint64, error) {
 		var m tunnel.Meta
 		if err := json.Unmarshal(meta, &m); err != nil {
 			log.Warn("frontierbound: GetEdgeID: bad meta", slog.Any("err", err))
 			return 0, fmt.Errorf("bad meta: %w", err)
 		}
-		edgeID, err := authenticateEdge(ctx, m.AccessKey, m.SecretKey)
+		edgeID, err := authenticateEdge(ctx, m.AccessKey, m.SecretKey, addr)
 		if err != nil {
 			return 0, err
 		}
@@ -163,12 +167,14 @@ func Install(ctx context.Context, c *Client, w Wiring) error {
 	// authentication, and returns the resolved EdgeID. Any failure path
 	// returns 0 + error so frontier rejects the dial — the manager never
 	// allocates anonymous IDs.
-	if err := c.RegisterGetEdgeID(ctx, resolveEdgeID); err != nil {
+	if err := c.RegisterGetEdgeID(ctx, func(meta []byte) (uint64, error) {
+		return resolveEdgeID(meta, nil)
+	}); err != nil {
 		return fmt.Errorf("frontierbound: register GetEdgeID: %w", err)
 	}
 
 	if err := c.RegisterEdgeOnline(ctx, func(edgeID uint64, meta []byte, addr net.Addr) error {
-		canonicalEdgeID, err := resolveEdgeID(meta)
+		canonicalEdgeID, err := resolveEdgeID(meta, addr)
 		if err == nil {
 			c.bindEdgeTransportAt(edgeID, canonicalEdgeID, safeAddr(addr))
 		}

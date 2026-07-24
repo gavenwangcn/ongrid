@@ -29,6 +29,7 @@ import (
 	chatruntime "github.com/ongridio/ongrid/internal/manager/biz/aiops/chatruntime"
 	aiopsmodel "github.com/ongridio/ongrid/internal/manager/model/aiops"
 	alertmodel "github.com/ongridio/ongrid/internal/manager/model/alert"
+	"github.com/ongridio/ongrid/internal/pkg/llm"
 )
 
 // Repo is the persistence contract — implemented by
@@ -203,12 +204,7 @@ func NewUsecase(repo Repo, spawner WorkerSpawner, summarizer LLMSummarizer, cfg 
 		cfg.WorkerTimeout = 5 * time.Minute
 	}
 	if cfg.SummarizerTimeout == 0 {
-		// Unified with the project-wide LLM timeout floor (see
-		// internal/pkg/llm/client.go::defaultTimeout). Was 30 s when
-		// the default model was Haiku-class; bumped to 120 s once the
-		// cluster default moved to slower reasoning models so the
-		// report extractor's structured-JSON pass stops false-failing.
-		cfg.SummarizerTimeout = 120 * time.Second
+		cfg.SummarizerTimeout = llm.DefaultTimeout
 	}
 	if cfg.MinSeverity == "" {
 		cfg.MinSeverity = "warning"

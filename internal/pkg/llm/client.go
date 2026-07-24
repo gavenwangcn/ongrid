@@ -34,20 +34,17 @@ var (
 	ErrNoAPIKey = errors.New("llm: OPENAI_API_KEY not set")
 )
 
-// defaultTimeout is the fallback for callers that build a Chat request
-// without putting a deadline on their context. 120s is the project-wide
-// unification floor — short enough that a stuck request still gives up
-// on a human-grade timescale, long enough that the slowest mainstream
-// reasoning model finishes a tool-rich turn without false-failing
-// (Anthropic Opus 4.x extended, DeepSeek v4 reasoning, GPT-5.x). The
-// 30s prior default broke once the cluster default moved to DeepSeek.
-const defaultTimeout = 120 * time.Second
+// DefaultTimeout is the project-wide LLM chat completion deadline when the
+// caller's context carries no deadline. Five minutes gives slow gateways and
+// large structured-generation prompts (workflow AI, reports) room to finish
+// without false-failing on reasoning models.
+const DefaultTimeout = 5 * time.Minute
 
 // Config is the LLM client configuration.
 //
 // BaseURL is optional and lets us point at Azure / Fireworks / a local vLLM
 // without reshaping the interface. Timeout applies when the caller's ctx has
-// no deadline; default is 30s.
+// no deadline; default is DefaultTimeout (5 minutes).
 type Config struct {
 	APIKey  string
 	Model   string
@@ -167,7 +164,7 @@ func NewWithResolver(cfg Config, resolver Resolver, budget BudgetChecker, reg *p
 	log := slog.Default().With(slog.String("component", "llm"))
 
 	if cfg.Timeout <= 0 {
-		cfg.Timeout = defaultTimeout
+		cfg.Timeout = DefaultTimeout
 	}
 
 	// With no resolver and no env key, fall back to noop so callers see a

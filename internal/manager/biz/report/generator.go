@@ -10,6 +10,7 @@ import (
 
 	"github.com/ongridio/ongrid/internal/manager/biz/aiops/chatruntime"
 	model "github.com/ongridio/ongrid/internal/manager/model/report"
+	"github.com/ongridio/ongrid/internal/pkg/llm"
 )
 
 // WorkerSpawner is the narrow seam onto chatruntime.Runtime that the
@@ -73,7 +74,7 @@ func NewWorkerGenerator(repo Repo, facts FactsCollector, spawner WorkerSpawner, 
 		cfg.Persona = model.DefaultReporterPersona
 	}
 	if cfg.Timeout <= 0 {
-		cfg.Timeout = 120 * time.Second
+		cfg.Timeout = llm.DefaultTimeout
 	}
 	if cfg.DefaultLocale == "" {
 		cfg.DefaultLocale = "en"
