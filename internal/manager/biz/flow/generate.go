@@ -7,7 +7,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/ongridio/ongrid/internal/pkg/errs"
 )
@@ -18,6 +21,12 @@ type GenLLM interface {
 	RunLLM(ctx context.Context, system, user string) (string, error)
 }
 
+// jsonGenLLM is optional — when implemented, GenerateGraph requests
+// json_object output from providers that support it.
+type jsonGenLLM interface {
+	RunLLMJSON(ctx context.Context, system, user string) (string, error)
+}
+
 // WithLLM wires the generation LLM. Returns the usecase for chaining.
 func (u *Usecase) WithLLM(l GenLLM) *Usecase { u.llm = l; return u }
 
@@ -26,6 +35,9 @@ func (u *Usecase) WithLLM(l GenLLM) *Usecase { u.llm = l; return u }
 // CreateInput ready for Create. Best-effort: the graph is validated before
 // returning.
 func (u *Usecase) GenerateGraph(ctx context.Context, prompt string) (CreateInput, error) {
+	start := time.Now()
+	log := u.log.With(slog.String("comp", "flow-generate"))
+
 	if u.llm == nil {
 		return CreateInput{}, fmt.Errorf("%w: workflow generation not wired", errs.ErrNotWiredYet)
 	}
@@ -33,49 +45,216 @@ func (u *Usecase) GenerateGraph(ctx context.Context, prompt string) (CreateInput
 	if prompt == "" {
 		return CreateInput{}, fmt.Errorf("%w: prompt required", errs.ErrInvalid)
 	}
-	out, err := u.llm.RunLLM(ctx, genSystemPrompt(u.ListTools()), prompt)
+	tools := u.ListTools()
+	system := genSystemPrompt(tools)
+	_, jsonMode := u.llm.(jsonGenLLM)
+
+	log.Info("flow generate start",
+		slog.Int("prompt_bytes", len(prompt)),
+		slog.String("prompt_preview", truncateOut(prompt, 200)),
+		slog.Int("tool_count", len(tools)),
+		slog.Bool("json_mode", jsonMode),
+		slog.Int("system_prompt_bytes", len(system)),
+	)
+
+	out, err := u.callGraphLLM(ctx, log, system, prompt, "initial", jsonMode)
 	if err != nil {
+		log.Warn("flow generate llm failed",
+			slog.String("attempt", "initial"),
+			slog.Duration("total_duration", time.Since(start)),
+			slog.Any("err", err),
+		)
 		return CreateInput{}, err
 	}
+	in, parseDiag := parseGeneratedGraphDiag(out)
+	retried := false
+	if parseDiag.err != nil {
+		log.Warn("flow generate parse failed, retrying",
+			slog.String("attempt", "initial"),
+			slog.String("stage", parseDiag.stage),
+			slog.Int("output_bytes", len(out)),
+			slog.Int("extracted_bytes", len(parseDiag.extracted)),
+			slog.String("output_preview", truncateOut(out, 600)),
+			slog.String("extracted_preview", truncateOut(parseDiag.extracted, 800)),
+			slog.String("output_first_rune", firstRuneLabel(out)),
+			slog.Bool("output_starts_with_brace", strings.HasPrefix(strings.TrimSpace(out), "{")),
+			slog.Int("brace_index", strings.IndexByte(out, '{')),
+			slog.Any("err", parseDiag.err),
+		)
+		retryPrompt := prompt + "\n\n你上次返回的不是合法 JSON。请只输出一个 JSON 对象，包含 name、description、graph 三个字段，不要任何解释或 markdown。"
+		retried = true
+		out, err = u.callGraphLLM(ctx, log, system, retryPrompt, "retry", jsonMode)
+		if err != nil {
+			log.Warn("flow generate llm failed",
+				slog.String("attempt", "retry"),
+				slog.Duration("total_duration", time.Since(start)),
+				slog.Any("err", err),
+			)
+			return CreateInput{}, err
+		}
+		in, parseDiag = parseGeneratedGraphDiag(out)
+		if parseDiag.err != nil {
+			log.Warn("flow generate parse failed after retry",
+				slog.String("attempt", "retry"),
+				slog.String("stage", parseDiag.stage),
+				slog.Int("output_bytes", len(out)),
+				slog.Int("extracted_bytes", len(parseDiag.extracted)),
+				slog.String("output_preview", truncateOut(out, 600)),
+				slog.String("extracted_preview", truncateOut(parseDiag.extracted, 800)),
+				slog.String("output_first_rune", firstRuneLabel(out)),
+				slog.Bool("output_starts_with_brace", strings.HasPrefix(strings.TrimSpace(out), "{")),
+				slog.Int("brace_index", strings.IndexByte(out, '{')),
+				slog.Duration("total_duration", time.Since(start)),
+				slog.Any("err", parseDiag.err),
+			)
+			return CreateInput{}, fmt.Errorf("%w: model did not return valid JSON: %v", errs.ErrInvalid, parseDiag.err)
+		}
+	}
+	nodes, edges := graphCounts(in.GraphJSON)
+	log.Info("flow generate done",
+		slog.String("name", in.Name),
+		slog.Int("description_bytes", len(in.Description)),
+		slog.Int("graph_bytes", len(in.GraphJSON)),
+		slog.Int("node_count", nodes),
+		slog.Int("edge_count", edges),
+		slog.Bool("retried", retried),
+		slog.Duration("total_duration", time.Since(start)),
+	)
+	return in, nil
+}
+
+func (u *Usecase) callGraphLLM(ctx context.Context, log *slog.Logger, system, user, attempt string, jsonMode bool) (string, error) {
+	start := time.Now()
+	log.Info("flow generate llm call start",
+		slog.String("attempt", attempt),
+		slog.Bool("json_mode", jsonMode),
+		slog.Int("user_prompt_bytes", len(user)),
+		slog.String("user_prompt_preview", truncateOut(user, 200)),
+	)
+
+	var out string
+	var err error
+	if jsonMode {
+		out, err = u.llm.(jsonGenLLM).RunLLMJSON(ctx, system, user)
+	} else {
+		out, err = u.llm.RunLLM(ctx, system, user)
+	}
+	if err != nil {
+		log.Warn("flow generate llm call error",
+			slog.String("attempt", attempt),
+			slog.Bool("json_mode", jsonMode),
+			slog.Duration("duration", time.Since(start)),
+			slog.Any("err", err),
+		)
+		return "", err
+	}
+
+	extracted := stripCodeFences(out)
+	log.Info("flow generate llm call done",
+		slog.String("attempt", attempt),
+		slog.Bool("json_mode", jsonMode),
+		slog.Duration("duration", time.Since(start)),
+		slog.Int("output_bytes", len(out)),
+		slog.Int("extracted_bytes", len(extracted)),
+		slog.String("output_preview", truncateOut(out, 600)),
+		slog.String("extracted_preview", truncateOut(extracted, 800)),
+		slog.String("output_first_rune", firstRuneLabel(out)),
+		slog.Bool("output_starts_with_brace", strings.HasPrefix(strings.TrimSpace(out), "{")),
+		slog.Int("brace_index", strings.IndexByte(out, '{')),
+	)
+	return out, nil
+}
+
+type graphParseDiag struct {
+	err       error
+	stage     string
+	extracted string
+}
+
+func parseGeneratedGraphDiag(out string) (CreateInput, graphParseDiag) {
+	extracted := stripCodeFences(out)
 	var gen struct {
 		Name        string          `json:"name"`
 		Description string          `json:"description"`
 		Graph       json.RawMessage `json:"graph"`
 	}
-	if err := json.Unmarshal([]byte(stripCodeFences(out)), &gen); err != nil {
-		return CreateInput{}, fmt.Errorf("%w: model did not return valid JSON: %v", errs.ErrInvalid, err)
+	if err := json.Unmarshal([]byte(extracted), &gen); err != nil {
+		return CreateInput{}, graphParseDiag{err: err, stage: "json_unmarshal", extracted: extracted}
 	}
 	graph := strings.TrimSpace(string(gen.Graph))
 	if graph == "" || graph == "null" {
-		return CreateInput{}, fmt.Errorf("%w: model returned no graph", errs.ErrInvalid)
+		return CreateInput{}, graphParseDiag{err: fmt.Errorf("model returned no graph"), stage: "empty_graph", extracted: extracted}
 	}
 	if _, err := ParseGraph(graph); err != nil {
-		return CreateInput{}, fmt.Errorf("%w: generated graph invalid: %v", errs.ErrInvalid, err)
+		return CreateInput{}, graphParseDiag{err: err, stage: "graph_validate", extracted: extracted}
 	}
 	name := strings.TrimSpace(gen.Name)
 	if name == "" {
 		name = "AI 生成的工作流"
 	}
-	return CreateInput{Name: name, Description: strings.TrimSpace(gen.Description), GraphJSON: graph}, nil
+	return CreateInput{Name: name, Description: strings.TrimSpace(gen.Description), GraphJSON: graph},
+		graphParseDiag{extracted: extracted}
 }
 
-// stripCodeFences removes a leading/trailing ```… fence the model may add
-// despite instructions, and trims to the outermost JSON object.
+func parseGeneratedGraph(out string) (CreateInput, error) {
+	in, diag := parseGeneratedGraphDiag(out)
+	if diag.err != nil {
+		return CreateInput{}, diag.err
+	}
+	return in, nil
+}
+
+func graphCounts(graphJSON string) (nodes, edges int) {
+	var g struct {
+		Nodes []json.RawMessage `json:"nodes"`
+		Edges []json.RawMessage `json:"edges"`
+	}
+	if err := json.Unmarshal([]byte(graphJSON), &g); err != nil {
+		return 0, 0
+	}
+	return len(g.Nodes), len(g.Edges)
+}
+
+func firstRuneLabel(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "<empty>"
+	}
+	r, _ := utf8.DecodeRuneInString(s)
+	if r == utf8.RuneError {
+		return "<invalid>"
+	}
+	return fmt.Sprintf("U+%04X %q", r, r)
+}
+
+// stripCodeFences removes markdown fences and trims to the outermost JSON
+// object. Models often prepend Chinese prose or wrap JSON in ``` fences.
 func stripCodeFences(s string) string {
 	s = strings.TrimSpace(s)
-	if strings.HasPrefix(s, "```") {
-		if i := strings.IndexByte(s, '\n'); i >= 0 {
-			s = s[i+1:]
+	if i := strings.Index(s, "```"); i >= 0 {
+		rest := s[i+3:]
+		if nl := strings.IndexByte(rest, '\n'); nl >= 0 {
+			rest = rest[nl+1:]
 		}
-		s = strings.TrimSuffix(strings.TrimSpace(s), "```")
+		if j := strings.Index(rest, "```"); j >= 0 {
+			rest = rest[:j]
+		}
+		s = strings.TrimSpace(rest)
 	}
-	s = strings.TrimSpace(s)
 	if i := strings.IndexByte(s, '{'); i > 0 {
-		if j := strings.LastIndexByte(s, '}'); j > i {
-			s = s[i : j+1]
-		}
+		s = s[i:]
+	}
+	if j := strings.LastIndexByte(s, '}'); j >= 0 && j+1 < len(s) {
+		s = s[:j+1]
 	}
 	return strings.TrimSpace(s)
+}
+
+func truncateOut(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
 }
 
 func genSystemPrompt(tools []ToolMeta) string {

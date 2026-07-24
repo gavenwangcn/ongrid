@@ -1709,10 +1709,11 @@ func main() {
 	// Captured so MCP tools (discovered later, after mcpUC exists) can be
 	// appended to the same dispatch map the flow engine uses.
 	flowInvoker := newFlowToolInvoker(toolsReg, reg)
+	flowLLM := flowLLMRunner{client: llmClient, log: log.With(slog.String("comp", "flow-llm"))}
 	flowExec := managerbizflow.Executors{
 		Tools:  flowInvoker,
 		Notify: flowNotifierShim{channels: alertRepo, router: notifyRouter},
-		LLM:    flowLLMRunner{client: llmClient},
+		LLM:    flowLLM,
 	}
 	if flowRT, ok := aiopsRuntime.(*aiopschatruntime.Runtime); ok && flowRT != nil {
 		flowExec.Agent = flowAgentRunner{rt: flowRT}
@@ -1720,7 +1721,7 @@ func main() {
 	flowUC := managerbizflow.NewUsecase(flowRepo, flowRunRepo,
 		managerbizflow.NewEngine(flowExec, flowRunRepo, log), log).
 		WithToolCatalog(flowToolCatalog{reg: toolsReg}).
-		WithLLM(flowLLMRunner{client: llmClient})
+		WithLLM(flowLLM)
 	flowUC.HealStaleRuns(rootCtx)
 	// HLD-016 triggers: alert dispatcher (auto-start matching flows when an
 	// alert fires) + cron scheduler (time-based flows). Both nil-safe and
@@ -4419,22 +4420,88 @@ func (s flowAgentRunner) RunAgent(ctx context.Context, persona, prompt string) (
 // — one chat completion, no tools, no agent loop. Provider/Model left
 // empty so the call follows the configured default (DefaultResolver),
 // same as the report extractor / RCA summarizer.
-type flowLLMRunner struct{ client llm.Client }
+type flowLLMRunner struct {
+	client llm.Client
+	log    *slog.Logger
+}
 
 func (s flowLLMRunner) RunLLM(ctx context.Context, system, user string) (string, error) {
+	return s.chat(ctx, system, user, nil)
+}
+
+// RunLLMJSON is used by workflow AI generation — requests json_object output
+// when the provider supports it, falling back to plain text on rejection.
+func (s flowLLMRunner) RunLLMJSON(ctx context.Context, system, user string) (string, error) {
+	return s.chat(ctx, system, user, llm.JSONObjectFormat())
+}
+
+func (s flowLLMRunner) chat(ctx context.Context, system, user string, rf *llm.ResponseFormat) (string, error) {
 	if s.client == nil {
 		return "", fmt.Errorf("llm client not configured")
 	}
+	log := s.log
+	if log == nil {
+		log = slog.Default()
+	}
+	jsonMode := rf != nil && rf.Type == "json_object"
 	msgs := make([]llm.Message, 0, 2)
 	if strings.TrimSpace(system) != "" {
 		msgs = append(msgs, llm.Message{Role: "system", Content: system})
 	}
 	msgs = append(msgs, llm.Message{Role: "user", Content: user})
-	resp, err := s.client.Chat(ctx, llm.ChatReq{Messages: msgs})
+	req := llm.ChatReq{Messages: msgs, ResponseFormat: rf}
+	start := time.Now()
+	resp, err := s.client.Chat(ctx, req)
+	if err != nil && rf != nil && isFlowJSONFormatUnsupported(err) {
+		log.Warn("flow llm: json_object unsupported, falling back to plain text",
+			slog.Bool("json_mode", jsonMode),
+			slog.Duration("duration", time.Since(start)),
+			slog.Any("err", err),
+		)
+		req.ResponseFormat = nil
+		start = time.Now()
+		resp, err = s.client.Chat(ctx, req)
+		jsonMode = false
+	}
 	if err != nil {
+		log.Warn("flow llm chat failed",
+			slog.Bool("json_mode", jsonMode),
+			slog.Duration("duration", time.Since(start)),
+			slog.Int("system_bytes", len(system)),
+			slog.Int("user_bytes", len(user)),
+			slog.Any("err", err),
+		)
 		return "", err
 	}
-	return resp.Assistant.Content, nil
+	out := resp.Assistant.Content
+	log.Info("flow llm chat done",
+		slog.Bool("json_mode", jsonMode),
+		slog.Duration("duration", time.Since(start)),
+		slog.Int("system_bytes", len(system)),
+		slog.Int("user_bytes", len(user)),
+		slog.Int("output_bytes", len(out)),
+	)
+	return out, nil
+}
+
+func isFlowJSONFormatUnsupported(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, needle := range []string{
+		"response_format",
+		"json_object",
+		"json_schema",
+		"unsupported",
+		"not supported",
+		"invalid request",
+	} {
+		if strings.Contains(msg, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 // imSenderShim implements aiopstools.IMSender (the send_im_message tool seam)
