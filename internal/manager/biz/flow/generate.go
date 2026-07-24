@@ -8,12 +8,22 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/ongridio/ongrid/internal/pkg/errs"
 )
+
+const maxGraphGenAttempts = 8
+
+// maxGraphGenRetryContext is how many recent failed LLM rounds are embedded
+// in the next retry user message (output excerpt + validation error each).
+const maxGraphGenRetryContext = 2
+
+// maxRetryContextOutputBytes caps each embedded model output in retry context.
+const maxRetryContextOutputBytes = 3000
 
 // GenLLM is the one-shot completion seam used for generation (reuses the same
 // runner the LLM node uses).
@@ -55,60 +65,51 @@ func (u *Usecase) GenerateGraph(ctx context.Context, prompt string) (CreateInput
 		slog.Int("tool_count", len(tools)),
 		slog.Bool("json_mode", jsonMode),
 		slog.Int("system_prompt_bytes", len(system)),
+		slog.Int("max_attempts", maxGraphGenAttempts),
 	)
 
-	out, err := u.callGraphLLM(ctx, log, system, prompt, "initial", jsonMode)
-	if err != nil {
-		log.Warn("flow generate llm failed",
-			slog.String("attempt", "initial"),
-			slog.Duration("total_duration", time.Since(start)),
-			slog.Any("err", err),
-		)
-		return CreateInput{}, err
-	}
-	in, parseDiag := parseGeneratedGraphDiag(out)
-	retried := false
-	if parseDiag.err != nil {
-		log.Warn("flow generate parse failed, retrying",
-			slog.String("attempt", "initial"),
-			slog.String("stage", parseDiag.stage),
-			slog.Int("output_bytes", len(out)),
-			slog.Int("extracted_bytes", len(parseDiag.extracted)),
-			slog.String("output_preview", truncateOut(out, 600)),
-			slog.String("extracted_preview", truncateOut(parseDiag.extracted, 800)),
-			slog.String("output_first_rune", firstRuneLabel(out)),
-			slog.Bool("output_starts_with_brace", strings.HasPrefix(strings.TrimSpace(out), "{")),
-			slog.Int("brace_index", strings.IndexByte(out, '{')),
-			slog.Any("err", parseDiag.err),
-		)
-		retryPrompt := prompt + "\n\n你上次返回的不是合法 JSON。请只输出一个 JSON 对象，包含 name、description、graph 三个字段，不要任何解释或 markdown。"
-		retried = true
-		out, err = u.callGraphLLM(ctx, log, system, retryPrompt, "retry", jsonMode)
+	var (
+		in        CreateInput
+		parseDiag graphParseDiag
+		out       string
+		err       error
+		retried   bool
+		failures  []graphGenFailure
+	)
+	userPrompt := prompt
+	for attempt := 1; attempt <= maxGraphGenAttempts; attempt++ {
+		attemptLabel := graphGenAttemptLabel(attempt)
+		out, err = u.callGraphLLM(ctx, log, system, userPrompt, attemptLabel, jsonMode)
 		if err != nil {
 			log.Warn("flow generate llm failed",
-				slog.String("attempt", "retry"),
+				slog.Int("attempt", attempt),
+				slog.String("attempt_label", attemptLabel),
 				slog.Duration("total_duration", time.Since(start)),
 				slog.Any("err", err),
 			)
 			return CreateInput{}, err
 		}
 		in, parseDiag = parseGeneratedGraphDiag(out)
-		if parseDiag.err != nil {
-			log.Warn("flow generate parse failed after retry",
-				slog.String("attempt", "retry"),
-				slog.String("stage", parseDiag.stage),
-				slog.Int("output_bytes", len(out)),
-				slog.Int("extracted_bytes", len(parseDiag.extracted)),
-				slog.String("output_preview", truncateOut(out, 600)),
-				slog.String("extracted_preview", truncateOut(parseDiag.extracted, 800)),
-				slog.String("output_first_rune", firstRuneLabel(out)),
-				slog.Bool("output_starts_with_brace", strings.HasPrefix(strings.TrimSpace(out), "{")),
-				slog.Int("brace_index", strings.IndexByte(out, '{')),
+		if parseDiag.err == nil {
+			break
+		}
+		if attempt == maxGraphGenAttempts {
+			logParseFailure(log, "final", attempt, out, parseDiag)
+			log.Warn("flow generate parse failed after retries",
+				slog.Int("attempts", maxGraphGenAttempts),
 				slog.Duration("total_duration", time.Since(start)),
 				slog.Any("err", parseDiag.err),
 			)
-			return CreateInput{}, fmt.Errorf("%w: model did not return valid JSON: %v", errs.ErrInvalid, parseDiag.err)
+			return CreateInput{}, fmt.Errorf("%w: model did not return valid workflow graph after %d attempts: %v", errs.ErrInvalid, maxGraphGenAttempts, parseDiag.err)
 		}
+		logParseFailure(log, "retry", attempt, out, parseDiag)
+		retried = true
+		failures = appendGraphGenFailure(failures, graphGenFailure{
+			attempt: attempt,
+			output:  out,
+			diag:    parseDiag,
+		})
+		userPrompt = genRetryUserPrompt(prompt, failures)
 	}
 	nodes, edges := graphCounts(in.GraphJSON)
 	log.Info("flow generate done",
@@ -118,9 +119,17 @@ func (u *Usecase) GenerateGraph(ctx context.Context, prompt string) (CreateInput
 		slog.Int("node_count", nodes),
 		slog.Int("edge_count", edges),
 		slog.Bool("retried", retried),
+		slog.Int("max_attempts", maxGraphGenAttempts),
 		slog.Duration("total_duration", time.Since(start)),
 	)
 	return in, nil
+}
+
+func graphGenAttemptLabel(attempt int) string {
+	if attempt <= 1 {
+		return "initial"
+	}
+	return fmt.Sprintf("retry-%d", attempt-1)
 }
 
 func (u *Usecase) callGraphLLM(ctx context.Context, log *slog.Logger, system, user, attempt string, jsonMode bool) (string, error) {
@@ -169,6 +178,22 @@ type graphParseDiag struct {
 	err       error
 	stage     string
 	extracted string
+}
+
+// graphGenFailure records one LLM round that failed parse/validate, for
+// embedding in the next retry prompt (recent window only).
+type graphGenFailure struct {
+	attempt int
+	output  string
+	diag    graphParseDiag
+}
+
+func appendGraphGenFailure(prev []graphGenFailure, f graphGenFailure) []graphGenFailure {
+	next := append(prev, f)
+	if len(next) > maxGraphGenRetryContext {
+		next = next[len(next)-maxGraphGenRetryContext:]
+	}
+	return next
 }
 
 func parseGeneratedGraphDiag(out string) (CreateInput, graphParseDiag) {
@@ -257,34 +282,125 @@ func truncateOut(s string, n int) string {
 	return s[:n] + "…"
 }
 
+func logParseFailure(log *slog.Logger, phase string, retryNum int, out string, diag graphParseDiag) {
+	log.Warn("flow generate parse failed, retrying",
+		slog.String("phase", phase),
+		slog.Int("retry_num", retryNum),
+		slog.String("stage", diag.stage),
+		slog.Int("output_bytes", len(out)),
+		slog.Int("extracted_bytes", len(diag.extracted)),
+		slog.String("output_preview", truncateOut(out, 600)),
+		slog.String("extracted_preview", truncateOut(diag.extracted, 800)),
+		slog.String("output_first_rune", firstRuneLabel(out)),
+		slog.Bool("output_starts_with_brace", strings.HasPrefix(strings.TrimSpace(out), "{")),
+		slog.Int("brace_index", strings.IndexByte(out, '{')),
+		slog.Any("err", diag.err),
+	)
+}
+
+// genRetryUserPrompt builds the next user message: original demand plus the
+// most recent failed attempts (model output excerpt + validation error), at
+// most maxGraphGenRetryContext rounds, plus fix instructions.
+func genRetryUserPrompt(original string, recent []graphGenFailure) string {
+	var b strings.Builder
+	b.WriteString(original)
+	if len(recent) == 0 {
+		return b.String()
+	}
+	latest := recent[len(recent)-1]
+	b.WriteString("\n\n## 最近失败尝试（仅保留最近 ")
+	fmt.Fprintf(&b, "%d", len(recent))
+	b.WriteString(" 轮，请据此修正）\n")
+	for _, f := range recent {
+		fmt.Fprintf(&b, "\n### 第 %d 次尝试\n", f.attempt)
+		b.WriteString("- 校验阶段：")
+		b.WriteString(f.diag.stage)
+		b.WriteString("\n- 校验错误：")
+		if f.diag.err != nil {
+			b.WriteString(f.diag.err.Error())
+		}
+		b.WriteString("\n- 你当时的模型输出（节选）：\n```json\n")
+		excerpt := f.diag.extracted
+		if excerpt == "" {
+			excerpt = stripCodeFences(f.output)
+		}
+		b.WriteString(truncateOut(excerpt, maxRetryContextOutputBytes))
+		b.WriteString("\n```\n")
+	}
+	b.WriteString("\n## 修正要求\n")
+	b.WriteString(retryFixInstructions(latest.diag))
+	return b.String()
+}
+
+func retryFixInstructions(diag graphParseDiag) string {
+	var b strings.Builder
+	switch diag.stage {
+	case "graph_validate":
+		b.WriteString("graph 不是合法工作流图。请重新输出完整 JSON：graph 必须是 {\"nodes\":[...],\"edges\":[...]}，禁止报告文档结构（title/type/categories/scope/status/inspection_report 等）。\n")
+		b.WriteString("nodes[].type 只能是：")
+		b.WriteString(strings.Join(allowedNodeTypes(), "、"))
+		b.WriteString("。业务「系统」用 tool 节点 query_systems 或 agent 节点，不要自创 system 等类型。\n")
+	default:
+		if diag.stage == "empty_graph" {
+			b.WriteString("graph 为空。graph 必须是 {\"nodes\":[...],\"edges\":[]}，至少包含一个 trigger.manual。\n")
+		} else {
+			b.WriteString("返回的不是合法 JSON。只输出一个 JSON 对象：name、description、graph 三个字段，不要解释或 markdown。\n")
+		}
+		b.WriteString("graph 必须是 {\"nodes\":[...],\"edges\":[...]}；nodes[].type 只能是：")
+		b.WriteString(strings.Join(allowedNodeTypes(), "、"))
+		b.WriteString("。\n")
+	}
+	b.WriteString("只输出修正后的 JSON 对象，不要其他文字。")
+	return b.String()
+}
+
+func allowedNodeTypes() []string {
+	specs := AllNodeSpecs()
+	out := make([]string, 0, len(specs))
+	for _, s := range specs {
+		if s != nil && s.Type != "" {
+			out = append(out, s.Type)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
 func genSystemPrompt(tools []ToolMeta) string {
+	types := strings.Join(allowedNodeTypes(), "、")
 	var b strings.Builder
 	b.WriteString(`你是 ongrid 工作流生成器。把用户的自然语言需求转成一个可运行的工作流图。
 
 只输出一个 JSON 对象，不要任何解释、不要 markdown 代码围栏：
 {"name":"<简短工作流名>","description":"<一句话说明>","graph":{"nodes":[...],"edges":[...]}}
 
-## 图规则
+## 图规则（必须遵守）
+- graph 只能是 {"nodes":[...],"edges":[...]}，是「节点+连线」的工作流图，不是报告 JSON。
+- 禁止在 graph 顶层写 title、type、scope、categories、status、inspection_report 等报告字段。
 - nodes: [{"id":"<短id>","type":"<节点类型>","name":"<简短中文名>","config":{...}}]，edges: [{"id":"<短id>","source":"<id>","target":"<id>","sourcePort":"<可选>"}]
-- 每个节点都要给一个简短、能一眼看懂的 name（如「拉取设备摘要」「分析风险」「生成HTML」「托管网页」），它会显示在画布和运行记录里——不要省略，也不要只用单字母 id 当名字。
+- nodes[].type 只能是：`)
+	b.WriteString(types)
+	b.WriteString(`。禁止自创 type（如 system、device、report、inspection_report 等）。
+- 用户提到的业务「系统 / 平台」用 tool 节点 query_systems（args.system_name）或 agent 节点表达，不是新节点类型。
+- 每个节点都要给一个简短、能一眼看懂的 name，不要省略，也不要只用单字母 id 当名字。
 - 必须有且仅有一个触发器节点做起点（默认 trigger.manual）。
 - 节点间用边连，下游用 {{nodes.<上游id>.output.<字段>}} 引用上游输出（写在 config 的字符串值里）。
 
 ## 节点类型与 config
 - trigger.manual: 手动触发，config {}
-- trigger.cron: 定时，config {"schedule":"0 9 * * *"}
+- trigger.cron: 定时，config {"cron":"0 9 * * *"}
 - trigger.alert_fired: 告警触发，config {"rule":"<规则名包含,可空>"}；可引用 {{trigger.incident_id}}
 - tool: 调工具，config {"tool":"<工具名>","args":{...}}；输出 {{nodes.<id>.output.result}}
-- llm: 一次 LLM，config {"system":"...","prompt":"...支持{{}}"}；输出 {{nodes.<id>.output.answer}}。要结构化加 "output_schema":<JSONSchema>，则可引 output.structured.<字段>
-- agent: 自主 agent，config {"persona":"default","instruction":"...支持{{}}"}；输出 output.answer
-- condition: 分支，config {"expr":"{{nodes.x.output.structured.severity}} == \"critical\""}；两个出口端口 true/false，对应边写 "sourcePort":"true" 或 "false"
-- notify: 发通知，config {"channel_ids":[1],"title":"...","message":"...支持{{}}"}
-- http_request: HTTP，config {"method":"GET","url":"...","headers":{},"body":""}；输出 output.status / output.body
+- llm: 一次 LLM，config {"system":"...","prompt":"...支持{{}}"}；输出 {{nodes.<id>.output.answer}}
+- agent: 自主 agent，config {"persona":"default","instruction":"...支持{{}}"}；可自主多步调工具，适合「巡检某系统所有设备」；输出 output.answer
+- condition: 分支，config {"expr":"..."}；边写 "sourcePort":"true" 或 "false"
+- notify: 发通知，config {"channel_ids":[1],"title":"...","message":"..."}
+- http_request: HTTP，config {"method":"GET","url":"..."}
 - transform: 字段映射，config {"fields":{"<新名>":"{{...}}"}}
 - set: 变量，config {"name":"...","value":"{{...}}"}
 
 ## 报告网页范式（用户要"生成报告/网页/可视化"时）
-最后用 serve_page：先用 llm 节点生成完整 HTML（system 写明"只输出 <!DOCTYPE html> 开头的 HTML、不要解释不要代码围栏"），再 tool serve_page，args {"html":"{{nodes.<llm_id>.output.answer}}","title":"..."}。
+用 llm 或 agent 生成 HTML 分析，再 tool serve_page 托管。
 
 ## 可用工具（tool 节点的 tool 名 + 必填参数；只能用这里的名字）
 `)
@@ -304,10 +420,13 @@ func genSystemPrompt(tools []ToolMeta) string {
 		b.WriteString(line + "\n")
 	}
 	b.WriteString(`
-## 示例（用户："巡检设备1的负载，生成网页报告"）
+## 示例 1（用户："巡检设备1的负载，生成网页报告"）
 {"name":"设备负载巡检报告","description":"取负载 → AI 生成 HTML → 托管网页","graph":{"nodes":[{"id":"t","type":"trigger.manual","name":"手动触发","config":{}},{"id":"a","type":"tool","name":"拉取设备负载","config":{"tool":"get_host_load","args":{"device_ids":[1]}}},{"id":"b","type":"llm","name":"生成报告HTML","config":{"system":"你是网页生成器，只输出完整HTML(<!DOCTYPE html>开头)，不要解释不要代码围栏","prompt":"根据负载数据生成一个报告网页：{{nodes.a.output.result}}"}},{"id":"c","type":"tool","name":"托管网页","config":{"tool":"serve_page","args":{"html":"{{nodes.b.output.answer}}","title":"设备负载报告"}}}],"edges":[{"id":"1","source":"t","target":"a"},{"id":"2","source":"a","target":"b"},{"id":"3","source":"b","target":"c"}]}}
 
-只输出 JSON。工具名必须用上面列出的，参数符合其 schema。`)
+## 示例 2（用户："巡检采购管理平台所有设备的CPU内存磁盘网络，生成报告"）
+{"name":"采购平台资源巡检","description":"Agent 巡检系统设备并生成网页","graph":{"nodes":[{"id":"t","type":"trigger.manual","name":"手动触发","config":{}},{"id":"a","type":"agent","name":"系统资源巡检","config":{"persona":"default","instruction":"巡检采购管理平台系统下所有设备：先用 query_systems(system_name=采购管理平台, include_devices=true) 拿设备清单，再对每台设备用 get_host_load 和 query_promql 收集 CPU/内存/磁盘/网络指标，汇总风险与建议，最后输出完整 HTML 报告(<!DOCTYPE html>开头，不要解释)"}},{"id":"p","type":"tool","name":"托管网页","config":{"tool":"serve_page","args":{"html":"{{nodes.a.output.answer}}","title":"采购平台巡检报告"}}}],"edges":[{"id":"1","source":"t","target":"a"},{"id":"2","source":"a","target":"p"}]}}
+
+只输出 JSON。工具名必须用上面列出的，参数符合其 schema。graph 必须是 nodes+edges 工作流，禁止报告文档结构。`)
 	return b.String()
 }
 
