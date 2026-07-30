@@ -214,6 +214,13 @@ message KubernetesWorkloadSnapshot {
     map<string, string> labels = 7 [json_name = "labels"];
     map<string, string> annotations = 8 [json_name = "annotations"];
     google.protobuf.ListValue conditions = 9 [json_name = "conditions"];
+    int32 active_replicas = 10 [json_name = "active_replicas"];
+    int32 failed_replicas = 11 [json_name = "failed_replicas"];
+    string owner_kind = 12 [json_name = "owner_kind"];
+    string owner_name = 13 [json_name = "owner_name"];
+    string owner_uid = 14 [json_name = "owner_uid"];
+    int64 revision = 15 [json_name = "revision"];
+    google.protobuf.Timestamp creation_timestamp = 16 [json_name = "creation_timestamp"];
 }
 
 message KubernetesPodSnapshot {

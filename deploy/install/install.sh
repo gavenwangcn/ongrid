@@ -23,6 +23,14 @@ log_info()  { printf '%s[INFO]%s %s\n'  "$C_GREEN"  "$C_RESET" "$*"; }
 log_warn()  { printf '%s[WARN]%s %s\n'  "$C_YELLOW" "$C_RESET" "$*"; }
 log_error() { printf '%s[ERROR]%s %s\n' "$C_RED"    "$C_RESET" "$*" >&2; }
 
+PUBLIC_URL_LIB="$SCRIPT_DIR/public-url.sh"
+if [[ ! -r "$PUBLIC_URL_LIB" ]]; then
+    log_error "install package is missing public-url.sh"
+    exit 1
+fi
+# shellcheck source=public-url.sh
+source "$PUBLIC_URL_LIB"
+
 generate_self_signed_tls_cert() {
     local cert_dir="$1"
     local cert_file="$cert_dir/tls.crt"
@@ -667,33 +675,21 @@ fi
 # (10.0.4.17 et al), which remote edges cannot route to. We try each big
 # cloud's metadata service in turn (they NAT the public/EIP onto the host),
 # then a couple of public probes, then fall back to the internal-IP guess.
-detect_public_ip() {
-    local ip=""
-    # Tencent Cloud
-    ip=$(curl -sS --max-time 2 http://metadata.tencentyun.com/latest/meta-data/public-ipv4 2>/dev/null || true)
-    if [[ -n "$ip" && "$ip" != "null" ]]; then echo "$ip"; return; fi
-    # Aliyun (EIP)
-    ip=$(curl -sS --max-time 2 http://100.100.100.200/latest/meta-data/eipv4 2>/dev/null || true)
-    if [[ -n "$ip" ]]; then echo "$ip"; return; fi
-    # AWS / GCP / Azure (IMDSv1; AWS v2 needs a token but most VMs still allow v1)
-    ip=$(curl -sS --max-time 2 http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || true)
-    if [[ -n "$ip" ]]; then echo "$ip"; return; fi
-    # Public probe (last network-resort)
-    ip=$(curl -sS --max-time 3 https://api.ipify.org 2>/dev/null || true)
-    if [[ -n "$ip" ]]; then echo "$ip"; return; fi
-    ip=$(curl -sS --max-time 3 https://ifconfig.me 2>/dev/null || true)
-    if [[ -n "$ip" ]]; then echo "$ip"; return; fi
-    # Internal-IP fallback (preserves old behaviour)
-    ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' || true)
-    echo "$ip"
-}
-
 if is_blank ONGRID_PUBLIC_URL; then
     # ---- best-guess default host: cloud metadata → public probe → internal NIC ----
-    HOST_FOR_URL="$(detect_public_ip | tr -d '[:space:]')"
+    HOST_FOR_URL="$(ongrid_detect_public_ipv4 || true)"
+    if [[ -z "$HOST_FOR_URL" ]]; then
+        route_ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' || true)
+        route_ip=$(printf '%s' "$route_ip" | tr -d '[:space:]')
+        if ongrid_is_valid_ipv4 "$route_ip"; then
+            HOST_FOR_URL="$route_ip"
+        fi
+    fi
     if [[ -z "$HOST_FOR_URL" ]]; then
         if h=$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -v '^127\.' | grep -v '^$' | head -1); then
-            HOST_FOR_URL="$h"
+            if ongrid_is_valid_ipv4 "$h"; then
+                HOST_FOR_URL="$h"
+            fi
         fi
     fi
     if [[ -z "$HOST_FOR_URL" ]]; then
@@ -729,8 +725,20 @@ the detected default, or type the correct address." \
         log_warn "no interactive terminal and ONGRID_PUBLIC_URL unset; auto-set to ${RESOLVED_PUBLIC_URL}"
         log_warn "if that is an INTERNAL address your remote edges can't reach, edit ${ENV_FILE} and restart"
     fi
+    if ! ongrid_is_valid_public_url "$RESOLVED_PUBLIC_URL"; then
+        log_error "invalid ONGRID_PUBLIC_URL; expected http(s)://host[:port]"
+        log_error "set a URL reachable from edge nodes and re-run sudo ./install.sh"
+        exit 1
+    fi
     fill_blank ONGRID_PUBLIC_URL "$RESOLVED_PUBLIC_URL"
     log_info "ONGRID_PUBLIC_URL=${RESOLVED_PUBLIC_URL} (edit .env to change)"
+fi
+
+CONFIGURED_PUBLIC_URL=$(grep -E '^ONGRID_PUBLIC_URL=' "$ENV_FILE" 2>/dev/null | tail -n 1 | cut -d= -f2- || true)
+if ! ongrid_is_valid_public_url "$CONFIGURED_PUBLIC_URL"; then
+    log_error "invalid ONGRID_PUBLIC_URL in ${ENV_FILE}; expected http(s)://host[:port]"
+    log_error "set a URL reachable from edge nodes and re-run sudo ./install.sh"
+    exit 1
 fi
 ensure_tunnel_addr_env
 

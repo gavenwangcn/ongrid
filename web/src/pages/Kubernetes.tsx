@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   Activity,
@@ -6,6 +6,9 @@ import {
   ArrowLeft,
   BarChart3,
   Check,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Clipboard,
   ExternalLink,
   FileText,
@@ -58,7 +61,7 @@ import {
 import { useI18n } from '@/i18n/locale';
 import { cn } from '@/lib/cn';
 import { buildExploreUrl, fetchGrafanaRootURL, openObservabilityUrl } from '@/lib/drilldown';
-import { formatNumber, relativeTime } from '@/lib/format';
+import { formatNumber, fullDateTime, relativeTime } from '@/lib/format';
 import { usePoll } from '@/lib/usePoll';
 import { useObservability } from '@/store/observability';
 import { usePermissions } from '@/store/me';
@@ -328,8 +331,11 @@ export function KubernetesClusterDetailPage() {
   const detailTabs = useMemo(() => detailTabsForCluster(cluster), [cluster]);
   const awaitingConnection = isClusterAwaitingConnection(cluster);
   const [nodes, setNodes] = useState<KubernetesNode[]>([]);
+  const [issueNodes, setIssueNodes] = useState<KubernetesNode[]>([]);
   const [workloads, setWorkloads] = useState<KubernetesWorkload[]>([]);
+  const [issueWorkloads, setIssueWorkloads] = useState<KubernetesWorkload[]>([]);
   const [pods, setPods] = useState<KubernetesPod[]>([]);
+  const [issuePods, setIssuePods] = useState<KubernetesPod[]>([]);
   const [crashLoopPods, setCrashLoopPods] = useState<KubernetesPod[]>([]);
   const [events, setEvents] = useState<KubernetesEvent[]>([]);
   const [warningEvents, setWarningEvents] = useState<KubernetesEvent[]>([]);
@@ -339,6 +345,7 @@ export function KubernetesClusterDetailPage() {
   const [actionProposalTotal, setActionProposalTotal] = useState(0);
   const [actionAuditError, setActionAuditError] = useState<string | null>(null);
   const [totals, setTotals] = useState<ResourceTotals>({ nodes: 0, workloads: 0, pods: 0, events: 0 });
+  const [issueResourceTotals, setIssueResourceTotals] = useState({ nodes: 0, workloads: 0, pods: 0 });
   const [crashLoopTotal, setCrashLoopTotal] = useState(0);
   const [healthSummary, setHealthSummary] = useState<KubernetesClusterHealth | null>(null);
   const [loading, setLoading] = useState(true);
@@ -353,11 +360,13 @@ export function KubernetesClusterDetailPage() {
   const [resourceIssueOnly, setResourceIssueOnly] = useState(false);
   const [resourceActionDecision, setResourceActionDecision] = useState<ActionDecisionFilter>('all');
   const [resourceActionType, setResourceActionType] = useState('all');
-  const [resourceLimit, setResourceLimit] = useState(RESOURCE_PAGE_SIZE);
+  const [resourcePage, setResourcePage] = useState(1);
+  const [workloadVisibleTotal, setWorkloadVisibleTotal] = useState(0);
   const [serverFilteredResources, setServerFilteredResources] = useState<ServerFilteredResources | null>(null);
   const [resourceFilterLoading, setResourceFilterLoading] = useState(false);
   const [resourceFilterError, setResourceFilterError] = useState<string | null>(null);
   const [resourceFilterRetryNonce, setResourceFilterRetryNonce] = useState(0);
+  const [resourceFilterRefreshNonce, setResourceFilterRefreshNonce] = useState(0);
 
   const refresh = useCallback(async (opts?: { silent?: boolean }) => {
     if (!clusterId) return;
@@ -376,12 +385,29 @@ export function KubernetesClusterDetailPage() {
         : listEdges()
           .then((out) => buildEdgeVersionMap(out.items ?? []))
           .catch(() => ({}));
-      const [clusterOut, healthOut, nodesOut, workloadsOut, podsOut, crashLoopPodsOut, eventsOut, warningEventsOut, auditOut, edgeVersionMap] = await Promise.all([
+      const [
+        clusterOut,
+        healthOut,
+        nodesOut,
+        issueNodesOut,
+        workloadsOut,
+        issueWorkloadsOut,
+        podsOut,
+        issuePodsOut,
+        crashLoopPodsOut,
+        eventsOut,
+        warningEventsOut,
+        auditOut,
+        edgeVersionMap,
+      ] = await Promise.all([
         getKubernetesCluster(clusterId),
         getKubernetesClusterHealth(clusterId),
         listKubernetesNodes(clusterId, { limit: RESOURCE_PAGE_SIZE }),
-        listKubernetesWorkloads(clusterId, { limit: RESOURCE_PAGE_SIZE }),
+        listKubernetesNodes(clusterId, { issue_only: true, limit: RESOURCE_PAGE_SIZE }),
+        listKubernetesWorkloads(clusterId, { group_replica_sets: true, limit: RESOURCE_PAGE_SIZE }),
+        listKubernetesWorkloads(clusterId, { issue_only: true, group_replica_sets: true, limit: RESOURCE_PAGE_SIZE }),
         listKubernetesPods(clusterId, { limit: RESOURCE_PAGE_SIZE }),
+        listKubernetesPods(clusterId, { issue_only: true, limit: RESOURCE_PAGE_SIZE }),
         listKubernetesPods(clusterId, { reason: 'CrashLoopBackOff', limit: 20 }),
         listKubernetesEvents(clusterId, { limit: RESOURCE_PAGE_SIZE }),
         listKubernetesEvents(clusterId, { issue_only: true, limit: 100 }),
@@ -391,21 +417,32 @@ export function KubernetesClusterDetailPage() {
       setCluster(clusterOut);
       setHealthSummary(healthOut);
       setNodes(nodesOut.items ?? []);
+      setIssueNodes(issueNodesOut.items ?? []);
       setWorkloads(workloadsOut.items ?? []);
+      setIssueWorkloads(issueWorkloadsOut.items ?? []);
       setPods(podsOut.items ?? []);
+      setIssuePods(issuePodsOut.items ?? []);
       setCrashLoopPods(crashLoopPodsOut.items ?? []);
       setEvents(eventsOut.items ?? []);
+      const visibleWorkloadsTotal = workloadsOut.total ?? (workloadsOut.items?.length ?? 0);
+      setWorkloadVisibleTotal(visibleWorkloadsTotal);
       const warningItems = (warningEventsOut.items ?? []).filter(isWarningK8sEvent);
       setWarningEvents(warningItems);
       setWarningEventTotal(warningEventsOut.total ?? warningItems.length);
       if (edgeVersionMap) setEdgeVersionsByID(edgeVersionMap);
       setTotals({
         nodes: nodesOut.total ?? (nodesOut.items?.length ?? 0),
-        workloads: workloadsOut.total ?? (workloadsOut.items?.length ?? 0),
+        workloads: visibleWorkloadsTotal,
         pods: podsOut.total ?? (podsOut.items?.length ?? 0),
         events: eventsOut.total ?? (eventsOut.items?.length ?? 0),
       });
+      setIssueResourceTotals({
+        nodes: issueNodesOut.total ?? (issueNodesOut.items?.length ?? 0),
+        workloads: issueWorkloadsOut.total ?? (issueWorkloadsOut.items?.length ?? 0),
+        pods: issuePodsOut.total ?? (issuePodsOut.items?.length ?? 0),
+      });
       setCrashLoopTotal(crashLoopPodsOut.total ?? (crashLoopPodsOut.items?.length ?? 0));
+      setResourceFilterRefreshNonce((value) => value + 1);
       if (auditOut) {
         const clusterIDNum = Number(clusterId);
         const clusterItems = (auditOut.items ?? []).filter((item) => proposalClusterID(item) === clusterIDNum);
@@ -439,7 +476,11 @@ export function KubernetesClusterDetailPage() {
   }, [refresh]);
   usePoll(() => refresh({ silent: true }), POLL_INTERVAL_MS);
 
-  const namespaces = useMemo(() => collectNamespaces(workloads, pods, events), [workloads, pods, events]);
+  const namespaceRows = useMemo(
+    () => buildNamespaceRows(workloads, pods, events, warningEvents, healthSummary?.namespaces),
+    [events, healthSummary?.namespaces, pods, warningEvents, workloads],
+  );
+  const namespaces = useMemo(() => namespaceRows.map((row) => row.namespace), [namespaceRows]);
   const actionTypeOptions = useMemo(() => collectActionTypes(actionProposals), [actionProposals]);
   const resourceFilters = useMemo(
     () => ({
@@ -472,14 +513,33 @@ export function KubernetesClusterDetailPage() {
   useEffect(() => {
     if (resourceQuery === appliedResourceQuery) return;
     const timer = window.setTimeout(() => {
-      setResourceLimit(RESOURCE_PAGE_SIZE);
+      setResourcePage(1);
       setAppliedResourceQuery(resourceQuery);
     }, RESOURCE_SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
   }, [appliedResourceQuery, resourceQuery]);
 
+  const resourceOffset = (resourcePage - 1) * RESOURCE_PAGE_SIZE;
+  const needsServerResourceFetch = activeTabSupportsServerFilter
+    && (filterActive || resourcePage > 1);
+  const serverResourceRequestKey = useMemo(
+    () => JSON.stringify({
+      tab: activeTab,
+      query: resourceFilters.query,
+      namespace: resourceFilters.namespace,
+      issueOnly: resourceFilters.issueOnly,
+      page: resourcePage,
+    }),
+    [
+      activeTab,
+      resourceFilters.issueOnly,
+      resourceFilters.namespace,
+      resourceFilters.query,
+      resourcePage,
+    ],
+  );
+
   useEffect(() => {
-    const needsServerResourceFetch = activeTabSupportsServerFilter && (filterActive || resourceLimit > RESOURCE_PAGE_SIZE);
     if (!clusterId || !needsServerResourceFetch) {
       setServerFilteredResources(null);
       setResourceFilterLoading(false);
@@ -487,27 +547,36 @@ export function KubernetesClusterDetailPage() {
       return;
     }
     let cancelled = false;
-    const params = resourceAPIParams(resourceFilters, resourceLimit);
+    const params = resourceAPIParams(resourceFilters, RESOURCE_PAGE_SIZE, resourceOffset);
+    setServerFilteredResources(null);
+    setResourceFilterError(null);
     setResourceFilterLoading(true);
     const request = activeTab === 'nodes'
       ? listKubernetesNodes(clusterId, params).then((out): ServerFilteredResources => ({
+          requestKey: serverResourceRequestKey,
           tab: 'nodes',
           nodes: out.items ?? [],
           nodesTotal: out.total ?? (out.items?.length ?? 0),
         }))
       : activeTab === 'workloads'
-        ? listKubernetesWorkloads(clusterId, params).then((out): ServerFilteredResources => ({
+        ? listKubernetesWorkloads(clusterId, {
+            ...params,
+            group_replica_sets: true,
+          }).then((out): ServerFilteredResources => ({
+            requestKey: serverResourceRequestKey,
             tab: 'workloads',
             workloads: out.items ?? [],
             workloadsTotal: out.total ?? (out.items?.length ?? 0),
           }))
         : activeTab === 'pods'
           ? listKubernetesPods(clusterId, params).then((out): ServerFilteredResources => ({
+              requestKey: serverResourceRequestKey,
               tab: 'pods',
               pods: out.items ?? [],
               podsTotal: out.total ?? (out.items?.length ?? 0),
             }))
           : listKubernetesEvents(clusterId, params).then((out): ServerFilteredResources => ({
+              requestKey: serverResourceRequestKey,
               tab: 'events',
               events: out.items ?? [],
               eventsTotal: out.total ?? (out.items?.length ?? 0),
@@ -522,6 +591,7 @@ export function KubernetesClusterDetailPage() {
         if (cancelled) return;
         setServerFilteredResources(null);
         setResourceFilterError(e instanceof ApiError ? e.message : (e as Error).message);
+        if (resourcePage > 1) setResourcePage(1);
       })
       .finally(() => {
         if (!cancelled) setResourceFilterLoading(false);
@@ -529,32 +599,91 @@ export function KubernetesClusterDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [activeTab, activeTabSupportsServerFilter, clusterId, filterActive, resourceFilters, resourceFilterRetryNonce, resourceLimit]);
+  }, [
+    activeTab,
+    clusterId,
+    needsServerResourceFetch,
+    resourceFilters,
+    resourceFilterRefreshNonce,
+    resourceFilterRetryNonce,
+    resourceOffset,
+    resourcePage,
+    serverResourceRequestKey,
+  ]);
 
   const visibleNodes = nodes;
   const locallyFilteredNodes = useMemo(() => filterNodes(visibleNodes, localResourceFilters), [localResourceFilters, visibleNodes]);
   const locallyFilteredWorkloads = useMemo(() => filterWorkloads(workloads, localResourceFilters), [localResourceFilters, workloads]);
   const locallyFilteredPods = useMemo(() => filterPods(pods, localResourceFilters), [pods, localResourceFilters]);
   const locallyFilteredEvents = useMemo(() => filterEvents(events, localResourceFilters), [events, localResourceFilters]);
-  const serverResourceActive = Boolean(activeTabSupportsServerFilter && serverFilteredResources?.tab === activeTab && (filterActive || resourceLimit > RESOURCE_PAGE_SIZE));
-  const filteredNodes = serverResourceActive && activeTab === 'nodes' && serverFilteredResources?.nodes ? serverFilteredResources.nodes : locallyFilteredNodes;
-  const filteredWorkloads = serverResourceActive && activeTab === 'workloads' && serverFilteredResources?.workloads ? serverFilteredResources.workloads : locallyFilteredWorkloads;
-  const filteredPods = serverResourceActive && activeTab === 'pods' && serverFilteredResources?.pods ? serverFilteredResources.pods : locallyFilteredPods;
-  const filteredEvents = serverResourceActive && activeTab === 'events' && serverFilteredResources?.events ? serverFilteredResources.events : locallyFilteredEvents;
-  const filteredResourceTotals = serverResourceActive
-    ? {
-        nodes: activeTab === 'nodes' ? (serverFilteredResources?.nodesTotal ?? filteredNodes.length) : locallyFilteredNodes.length,
-        workloads: activeTab === 'workloads' ? (serverFilteredResources?.workloadsTotal ?? filteredWorkloads.length) : locallyFilteredWorkloads.length,
-        pods: activeTab === 'pods' ? (serverFilteredResources?.podsTotal ?? filteredPods.length) : locallyFilteredPods.length,
-        events: activeTab === 'events' ? (serverFilteredResources?.eventsTotal ?? filteredEvents.length) : locallyFilteredEvents.length,
-      }
-    : {
-        nodes: locallyFilteredNodes.length,
-        workloads: locallyFilteredWorkloads.length,
-        pods: locallyFilteredPods.length,
-        events: locallyFilteredEvents.length,
-      };
-  const namespaceRows = useMemo(() => buildNamespaceRows(workloads, pods, events, warningEvents), [events, pods, warningEvents, workloads]);
+  const serverResourceActive = Boolean(
+    needsServerResourceFetch
+      && serverFilteredResources?.tab === activeTab
+      && serverFilteredResources.requestKey === serverResourceRequestKey,
+  );
+  const serverResourcePending = needsServerResourceFetch && !serverResourceActive && !resourceFilterError;
+  const paginatedResourceLoading = resourceFilterLoading || resourceQueryPending || serverResourcePending;
+  const filteredNodes = serverResourcePending && activeTab === 'nodes'
+    ? []
+    : serverResourceActive && activeTab === 'nodes' && serverFilteredResources?.nodes
+      ? serverFilteredResources.nodes
+      : locallyFilteredNodes;
+  const filterMatchedWorkloads = serverResourcePending && activeTab === 'workloads'
+    ? []
+    : serverResourceActive && activeTab === 'workloads' && serverFilteredResources?.workloads
+      ? serverFilteredResources.workloads
+      : locallyFilteredWorkloads;
+  const filteredWorkloads = filterMatchedWorkloads;
+  const filteredPods = serverResourcePending && activeTab === 'pods'
+    ? []
+    : serverResourceActive && activeTab === 'pods' && serverFilteredResources?.pods
+      ? serverFilteredResources.pods
+      : locallyFilteredPods;
+  const filteredEvents = serverResourcePending && activeTab === 'events'
+    ? []
+    : serverResourceActive && activeTab === 'events' && serverFilteredResources?.events
+      ? serverFilteredResources.events
+      : locallyFilteredEvents;
+  const visibleNodeTotal = serverResourceActive && activeTab === 'nodes'
+    ? (serverFilteredResources?.nodesTotal ?? filteredNodes.length)
+    : activeTabFilterActive
+      ? locallyFilteredNodes.length
+      : totals.nodes;
+  const visibleWorkloadTotal = serverResourceActive && activeTab === 'workloads'
+    ? (serverFilteredResources?.workloadsTotal ?? filteredWorkloads.length)
+    : activeTabFilterActive
+      ? filteredWorkloads.length
+      : workloadVisibleTotal;
+  const visiblePodTotal = serverResourceActive && activeTab === 'pods'
+    ? (serverFilteredResources?.podsTotal ?? filteredPods.length)
+    : activeTabFilterActive
+      ? locallyFilteredPods.length
+      : totals.pods;
+  const visibleEventTotal = serverResourceActive && activeTab === 'events'
+    ? (serverFilteredResources?.eventsTotal ?? filteredEvents.length)
+    : activeTabFilterActive
+      ? locallyFilteredEvents.length
+      : totals.events;
+  const filteredResourceTotals = {
+    nodes: visibleNodeTotal,
+    workloads: visibleWorkloadTotal,
+    pods: visiblePodTotal,
+    events: visibleEventTotal,
+  };
+  const activePaginatedTotal = activeTab === 'nodes'
+    ? visibleNodeTotal
+    : activeTab === 'workloads'
+      ? visibleWorkloadTotal
+      : activeTab === 'pods'
+        ? visiblePodTotal
+        : activeTab === 'events'
+          ? visibleEventTotal
+          : 0;
+  useEffect(() => {
+    if (!activeTabSupportsServerFilter || (needsServerResourceFetch && !serverResourceActive)) return;
+    const lastPage = Math.max(1, Math.ceil(activePaginatedTotal / RESOURCE_PAGE_SIZE));
+    setResourcePage((current) => Math.min(current, lastPage));
+  }, [activePaginatedTotal, activeTabSupportsServerFilter, needsServerResourceFetch, serverResourceActive]);
   const filteredNamespaceRows = useMemo(() => filterNamespaceRows(namespaceRows, localResourceFilters), [localResourceFilters, namespaceRows]);
   const filteredActionProposals = useMemo(() => filterActionProposals(actionProposals, localResourceFilters), [actionProposals, localResourceFilters]);
   const resourceFilterHint = useMemo(() => resourceFilterSummary(localResourceFilters, activeTab, tr), [activeTab, localResourceFilters, tr]);
@@ -568,17 +697,17 @@ export function KubernetesClusterDetailPage() {
     return { linked: coverage.edge_linked, total: coverage.total, pct: coverage.percent };
   }, [cluster?.node_edge_coverage]);
   const triageIssues = useMemo(
-    () => buildTriageIssues({ cluster, nodes: visibleNodes, workloads, pods, crashLoopPods, warningEvents, tr }),
-    [cluster, crashLoopPods, pods, tr, visibleNodes, warningEvents, workloads],
+    () => buildTriageIssues({ cluster, nodes: issueNodes, workloads: issueWorkloads, pods: issuePods, crashLoopPods, warningEvents, tr }),
+    [cluster, crashLoopPods, issueNodes, issuePods, issueWorkloads, tr, warningEvents],
   );
   const writeActionRecommendations = useMemo(
-    () => buildWriteActionRecommendations({ nodes: visibleNodes, workloads, pods, crashLoopPods, warningEvents, tr }),
-    [crashLoopPods, pods, tr, visibleNodes, warningEvents, workloads],
+    () => buildWriteActionRecommendations({ nodes: issueNodes, workloads: issueWorkloads, pods: issuePods, crashLoopPods, warningEvents, tr }),
+    [crashLoopPods, issueNodes, issuePods, issueWorkloads, tr, warningEvents],
   );
 
   const openResourceTab = useCallback((tab: DetailTab, opts?: { scroll?: boolean; resetFilters?: boolean }) => {
+    setResourcePage(1);
     if (opts?.resetFilters) {
-      setResourceLimit(RESOURCE_PAGE_SIZE);
       setResourceQuery('');
       setAppliedResourceQuery('');
       setResourceNamespace('all');
@@ -595,7 +724,7 @@ export function KubernetesClusterDetailPage() {
   }, [setSearchParams]);
   const focusResourceIssue = useCallback((issue: K8sTriageIssue) => {
     const focus = resourceFocusForIssue(issue);
-    setResourceLimit(RESOURCE_PAGE_SIZE);
+    setResourcePage(1);
     setResourceQuery(focus.query);
     setAppliedResourceQuery(focus.query);
     setResourceNamespace(focus.namespace);
@@ -603,7 +732,7 @@ export function KubernetesClusterDetailPage() {
     openResourceTab(focus.tab, { scroll: true });
   }, [openResourceTab]);
   const openNamespaceResource = useCallback((namespace: string, tab: 'workloads' | 'pods' | 'events') => {
-    setResourceLimit(RESOURCE_PAGE_SIZE);
+    setResourcePage(1);
     setResourceQuery('');
     setAppliedResourceQuery('');
     setResourceNamespace(namespace || 'default');
@@ -653,34 +782,34 @@ export function KubernetesClusterDetailPage() {
     navigate(`/chat/${session.id}`, { state: { initialPrompt: prompt } });
   }, [cluster, navigate, tr]);
 
-  const loadMoreResources = useCallback(() => {
-    setResourceLimit((current) => current + RESOURCE_PAGE_SIZE);
+  const updateResourcePage = useCallback((page: number) => {
+    setResourcePage(Math.max(1, page));
   }, []);
   const updateResourceQuery = useCallback((value: string) => {
-    setResourceLimit(RESOURCE_PAGE_SIZE);
+    setResourcePage(1);
     setResourceQuery(value);
     if (value.trim() === '') {
       setAppliedResourceQuery('');
     }
   }, []);
   const updateResourceNamespace = useCallback((value: string) => {
-    setResourceLimit(RESOURCE_PAGE_SIZE);
+    setResourcePage(1);
     setResourceNamespace(value);
   }, []);
   const updateResourceIssueOnly = useCallback((value: boolean) => {
-    setResourceLimit(RESOURCE_PAGE_SIZE);
+    setResourcePage(1);
     setResourceIssueOnly(value);
   }, []);
   const updateResourceActionDecision = useCallback((value: ActionDecisionFilter) => {
-    setResourceLimit(RESOURCE_PAGE_SIZE);
+    setResourcePage(1);
     setResourceActionDecision(value);
   }, []);
   const updateResourceActionType = useCallback((value: string) => {
-    setResourceLimit(RESOURCE_PAGE_SIZE);
+    setResourcePage(1);
     setResourceActionType(value);
   }, []);
   const clearResourceFilters = useCallback(() => {
-    setResourceLimit(RESOURCE_PAGE_SIZE);
+    setResourcePage(1);
     setResourceQuery('');
     setAppliedResourceQuery('');
     setResourceNamespace('all');
@@ -825,15 +954,11 @@ export function KubernetesClusterDetailPage() {
                 <ResourceViewHeader
                   activeTab={activeTab}
                   totals={totals}
-                  nodes={visibleNodes}
-                  workloads={workloads}
-                  pods={pods}
-                  crashLoopPods={crashLoopPods}
+                  issueTotals={issueResourceTotals}
                   crashLoopTotal={crashLoopTotal}
-                  events={events}
-                  warningEvents={warningEvents}
                   warningEventTotal={warningEventTotal}
                   namespaces={namespaces}
+                  namespaceRows={namespaceRows}
                   actionProposals={actionProposals}
                   actionProposalTotal={actionProposalTotal}
                   edgeAccess={edgeAccess}
@@ -849,9 +974,20 @@ export function KubernetesClusterDetailPage() {
                   actionType={resourceActionType}
                   actionTypes={actionTypeOptions}
                   filteredCount={detailTabLoadedCount(activeTab, filteredNodes, filteredWorkloads, filteredPods, filteredEvents, filteredNamespaceRows, filteredActionProposals)}
-                  loadedCount={serverResourceActive ? detailTabLoadedCount(activeTab, filteredNodes, filteredWorkloads, filteredPods, filteredEvents, filteredNamespaceRows, filteredActionProposals) : detailTabLoadedCount(activeTab, visibleNodes, workloads, pods, events, namespaceRows, actionProposals)}
-                  totalCount={serverResourceActive || activeTabFilterActive ? detailTabFilteredTotal(activeTab, filteredResourceTotals.nodes, filteredResourceTotals, filteredNamespaceRows.length, filteredActionProposals.length) : detailTabCount(activeTab, totals, namespaces.length, actionProposalTotal)}
-                  loading={resourceSupportsServerFilter(activeTab) && (resourceFilterLoading || resourceQueryPending)}
+                  loadedCount={activeTab === 'workloads'
+                    ? filteredWorkloads.length
+                    : serverResourceActive
+                      ? detailTabLoadedCount(activeTab, filteredNodes, filteredWorkloads, filteredPods, filteredEvents, filteredNamespaceRows, filteredActionProposals)
+                      : detailTabLoadedCount(activeTab, visibleNodes, workloads, pods, events, namespaceRows, actionProposals)}
+                  totalCount={activeTab === 'workloads'
+                    ? visibleWorkloadTotal
+                    : resourceSupportsServerFilter(activeTab)
+                      ? activePaginatedTotal
+                      : serverResourceActive || activeTabFilterActive
+                      ? detailTabFilteredTotal(activeTab, filteredResourceTotals.nodes, filteredResourceTotals, filteredNamespaceRows.length, filteredActionProposals.length)
+                      : detailTabCount(activeTab, totals, namespaces.length, actionProposalTotal)}
+                  paginated={resourceSupportsServerFilter(activeTab)}
+                  loading={resourceSupportsServerFilter(activeTab) && paginatedResourceLoading}
                   onQueryChange={updateResourceQuery}
                   onNamespaceChange={updateResourceNamespace}
                   onIssueOnlyChange={updateResourceIssueOnly}
@@ -875,13 +1011,15 @@ export function KubernetesClusterDetailPage() {
                   {activeTab === 'nodes' && (
                     <NodesTable
                       items={filteredNodes}
-                      loading={loading || resourceFilterLoading || resourceQueryPending}
-                      total={activeTabFilterActive ? filteredResourceTotals.nodes : totals.nodes}
+                      loading={loading || paginatedResourceLoading}
+                      total={visibleNodeTotal}
+                      page={resourcePage}
+                      pageSize={RESOURCE_PAGE_SIZE}
                       filtered={activeTabFilterActive}
                       emptyHint={resourceFilterHint}
                       edgeVersionsByID={edgeVersionsByID}
                       onClearFilters={clearResourceFilters}
-                      onLoadMore={loadMoreResources}
+                      onPageChange={updateResourcePage}
                       actions={{
                         onOpenLogs: openResourceLogs,
                         onDescribe: (issue) => void startResourceChat(issue, 'describe'),
@@ -893,12 +1031,14 @@ export function KubernetesClusterDetailPage() {
                   {activeTab === 'workloads' && (
                     <WorkloadsTable
                       items={filteredWorkloads}
-                      loading={loading || resourceFilterLoading || resourceQueryPending}
-                      total={activeTabFilterActive ? filteredResourceTotals.workloads : totals.workloads}
+                      loading={loading || paginatedResourceLoading}
+                      total={visibleWorkloadTotal}
+                      page={resourcePage}
+                      pageSize={RESOURCE_PAGE_SIZE}
                       filtered={activeTabFilterActive}
                       emptyHint={resourceFilterHint}
                       onClearFilters={clearResourceFilters}
-                      onLoadMore={loadMoreResources}
+                      onPageChange={updateResourcePage}
                       actions={{
                         onOpenLogs: openResourceLogs,
                         onDescribe: (issue) => void startResourceChat(issue, 'describe'),
@@ -910,12 +1050,14 @@ export function KubernetesClusterDetailPage() {
                   {activeTab === 'pods' && (
                     <PodsTable
                       items={filteredPods}
-                      loading={loading || resourceFilterLoading || resourceQueryPending}
-                      total={activeTabFilterActive ? filteredResourceTotals.pods : totals.pods}
+                      loading={loading || paginatedResourceLoading}
+                      total={visiblePodTotal}
+                      page={resourcePage}
+                      pageSize={RESOURCE_PAGE_SIZE}
                       filtered={activeTabFilterActive}
                       emptyHint={resourceFilterHint}
                       onClearFilters={clearResourceFilters}
-                      onLoadMore={loadMoreResources}
+                      onPageChange={updateResourcePage}
                       actions={{
                         onOpenLogs: openResourceLogs,
                         onDescribe: (issue) => void startResourceChat(issue, 'describe'),
@@ -927,12 +1069,14 @@ export function KubernetesClusterDetailPage() {
                   {activeTab === 'events' && (
                     <EventsTable
                       items={filteredEvents}
-                      loading={loading || resourceFilterLoading || resourceQueryPending}
-                      total={activeTabFilterActive ? filteredResourceTotals.events : totals.events}
+                      loading={loading || paginatedResourceLoading}
+                      total={visibleEventTotal}
+                      page={resourcePage}
+                      pageSize={RESOURCE_PAGE_SIZE}
                       filtered={activeTabFilterActive}
                       emptyHint={resourceFilterHint}
                       onClearFilters={clearResourceFilters}
-                      onLoadMore={loadMoreResources}
+                      onPageChange={updateResourcePage}
                       actions={{
                         onOpenLogs: openResourceLogs,
                         onDescribe: (issue) => void startResourceChat(issue, 'describe'),
@@ -1474,6 +1618,8 @@ type K8sTriageIssue = {
   name?: string;
   nodeName?: string;
   reason?: string;
+  relatedWorkloadKind?: string;
+  relatedWorkloadName?: string;
   labels: string[];
   tab: DetailTab;
 };
@@ -2471,6 +2617,7 @@ type ActionDecisionFilter = 'all' | 'pending' | 'approved' | 'executed' | 'rejec
 const ACTION_DECISION_FILTERS: ActionDecisionFilter[] = ['all', 'pending', 'approved', 'executed', 'rejected'];
 
 type ServerFilteredResources = {
+  requestKey: string;
   tab: DetailTab;
   nodes?: KubernetesNode[];
   nodesTotal?: number;
@@ -2485,15 +2632,11 @@ type ServerFilteredResources = {
 function ResourceViewHeader({
   activeTab,
   totals,
-  nodes,
-  workloads,
-  pods,
-  crashLoopPods,
+  issueTotals,
   crashLoopTotal,
-  events,
-  warningEvents,
   warningEventTotal,
   namespaces,
+  namespaceRows,
   actionProposals,
   actionProposalTotal,
   edgeAccess,
@@ -2501,26 +2644,22 @@ function ResourceViewHeader({
 }: {
   activeTab: DetailTab;
   totals: ResourceTotals;
-  nodes: KubernetesNode[];
-  workloads: KubernetesWorkload[];
-  pods: KubernetesPod[];
-  crashLoopPods: KubernetesPod[];
+  issueTotals: { nodes: number; workloads: number; pods: number };
   crashLoopTotal: number;
-  events: KubernetesEvent[];
-  warningEvents: KubernetesEvent[];
   warningEventTotal: number;
   namespaces: string[];
+  namespaceRows: NamespaceRow[];
   actionProposals: MutatingProposal[];
   actionProposalTotal: number;
   edgeAccess: { linked: number; total: number; pct: number } | null;
   onOpenTab(tab: DetailTab): void;
 }) {
   const { tr } = useI18n();
-  const degradedWorkloads = workloads.filter((item) => item.desired_replicas > item.ready_replicas).length;
-  const abnormalPods = buildAbnormalPods(pods, crashLoopPods).length;
-  const nodeIssues = buildNodeIssues(nodes).length;
+  const degradedWorkloads = issueTotals.workloads;
+  const abnormalPods = issueTotals.pods;
+  const nodeIssues = issueTotals.nodes;
   const missingEdgeNodes = edgeAccess ? edgeAccess.total - edgeAccess.linked : 0;
-  const namespaceWarnings = buildNamespaceRows(workloads, pods, events, warningEvents).filter((row) => row.warnings > 0).length;
+  const namespaceWarnings = namespaceRows.filter((row) => row.warnings > 0).length;
   const pendingActions = actionProposals.filter((item) => (item.decision || '').toLowerCase() === 'pending').length;
   const context = resourceViewContext({
     activeTab,
@@ -2581,6 +2720,7 @@ function ResourceFilterBar({
   filteredCount,
   loadedCount,
   totalCount,
+  paginated,
   loading,
   onQueryChange,
   onNamespaceChange,
@@ -2600,6 +2740,7 @@ function ResourceFilterBar({
   filteredCount: number;
   loadedCount: number;
   totalCount: number;
+  paginated?: boolean;
   loading?: boolean;
   onQueryChange(value: string): void;
   onNamespaceChange(value: string): void;
@@ -2693,6 +2834,10 @@ function ResourceFilterBar({
         <Chip tone={filterActive ? 'info' : 'default'} className="ml-auto">
           {loading
             ? tr('加载中…', 'Loading…')
+            : paginated
+              ? filterActive
+                ? tr(`${formatNumber(totalCount)} 条匹配`, `${formatNumber(totalCount)} matched`)
+                : tr(`${formatNumber(totalCount)} 条`, `${formatNumber(totalCount)} row(s)`)
             : filterActive
               ? totalCount > filteredCount
                 ? tr(`已返回 ${formatNumber(filteredCount)} / ${formatNumber(totalCount)} 条匹配`, `${formatNumber(filteredCount)} / ${formatNumber(totalCount)} matched`)
@@ -2808,21 +2953,25 @@ function NodesTable({
   items,
   loading,
   total,
+  page,
+  pageSize,
   filtered,
   emptyHint,
   edgeVersionsByID,
   onClearFilters,
-  onLoadMore,
+  onPageChange,
   actions,
 }: {
   items: KubernetesNode[];
   loading: boolean;
   total: number;
+  page: number;
+  pageSize: number;
   filtered?: boolean;
   emptyHint?: string;
   edgeVersionsByID: Record<number, string>;
   onClearFilters?: () => void;
-  onLoadMore?: () => void;
+  onPageChange(page: number): void;
   actions?: ResourceRowActionHandlers;
 }) {
   const { tr } = useI18n();
@@ -2840,7 +2989,7 @@ function NodesTable({
   }
   return (
     <>
-      <TableLimitNotice shown={items.length} total={total} loading={loading} filtered={filtered} onLoadMore={onLoadMore} />
+      <ResourcePagination shown={items.length} total={total} page={page} pageSize={pageSize} loading={loading} filtered={filtered} onPageChange={onPageChange} />
       <table className="min-w-[1120px] w-full text-sm">
       <thead className="border-b border-zinc-800/60 bg-zinc-950/40 text-[11px] uppercase tracking-wider text-zinc-500">
         <tr>
@@ -2899,22 +3048,35 @@ function WorkloadsTable({
   items,
   loading,
   total,
+  page,
+  pageSize,
   filtered,
   emptyHint,
   onClearFilters,
-  onLoadMore,
+  onPageChange,
   actions,
 }: {
   items: KubernetesWorkload[];
   loading: boolean;
   total: number;
+  page: number;
+  pageSize: number;
   filtered?: boolean;
   emptyHint?: string;
   onClearFilters?: () => void;
-  onLoadMore?: () => void;
+  onPageChange(page: number): void;
   actions?: ResourceRowActionHandlers;
 }) {
   const { tr } = useI18n();
+  const [expandedDeployments, setExpandedDeployments] = useState<Set<string>>(() => new Set());
+  const toggleDeployment = useCallback((key: string) => {
+    setExpandedDeployments((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
   if (loading && items.length === 0) return <LoadingRows colSpan={actions ? 7 : 6} />;
   if (items.length === 0) {
     return (
@@ -2929,14 +3091,14 @@ function WorkloadsTable({
   }
   return (
     <>
-      <TableLimitNotice shown={items.length} total={total} loading={loading} filtered={filtered} onLoadMore={onLoadMore} />
+      <ResourcePagination shown={items.length} total={total} page={page} pageSize={pageSize} loading={loading} filtered={filtered} onPageChange={onPageChange} />
       <table className="min-w-[1120px] w-full text-sm">
         <thead className="border-b border-zinc-800/60 bg-zinc-950/40 text-[11px] uppercase tracking-wider text-zinc-500">
           <tr>
             <th className="whitespace-nowrap px-4 py-2.5 text-left">{tr('命名空间', 'Namespace')}</th>
             <th className="whitespace-nowrap px-4 py-2.5 text-left">{tr('类型', 'Kind')}</th>
             <th className="whitespace-nowrap px-4 py-2.5 text-left">{tr('名称', 'Name')}</th>
-            <th className="whitespace-nowrap px-4 py-2.5 text-left">{tr('副本', 'Replicas')}</th>
+            <th className="whitespace-nowrap px-4 py-2.5 text-left">{tr('进度', 'Progress')}</th>
             <th className="whitespace-nowrap px-4 py-2.5 text-left">{tr('状态', 'Status')}</th>
             <th className="whitespace-nowrap px-4 py-2.5 text-left">{tr('最近同步', 'Last sync')}</th>
             {actions && <th className="whitespace-nowrap px-4 py-2.5 text-right">{tr('排障', 'Triage')}</th>}
@@ -2945,24 +3107,112 @@ function WorkloadsTable({
         <tbody className="divide-y divide-zinc-800/40">
           {items.map((item) => {
             const issue = workloadResourceIssue(item, tr);
+            const replicaSets = item.replica_sets ?? [];
+            const deploymentKey = `${item.namespace}\u0000${item.name}`;
+            const expandable = item.kind.trim().toLowerCase() === 'deployment' && replicaSets.length > 0;
+            const expanded = expandable && expandedDeployments.has(deploymentKey);
+            const versionsID = `deployment-revisions-${item.id}`;
             return (
-              <tr key={item.id} className="hover:bg-zinc-900/40">
-                <td className="whitespace-nowrap px-4 py-2.5 text-zinc-400">{item.namespace || '—'}</td>
-                <td className="whitespace-nowrap px-4 py-2.5"><Chip>{item.kind}</Chip></td>
-                <td className="px-4 py-2.5 font-medium text-zinc-100">{item.name}</td>
-                <td className="whitespace-nowrap px-4 py-2.5 font-mono text-xs text-zinc-400">
-                  {item.ready_replicas}/{item.desired_replicas}
-                </td>
-                <td className="whitespace-nowrap px-4 py-2.5">
-                  <ReplicaStatusChip ready={item.ready_replicas} desired={item.desired_replicas} />
-                </td>
-                <td className="whitespace-nowrap px-4 py-2.5 text-zinc-400">{relativeTime(item.last_seen_at)}</td>
-                {actions && (
-                  <td className="whitespace-nowrap px-4 py-2.5 text-right">
-                    <ResourceRowActions issue={issue} actions={actions} />
+              <Fragment key={item.id || deploymentKey}>
+                <tr className={cn('hover:bg-zinc-900/40', expanded && 'bg-indigo-500/5')}>
+                  <td className="whitespace-nowrap px-4 py-2.5 text-zinc-400">{item.namespace || '—'}</td>
+                  <td className="whitespace-nowrap px-4 py-2.5"><Chip>{item.kind}</Chip></td>
+                  <td className="px-4 py-2.5 font-medium text-zinc-100">
+                    <div className="flex min-w-[280px] items-center gap-2">
+                      <span>{item.name}</span>
+                      {expandable && (
+                        <Button
+                          className={cn(
+                            'h-7 px-2 text-[11px]',
+                            expanded
+                              ? 'border-indigo-500/30 bg-indigo-500/10 text-indigo-300 hover:bg-indigo-500/20 hover:text-indigo-200'
+                              : 'border-zinc-700/70 bg-zinc-950/30 text-zinc-400 hover:text-zinc-100',
+                          )}
+                          onClick={() => toggleDeployment(deploymentKey)}
+                          aria-expanded={expanded}
+                          aria-controls={versionsID}
+                          aria-label={expanded
+                            ? tr(`收起 ${item.name} 的发布版本`, `Collapse rollout versions for ${item.name}`)
+                            : tr(`展开 ${item.name} 的发布版本`, `Expand rollout versions for ${item.name}`)}
+                        >
+                          <ChevronDown size={12} className={cn('transition-transform', !expanded && '-rotate-90')} />
+                          {tr(`${replicaSets.length} 个版本`, `${replicaSets.length} version(s)`)}
+                        </Button>
+                      )}
+                    </div>
                   </td>
+                  <td className="whitespace-nowrap px-4 py-2.5 font-mono text-xs text-zinc-400">
+                    {workloadProgressText(item, tr)}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-2.5">
+                    <WorkloadStatusChip item={item} tr={tr} />
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-2.5 text-zinc-400">{relativeTime(item.last_seen_at)}</td>
+                  {actions && (
+                    <td className="whitespace-nowrap px-4 py-2.5 text-right">
+                      <ResourceRowActions issue={issue} actions={actions} />
+                    </td>
+                  )}
+                </tr>
+                {expanded && (
+                  <tr id={versionsID}>
+                    <td colSpan={actions ? 7 : 6} className="bg-indigo-500/5 px-4 py-3">
+                      <div className="overflow-hidden rounded-lg border border-indigo-500/20 bg-zinc-950/20">
+                        <div className="flex items-center justify-between border-b border-indigo-500/15 bg-indigo-500/5 px-3 py-2">
+                          <div>
+                            <div className="text-xs font-medium text-indigo-300">{tr('ReplicaSet 发布版本', 'ReplicaSet rollout versions')}</div>
+                            <div className="mt-0.5 text-[11px] text-zinc-500">
+                              {tr('仅显示 Kubernetes 中仍保留的版本', 'Only versions still retained in Kubernetes are shown')}
+                            </div>
+                          </div>
+                          <Chip>{tr(`${replicaSets.length} 个版本`, `${replicaSets.length} version(s)`)}</Chip>
+                        </div>
+                        <div className="divide-y divide-indigo-500/10">
+                          {replicaSets.map((replicaSet) => {
+                            const currentRevision = (item.revision ?? 0) > 0 && replicaSet.revision === item.revision;
+                            const activeRevision = replicaSet.desired_replicas > 0;
+                            const versionStatus = currentRevision
+                              ? { label: tr('当前版本', 'Current'), tone: 'accent' as const }
+                              : activeRevision
+                                ? { label: tr('仍在运行', 'Active'), tone: 'info' as const }
+                                : { label: tr('历史版本', 'History'), tone: 'default' as const };
+                            return (
+                              <div
+                                key={replicaSet.uid || replicaSet.id || replicaSet.name}
+                                className={cn(
+                                  'grid grid-cols-[110px_minmax(260px,1fr)_120px_110px_190px_auto] items-center gap-3 px-3 py-2.5 text-xs',
+                                  currentRevision && 'bg-indigo-500/5',
+                                )}
+                              >
+                                <div className="font-mono font-medium text-zinc-200">
+                                  {replicaSet.revision ? `Revision ${replicaSet.revision}` : tr('Revision 未知', 'Revision unknown')}
+                                </div>
+                                <div className="min-w-0 truncate font-mono text-[11px] text-zinc-400" title={replicaSet.name}>
+                                  {replicaSet.name}
+                                </div>
+                                <Chip tone={versionStatus.tone} className="w-fit">{versionStatus.label}</Chip>
+                                <div className="font-mono text-zinc-400">{replicaSet.ready_replicas}/{replicaSet.desired_replicas}</div>
+                                <time
+                                  dateTime={replicaSet.creation_timestamp || undefined}
+                                  title={fullDateTime(replicaSet.creation_timestamp)}
+                                  className="text-zinc-400"
+                                >
+                                  {fullDateTime(replicaSet.creation_timestamp)}
+                                </time>
+                                {actions ? (
+                                  <div className="justify-self-end">
+                                    <ResourceRowActions issue={workloadResourceIssue(replicaSet, tr)} actions={actions} />
+                                  </div>
+                                ) : <span />}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
                 )}
-              </tr>
+              </Fragment>
             );
           })}
         </tbody>
@@ -2971,7 +3221,29 @@ function WorkloadsTable({
   );
 }
 
-function PodsTable({ items, loading, total, filtered, emptyHint, onClearFilters, onLoadMore, actions }: { items: KubernetesPod[]; loading: boolean; total: number; filtered?: boolean; emptyHint?: string; onClearFilters?: () => void; onLoadMore?: () => void; actions?: ResourceRowActionHandlers }) {
+function PodsTable({
+  items,
+  loading,
+  total,
+  page,
+  pageSize,
+  filtered,
+  emptyHint,
+  onClearFilters,
+  onPageChange,
+  actions,
+}: {
+  items: KubernetesPod[];
+  loading: boolean;
+  total: number;
+  page: number;
+  pageSize: number;
+  filtered?: boolean;
+  emptyHint?: string;
+  onClearFilters?: () => void;
+  onPageChange(page: number): void;
+  actions?: ResourceRowActionHandlers;
+}) {
   const { tr } = useI18n();
   if (loading && items.length === 0) return <LoadingRows colSpan={actions ? 9 : 8} />;
   if (items.length === 0) {
@@ -2987,7 +3259,7 @@ function PodsTable({ items, loading, total, filtered, emptyHint, onClearFilters,
   }
   return (
     <>
-      <TableLimitNotice shown={items.length} total={total} loading={loading} filtered={filtered} onLoadMore={onLoadMore} />
+      <ResourcePagination shown={items.length} total={total} page={page} pageSize={pageSize} loading={loading} filtered={filtered} onPageChange={onPageChange} />
       <table className="min-w-[1220px] w-full text-sm">
         <thead className="border-b border-zinc-800/60 bg-zinc-950/40 text-[11px] uppercase tracking-wider text-zinc-500">
           <tr>
@@ -3035,19 +3307,23 @@ function EventsTable({
   items,
   loading,
   total,
+  page,
+  pageSize,
   filtered,
   emptyHint,
   onClearFilters,
-  onLoadMore,
+  onPageChange,
   actions,
 }: {
   items: KubernetesEvent[];
   loading: boolean;
   total: number;
+  page: number;
+  pageSize: number;
   filtered?: boolean;
   emptyHint?: string;
   onClearFilters?: () => void;
-  onLoadMore?: () => void;
+  onPageChange(page: number): void;
   actions?: ResourceRowActionHandlers;
 }) {
   const { tr } = useI18n();
@@ -3065,7 +3341,7 @@ function EventsTable({
   }
   return (
     <>
-      <TableLimitNotice shown={items.length} total={total} loading={loading} filtered={filtered} onLoadMore={onLoadMore} />
+      <ResourcePagination shown={items.length} total={total} page={page} pageSize={pageSize} loading={loading} filtered={filtered} onPageChange={onPageChange} />
       <table className="min-w-[1060px] w-full text-sm">
         <thead className="border-b border-zinc-800/60 bg-zinc-950/40 text-[11px] uppercase tracking-wider text-zinc-500">
           <tr>
@@ -3332,9 +3608,10 @@ function ModeChip({ mode }: { mode?: string }) {
   return <Chip tone="accent">{mode || 'full-node'}</Chip>;
 }
 
-function ReplicaStatusChip({ ready, desired }: { ready: number; desired: number }) {
-  const ok = desired === 0 || ready >= desired;
-  return <Chip tone={ok ? 'success' : 'warning'}>{ok ? 'ready' : 'degraded'}</Chip>;
+function WorkloadStatusChip({ item, tr }: { item: KubernetesWorkload; tr: (zh: string, en: string) => string }) {
+  const state = workloadHealthState(item);
+  const tone = state === 'failed' ? 'danger' : state === 'degraded' ? 'warning' : state === 'running' ? 'info' : state === 'pending' ? 'default' : 'success';
+  return <Chip tone={tone}>{workloadHealthLabel(state, tr)}</Chip>;
 }
 
 function PodPhaseChip({ phase }: { phase?: string }) {
@@ -3362,37 +3639,74 @@ function LoadingRows({ colSpan }: { colSpan: number }) {
   );
 }
 
-function TableLimitNotice({
+function ResourcePagination({
   shown,
   total,
+  page,
+  pageSize,
   loading,
   filtered,
-  onLoadMore,
+  onPageChange,
 }: {
   shown: number;
   total: number;
+  page: number;
+  pageSize: number;
   loading?: boolean;
   filtered?: boolean;
-  onLoadMore?: () => void;
+  onPageChange(page: number): void;
 }) {
   const { tr } = useI18n();
-  if (shown >= total) return null;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const currentPage = Math.min(Math.max(page, 1), totalPages);
+  if (totalPages <= 1) return null;
+  const firstRow = total === 0 ? 0 : (currentPage - 1) * pageSize + 1;
+  const lastRow = Math.min(total, firstRow + Math.max(0, shown - 1));
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800/60 px-4 py-2 text-xs text-zinc-500">
       <span>
         {filtered
-          ? tr(`显示前 ${shown} 条匹配，共 ${total} 条匹配`, `Showing first ${shown} of ${total} matches`)
-          : tr(`显示前 ${shown} 条，共 ${total} 条`, `Showing first ${shown} of ${total}`)}
+          ? tr(
+              `${formatNumber(firstRow)}–${formatNumber(lastRow)} / 共 ${formatNumber(total)} 条匹配`,
+              `${formatNumber(firstRow)}–${formatNumber(lastRow)} of ${formatNumber(total)} matches`,
+            )
+          : tr(
+              `${formatNumber(firstRow)}–${formatNumber(lastRow)} / 共 ${formatNumber(total)} 条`,
+              `${formatNumber(firstRow)}–${formatNumber(lastRow)} of ${formatNumber(total)}`,
+            )}
       </span>
-      {onLoadMore && (
-        <Button className="h-7" disabled={loading} onClick={onLoadMore}>
-          {loading
-            ? tr('加载中…', 'Loading…')
-            : filtered
-              ? tr('加载更多匹配', 'Load more matches')
-              : tr('加载更多', 'Load more')}
+      <div className="flex items-center gap-2">
+        <span>{tr(`第 ${currentPage} / ${totalPages} 页`, `Page ${currentPage} of ${totalPages}`)}</span>
+        <Button
+          className="h-7 px-2"
+          disabled={loading || currentPage <= 1}
+          onClick={() => onPageChange(currentPage - 1)}
+          aria-label={tr('上一页', 'Previous page')}
+        >
+          <ChevronLeft size={12} />
+          {tr('上一页', 'Previous')}
         </Button>
-      )}
+        <select
+          value={currentPage}
+          onChange={(event) => onPageChange(Number(event.target.value))}
+          disabled={loading}
+          className="h-7 rounded-md border border-zinc-800 bg-zinc-950 px-2 text-xs text-zinc-200 outline-none transition-colors focus:border-zinc-600 disabled:cursor-not-allowed disabled:opacity-50"
+          aria-label={tr('页码', 'Page')}
+        >
+          {Array.from({ length: totalPages }, (_, index) => index + 1).map((item) => (
+            <option key={item} value={item}>{item}</option>
+          ))}
+        </select>
+        <Button
+          className="h-7 px-2"
+          disabled={loading || currentPage >= totalPages}
+          onClick={() => onPageChange(currentPage + 1)}
+          aria-label={tr('下一页', 'Next page')}
+        >
+          {tr('下一页', 'Next')}
+          <ChevronRight size={12} />
+        </Button>
+      </div>
     </div>
   );
 }
@@ -3678,10 +3992,10 @@ function resourceViewContext({
     return {
       title: tr('Workload 资源视图', 'Workload resource view'),
       count: tr(`${formatNumber(totals.workloads)} 个 workload`, `${formatNumber(totals.workloads)} workload(s)`),
-      description: tr('按 namespace 和 workload 查看副本就绪情况，异常副本优先关联 Pod 与 Event。', 'Inspect replica readiness by namespace and workload, then correlate degraded replicas with pods and events.'),
+      description: tr('按 namespace 和 workload 查看副本就绪与 Job 执行状态，异常项优先关联 Pod 与 Event。', 'Inspect replica readiness and Job execution by namespace and workload, then correlate issues with pods and events.'),
       tone: degradedWorkloads > 0 ? 'warning' : 'success',
       signals: [
-        { label: tr(`副本异常 ${formatNumber(degradedWorkloads)}`, `${formatNumber(degradedWorkloads)} degraded`), tone: degradedWorkloads > 0 ? 'warning' : 'default' },
+        { label: tr(`Workload 异常 ${formatNumber(degradedWorkloads)}`, `${formatNumber(degradedWorkloads)} workload issue(s)`), tone: degradedWorkloads > 0 ? 'warning' : 'default' },
         { label: tr(`异常 Pod ${formatNumber(abnormalPods)}`, `${formatNumber(abnormalPods)} abnormal pod(s)`), tone: abnormalPods > 0 ? 'warning' : 'default' },
       ],
       related: abnormalPods > 0 ? [{ tab: 'pods', label: tr('查看 Pods', 'Open Pods') }] : warningEventTotal > 0 ? [{ tab: 'events', label: tr('查看 Events', 'Open Events') }] : [],
@@ -3824,12 +4138,13 @@ function resourceSupportsServerFilter(tab: DetailTab) {
   return tab === 'nodes' || tab === 'workloads' || tab === 'pods' || tab === 'events';
 }
 
-function resourceAPIParams(filters: ResourceFilters, limit = RESOURCE_PAGE_SIZE) {
+function resourceAPIParams(filters: ResourceFilters, limit = RESOURCE_PAGE_SIZE, offset = 0) {
   return {
     q: filters.query.trim() || undefined,
     namespace: filters.namespace === 'all' ? undefined : filters.namespace,
     issue_only: filters.issueOnly || undefined,
     limit,
+    offset,
   };
 }
 
@@ -3845,8 +4160,8 @@ function filterWorkloads(items: KubernetesWorkload[], filters: ResourceFilters) 
   const query = normalizeFilterQuery(filters.query);
   return items.filter((item) => {
     if (!matchesNamespaceFilter(item.namespace, filters.namespace)) return false;
-    if (filters.issueOnly && item.ready_replicas >= item.desired_replicas) return false;
-    return matchesQuery(query, item.namespace, item.kind, item.name, `${item.ready_replicas}/${item.desired_replicas}`);
+    if (filters.issueOnly && !isDegradedWorkload(item)) return false;
+    return matchesQuery(query, item.namespace, item.kind, item.name, `${item.ready_replicas}/${item.desired_replicas}`, item.active_replicas, item.failed_replicas);
   });
 }
 
@@ -3964,18 +4279,6 @@ function matchesQuery(query: string, ...parts: unknown[]) {
     .includes(query);
 }
 
-function collectNamespaces(
-  workloads: KubernetesWorkload[],
-  pods: KubernetesPod[],
-  events: KubernetesEvent[],
-) {
-  const set = new Set<string>();
-  for (const item of workloads) if (item.namespace) set.add(item.namespace);
-  for (const item of pods) if (item.namespace) set.add(item.namespace);
-  for (const item of events) if (item.namespace) set.add(item.namespace);
-  return [...set].sort();
-}
-
 function buildIssueCounts(
   nodes: KubernetesNode[],
   pods: KubernetesPod[],
@@ -4014,17 +4317,18 @@ function buildTriageIssues({
   warningEvents: KubernetesEvent[];
   tr: (zh: string, en: string) => string;
 }) {
-  const degradedWorkloads = workloads.filter((item) => item.desired_replicas > item.ready_replicas);
+  const degradedWorkloads = workloads.filter(isDegradedWorkload);
   const abnormalPods = buildAbnormalPods(pods, crashLoopPods);
+  const degradedWorkloadOwners = buildDegradedWorkloadOwnerIndex(degradedWorkloads);
   const nodeIssues = buildNodeIssues(nodes);
-  const recentWarningEvents = sortEventsByRecent(dedupeEvents(warningEvents.filter(isWarningK8sEvent))).slice(0, 5);
+  const actionableWarningEvents = sortEventsByRecent(dedupeEvents(warningEvents.filter(isWarningK8sEvent))).slice(0, 5);
   const syncRisk = clusterSyncRisk(cluster, tr);
   return sortTriageIssues(aggregateTriageIssues([
-    ...degradedWorkloads.slice(0, 6).map((item) => workloadIssue(item, tr)),
-    ...abnormalPods.slice(0, 6).map((item) => podIssue(item, tr)),
-    ...nodeIssues.slice(0, 6),
+    ...degradedWorkloads.map((item) => workloadIssue(item, tr)),
+    ...abnormalPods.map((item) => podIssue(item, tr, owningDegradedWorkload(item, degradedWorkloadOwners))),
+    ...nodeIssues,
     ...(syncRisk ? [syncRiskIssue(syncRisk, tr)] : []),
-    ...recentWarningEvents.map(eventIssue),
+    ...actionableWarningEvents.map(eventIssue),
   ]));
 }
 
@@ -4044,6 +4348,33 @@ function buildAbnormalPods(pods: KubernetesPod[], crashLoopPods: KubernetesPod[]
   return out;
 }
 
+function buildDegradedWorkloadOwnerIndex(items: KubernetesWorkload[]) {
+  const out = new Map<string, KubernetesWorkload>();
+  for (const item of items) {
+    out.set(workloadIdentityKey(item.namespace, item.kind, item.name), item);
+    if (item.kind.trim().toLowerCase() !== 'deployment') continue;
+    for (const replicaSet of item.replica_sets ?? []) {
+      out.set(
+        workloadIdentityKey(replicaSet.namespace || item.namespace, replicaSet.kind, replicaSet.name),
+        item,
+      );
+    }
+  }
+  return out;
+}
+
+function owningDegradedWorkload(
+  pod: KubernetesPod,
+  workloadOwners: ReadonlyMap<string, KubernetesWorkload>,
+) {
+  if (!pod.owner_kind || !pod.owner_name) return undefined;
+  return workloadOwners.get(workloadIdentityKey(pod.namespace, pod.owner_kind, pod.owner_name));
+}
+
+function workloadIdentityKey(namespace: string | undefined, kind: string, name: string) {
+  return `${namespace || 'default'}\u0000${kind.trim().toLowerCase()}\u0000${name.trim()}`;
+}
+
 function isAbnormalPod(pod: KubernetesPod) {
   return (
     pod.phase === 'Pending' ||
@@ -4056,34 +4387,112 @@ function isAbnormalPod(pod: KubernetesPod) {
 }
 
 function workloadIssue(item: KubernetesWorkload, tr: (zh: string, en: string) => string): K8sTriageIssue {
+  const state = workloadHealthState(item);
   return {
     key: `workload:${item.namespace}:${item.kind}:${item.name}`,
     kind: 'workload',
-    tone: 'warning',
+    tone: state === 'failed' ? 'danger' : 'warning',
     title: `${item.kind}/${item.name}`,
     subtitle: item.namespace || 'default',
-    detail: tr(`${item.ready_replicas}/${item.desired_replicas} 副本就绪`, `${item.ready_replicas}/${item.desired_replicas} replicas ready`),
+    detail: workloadProgressText(item, tr),
     namespace: item.namespace,
     resourceKind: item.kind,
     name: item.name,
-    labels: [`${item.ready_replicas}/${item.desired_replicas}`, tr('副本未就绪', 'degraded')],
+    labels: [workloadProgressText(item, tr), state === 'failed' ? tr('任务失败', 'job failed') : tr('副本未就绪', 'degraded')],
     tab: 'workloads',
   };
 }
 
 function workloadResourceIssue(item: KubernetesWorkload, tr: (zh: string, en: string) => string): K8sTriageIssue {
-  const degraded = item.desired_replicas > item.ready_replicas;
+  const state = workloadHealthState(item);
+  const degraded = state === 'degraded' || state === 'failed';
   return {
     ...workloadIssue(item, tr),
-    tone: degraded ? 'warning' : 'info',
+    tone: state === 'failed' ? 'danger' : degraded ? 'warning' : 'info',
     labels: [
-      `${item.ready_replicas}/${item.desired_replicas}`,
-      degraded ? tr('副本未就绪', 'degraded') : tr('副本就绪', 'ready'),
+      workloadProgressText(item, tr),
+      workloadHealthLabel(state, tr),
     ],
   };
 }
 
-function podIssue(item: KubernetesPod, tr: (zh: string, en: string) => string): K8sTriageIssue {
+type WorkloadHealthState = 'ready' | 'complete' | 'running' | 'pending' | 'degraded' | 'failed';
+
+const JOB_FAILED_CONDITION_TYPES = new Set(['failed', 'failuretarget']);
+const JOB_COMPLETE_CONDITION_TYPES = new Set(['complete', 'successcriteriamet']);
+
+function workloadHealthState(item: KubernetesWorkload): WorkloadHealthState {
+  const kind = item.kind.trim().toLowerCase();
+  if (kind === 'job') {
+    if (workloadHasTrueCondition(item, JOB_FAILED_CONDITION_TYPES)) {
+      return 'failed';
+    }
+    if (
+      workloadHasTrueCondition(item, JOB_COMPLETE_CONDITION_TYPES) ||
+      (item.desired_replicas > 0 && item.ready_replicas >= item.desired_replicas)
+    ) {
+      return 'complete';
+    }
+    if ((item.active_replicas ?? 0) > 0) return 'running';
+    return 'pending';
+  }
+  if (kind === 'cronjob') {
+    return (item.active_replicas ?? 0) > 0 ? 'running' : 'ready';
+  }
+  return item.desired_replicas === 0 || item.ready_replicas >= item.desired_replicas ? 'ready' : 'degraded';
+}
+
+function isDegradedWorkload(item: KubernetesWorkload) {
+  const state = workloadHealthState(item);
+  return state === 'degraded' || state === 'failed';
+}
+
+function workloadHasTrueCondition(item: KubernetesWorkload, wanted: ReadonlySet<string>) {
+  return (item.conditions ?? []).some((condition) => {
+    if (!condition || typeof condition !== 'object') return false;
+    const fields = condition as Record<string, unknown>;
+    return wanted.has(String(fields.type ?? '').toLowerCase()) && String(fields.status ?? '').toLowerCase() === 'true';
+  });
+}
+
+function workloadProgressText(item: KubernetesWorkload, tr: (zh: string, en: string) => string) {
+  const kind = item.kind.trim().toLowerCase();
+  const active = item.active_replicas ?? 0;
+  const failed = item.failed_replicas ?? 0;
+  if (kind === 'job') {
+    const parts = [tr(`${item.ready_replicas}/${item.desired_replicas} 完成`, `${item.ready_replicas}/${item.desired_replicas} complete`)];
+    if (active > 0) parts.push(tr(`${active} 运行`, `${active} active`));
+    if (failed > 0) parts.push(tr(`${failed} 失败`, `${failed} failed`));
+    return parts.join(' · ');
+  }
+  if (kind === 'cronjob') {
+    return active > 0 ? tr(`${active} 个运行中 Job`, `${active} active Job(s)`) : tr('无运行中 Job', 'No active Jobs');
+  }
+  return `${item.ready_replicas}/${item.desired_replicas}`;
+}
+
+function workloadHealthLabel(state: WorkloadHealthState, tr: (zh: string, en: string) => string) {
+  switch (state) {
+    case 'complete':
+      return tr('已完成', 'complete');
+    case 'running':
+      return tr('运行中', 'running');
+    case 'pending':
+      return tr('等待中', 'pending');
+    case 'failed':
+      return tr('失败', 'failed');
+    case 'degraded':
+      return tr('降级', 'degraded');
+    case 'ready':
+      return 'ready';
+  }
+}
+
+function podIssue(
+  item: KubernetesPod,
+  tr: (zh: string, en: string) => string,
+  relatedWorkload?: KubernetesWorkload,
+): K8sTriageIssue {
   const reason = item.reason || item.phase || 'Pod';
   return {
     key: `pod:${item.namespace}:${item.name}`,
@@ -4097,6 +4506,8 @@ function podIssue(item: KubernetesPod, tr: (zh: string, en: string) => string): 
     name: item.name,
     nodeName: item.node_name,
     reason,
+    relatedWorkloadKind: relatedWorkload?.kind,
+    relatedWorkloadName: relatedWorkload?.name,
     labels: [reason, tr(`${item.restart_count} 次重启`, `${item.restart_count} restarts`)],
     tab: 'pods',
   };
@@ -4175,9 +4586,29 @@ function sortTriageIssues(items: K8sTriageIssue[]) {
 }
 
 function aggregateTriageIssues(items: K8sTriageIssue[]) {
+  const workloadKeys = new Set<string>();
+  for (const item of items) {
+    if (item.kind === 'workload' && item.resourceKind && item.name) {
+      workloadKeys.add(workloadTriageResourceKey(item.namespace, item.resourceKind, item.name));
+    }
+  }
+  const podOwnerKeys = new Map<string, string>();
+  for (const item of items) {
+    if (item.kind !== 'pod' || !item.name || !item.relatedWorkloadKind || !item.relatedWorkloadName) continue;
+    const workloadKey = workloadTriageResourceKey(item.namespace, item.relatedWorkloadKind, item.relatedWorkloadName);
+    if (workloadKeys.has(workloadKey)) {
+      podOwnerKeys.set(podTriageResourceKey(item.namespace, item.name), workloadKey);
+    }
+  }
+
   const grouped = new Map<string, K8sTriageIssue>();
   for (const item of items) {
-    const key = triageIssueResourceKey(item);
+    const resourceKey = triageIssueResourceKey(item);
+    const key = item.kind === 'pod'
+      ? podOwnerKeys.get(resourceKey) ?? resourceKey
+      : item.kind === 'event'
+        ? podOwnerKeys.get(resourceKey) ?? resourceKey
+        : resourceKey;
     const current = grouped.get(key);
     grouped.set(key, current ? mergeTriageIssue(current, item) : item);
   }
@@ -4188,13 +4619,25 @@ function triageIssueResourceKey(item: K8sTriageIssue) {
   const namespace = item.namespace || 'default';
   const kind = item.resourceKind || item.kind;
   if (item.kind === 'node' || kind === 'Node') return `node:${item.nodeName || item.name || item.title}`;
-  if ((item.kind === 'pod' || kind === 'Pod') && item.name) return `pod:${namespace}:${item.name}`;
-  if ((item.kind === 'workload' || isWorkloadKind(kind)) && item.name) return `workload:${namespace}:${kind}:${item.name}`;
+  if ((item.kind === 'pod' || kind.toLowerCase() === 'pod') && item.name) return podTriageResourceKey(namespace, item.name);
+  if ((item.kind === 'workload' || isWorkloadKind(kind)) && item.name) return workloadTriageResourceKey(namespace, kind, item.name);
+  if (item.kind === 'event' && item.name) return `resource:${namespace}:${kind.trim().toLowerCase()}:${item.name}`;
   return item.key;
 }
 
+function podTriageResourceKey(namespace: string | undefined, name: string) {
+  return `pod:${namespace || 'default'}:${name}`;
+}
+
+function workloadTriageResourceKey(namespace: string | undefined, kind: string, name: string) {
+  return `workload:${namespace || 'default'}:${kind.trim().toLowerCase()}:${name}`;
+}
+
 function mergeTriageIssue(a: K8sTriageIssue, b: K8sTriageIssue): K8sTriageIssue {
-  const [primary, secondary] = sortTriageIssues([a, b]);
+  const ranked = sortTriageIssues([a, b]);
+  const workload = a.kind === 'workload' ? a : b.kind === 'workload' ? b : null;
+  const primary = workload ?? ranked[0];
+  const secondary = primary === a ? b : a;
   const secondarySignals = [
     secondary.kind === 'event' ? secondary.title : '',
     secondary.reason,
@@ -4204,6 +4647,7 @@ function mergeTriageIssue(a: K8sTriageIssue, b: K8sTriageIssue): K8sTriageIssue 
   const detail = uniqueStrings([primary.detail, secondary.detail]).join(' · ') || undefined;
   return {
     ...primary,
+    tone: ranked[0].tone,
     labels,
     detail,
   };
@@ -4222,7 +4666,7 @@ function uniqueStrings(values: Array<string | undefined | null>) {
 }
 
 function isWorkloadKind(kind: string) {
-  return kind === 'Deployment' || kind === 'StatefulSet' || kind === 'DaemonSet' || kind === 'Job' || kind === 'CronJob';
+  return ['deployment', 'statefulset', 'daemonset', 'replicaset', 'job', 'cronjob'].includes(kind.trim().toLowerCase());
 }
 
 function buildNodeIssues(nodes: KubernetesNode[]): K8sTriageIssue[] {
@@ -4315,7 +4759,20 @@ function buildNamespaceRows(
   pods: KubernetesPod[],
   events: KubernetesEvent[],
   warningEvents: KubernetesEvent[],
+  summaries?: KubernetesClusterHealth['namespaces'],
 ): NamespaceRow[] {
+  if (summaries !== undefined) {
+    return summaries
+      .map((summary) => ({
+        namespace: summary.namespace || 'default',
+        workloads: summary.workloads,
+        pods: summary.pods,
+        events: summary.events,
+        warnings: summary.warnings,
+        lastSeenAt: summary.last_seen_at ?? null,
+      }))
+      .sort((a, b) => a.namespace.localeCompare(b.namespace));
+  }
   const rows = new Map<string, NamespaceRow>();
   const ensure = (namespace: string) => {
     const key = namespace || 'default';
@@ -4450,14 +4907,14 @@ function buildWriteActionRecommendations({
     }
   }
 
-  const degradedWorkload = workloads.find((item) => item.desired_replicas > item.ready_replicas);
+  const degradedWorkload = workloads.find((item) => isDegradedWorkload(item) && ['Deployment', 'StatefulSet', 'DaemonSet'].includes(item.kind));
   if (restartSpec && degradedWorkload && !recommendations.some((item) => item.target.includes(`${degradedWorkload.kind}/${degradedWorkload.name}`))) {
     recommendations.push({
       key: `workload:${degradedWorkload.namespace}:${degradedWorkload.kind}:${degradedWorkload.name}:restart`,
       spec: restartSpec,
       title: tr('建议 restart rollout', 'Suggest restart rollout'),
       target: `${degradedWorkload.kind}/${degradedWorkload.name} namespace=${degradedWorkload.namespace} replicas=${degradedWorkload.ready_replicas}/${degradedWorkload.desired_replicas}`,
-      evidence: tr(`${degradedWorkload.ready_replicas}/${degradedWorkload.desired_replicas} 副本就绪`, `${degradedWorkload.ready_replicas}/${degradedWorkload.desired_replicas} replicas ready`),
+      evidence: workloadProgressText(degradedWorkload, tr),
       tone: recommendationTone(restartSpec),
     });
   }

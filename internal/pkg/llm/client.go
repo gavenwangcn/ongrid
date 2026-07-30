@@ -596,6 +596,7 @@ func fromOpenAIMessage(m openai.ChatCompletionMessage) (Message, error) {
 // Covered families:
 //   - OpenAI o-series: o1, o1-mini, o3, o3-mini, o4-mini, …
 //   - GPT-5 family: gpt-5, gpt-5.5, gpt-5-mini, gpt-5.6-sol, … (all reasoning)
+//   - Kimi K2/K3 families: kimi-k2.5, kimi-k2.6, kimi-k3, …
 //   - Any name tagged "reasoner"/"reasoning" (e.g. deepseek-reasoner)
 func isReasoningModel(model string) bool {
 	m := strings.ToLower(strings.TrimSpace(model))
@@ -608,6 +609,8 @@ func isReasoningModel(model string) bool {
 	case strings.HasPrefix(m, "o1-") || strings.HasPrefix(m, "o3-") || strings.HasPrefix(m, "o4-"):
 		return true
 	case strings.HasPrefix(m, "gpt-5"):
+		return true
+	case strings.HasPrefix(m, "kimi-k2") || strings.HasPrefix(m, "kimi-k3"):
 		return true
 	case strings.Contains(m, "reasoner") || strings.Contains(m, "reasoning"):
 		return true
@@ -655,6 +658,7 @@ func isSamplingParamError(err error) bool {
 		return false
 	}
 	return strings.Contains(msg, "fixed at 1") ||
+		strings.Contains(msg, "only 1 is allowed") ||
 		strings.Contains(msg, "beta-limitations") ||
 		strings.Contains(msg, "only the default") ||
 		strings.Contains(msg, "does not support") ||

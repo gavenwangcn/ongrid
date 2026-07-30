@@ -28,7 +28,7 @@ const cluster = {
   inventory_sync_duration_ms: 51,
   created_at: '2026-06-29T09:00:00Z',
   updated_at: '2026-06-29T10:00:00Z',
-  upgrade_command: "helm upgrade ongrid-edge 'oci://helm.cnb.cool/ongridio/ongrid-edge' --version '0.10.0' --namespace 'ongrid-system' --reuse-values --set-string manager.publicURL='https://manager.example' --set-string manager.tunnelAddr='manager.example:40012' --set-string manager.tlsInsecure=true",
+  upgrade_command: "helm upgrade ongrid-edge 'oci://helm.cnb.cool/ongridio/ongrid-edge' --version '0.10.0' --namespace 'ongrid-system' --reset-then-reuse-values --set-string manager.publicURL='https://manager.example' --set-string manager.tunnelAddr='manager.example:40012' --set-string manager.tlsInsecure=true --wait --wait-for-jobs --atomic --timeout '15m'",
 };
 
 function ChatStateProbe() {
@@ -403,6 +403,430 @@ describe('KubernetesPage', () => {
     expect(screen.getAllByText('查询详情').length).toBeGreaterThanOrEqual(3);
   });
 
+  it('运行中的 Job 不计入异常而终止失败的 Job 保留异常', async () => {
+    const activeJob = {
+      id: 51,
+      cluster_id: 1,
+      namespace: 'jobs',
+      kind: 'Job',
+      name: 'schema-job-active',
+      desired_replicas: 1,
+      ready_replicas: 0,
+      active_replicas: 1,
+      failed_replicas: 0,
+      conditions: [],
+      last_seen_at: new Date().toISOString(),
+    };
+    const failedJob = {
+      id: 52,
+      cluster_id: 1,
+      namespace: 'jobs',
+      kind: 'Job',
+      name: 'schema-job-failed',
+      desired_replicas: 1,
+      ready_replicas: 0,
+      active_replicas: 0,
+      failed_replicas: 1,
+      conditions: [{ type: 'Failed', status: 'True', reason: 'BackoffLimitExceeded' }],
+      last_seen_at: new Date().toISOString(),
+    };
+    const retryingJob = {
+      ...failedJob,
+      id: 54,
+      name: 'schema-job-retrying',
+      failed_replicas: 1,
+      conditions: [],
+    };
+    const failedJobPod = {
+      id: 53,
+      cluster_id: 1,
+      namespace: 'jobs',
+      name: 'schema-job-failed-pod',
+      uid: 'schema-job-failed-pod',
+      node_name: 'worker-a',
+      phase: 'Failed',
+      owner_kind: 'Job',
+      owner_name: 'schema-job-failed',
+      restart_count: 0,
+      reason: 'Unknown',
+      last_seen_at: new Date().toISOString(),
+    };
+    let issueOnlyRequests = 0;
+    let includeFailedJob = true;
+    server.use(
+      http.get('/api/v1/k8s/clusters/:id/health', () => HttpResponse.json({
+        degraded_workloads: 1,
+        pending_pods: 0,
+        crash_loop_back_off_pods: 0,
+        oom_killed_pods: 0,
+        image_pull_back_off_pods: 0,
+        not_ready_nodes: 0,
+      })),
+      http.get('/api/v1/k8s/clusters/:id/workloads', ({ request }) => {
+        const issueOnly = new URL(request.url).searchParams.get('issue_only') === 'true';
+        if (issueOnly) issueOnlyRequests += 1;
+        const items = issueOnly
+          ? includeFailedJob ? [failedJob] : []
+          : includeFailedJob ? [activeJob, retryingJob, failedJob] : [activeJob, retryingJob];
+        return HttpResponse.json({ items, total: items.length, limit: 100, offset: 0 });
+      }),
+      http.get('/api/v1/k8s/clusters/:id/pods', ({ request }) => {
+        const reason = new URL(request.url).searchParams.get('reason');
+        if (reason === 'CrashLoopBackOff') {
+          return HttpResponse.json({ items: [], total: 0, limit: 20, offset: 0 });
+        }
+        return HttpResponse.json({ items: [failedJobPod], total: 1, limit: 20, offset: 0 });
+      }),
+      http.get('/api/v1/k8s/clusters/:id/events', () => HttpResponse.json({ items: [], total: 0, limit: 100, offset: 0 })),
+    );
+
+    renderKubernetesDetail('/kubernetes/1?tab=workloads');
+
+    const activeCell = await screen.findByText('schema-job-active');
+    const activeRow = activeCell.closest('tr');
+    expect(activeRow).not.toBeNull();
+    expect(within(activeRow as HTMLElement).getByText('运行中')).toBeInTheDocument();
+    expect(within(activeRow as HTMLElement).getByText('0/1 完成 · 1 运行')).toBeInTheDocument();
+
+    const retryingCell = screen.getByText('schema-job-retrying');
+    const retryingRow = retryingCell.closest('tr');
+    expect(retryingRow).not.toBeNull();
+    expect(within(retryingRow as HTMLElement).getByText('等待中')).toBeInTheDocument();
+    expect(within(retryingRow as HTMLElement).getByText('0/1 完成 · 1 失败')).toBeInTheDocument();
+
+    const failedCell = screen.getByText('schema-job-failed');
+    const failedRow = failedCell.closest('tr');
+    expect(failedRow).not.toBeNull();
+    expect(within(failedRow as HTMLElement).getByText('失败')).toBeInTheDocument();
+    expect(screen.queryByText('Job/schema-job-active')).not.toBeInTheDocument();
+    expect(screen.queryByText('Job/schema-job-retrying')).not.toBeInTheDocument();
+    expect(screen.getByText('Job/schema-job-failed')).toBeInTheDocument();
+    expect(screen.getByText('1 个待确认问题')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '只看异常' }));
+    await waitFor(() => {
+      expect(issueOnlyRequests).toBeGreaterThan(0);
+      expect(screen.queryByText('schema-job-active')).not.toBeInTheDocument();
+    });
+    expect(screen.getByText('schema-job-failed')).toBeInTheDocument();
+
+    const issueOnlyRequestsBeforeRefresh = issueOnlyRequests;
+    includeFailedJob = false;
+    fireEvent.click(screen.getByRole('button', { name: '刷新' }));
+    await waitFor(() => {
+      expect(issueOnlyRequests).toBeGreaterThan(issueOnlyRequestsBeforeRefresh);
+      expect(screen.queryByText('schema-job-failed')).not.toBeInTheDocument();
+    });
+  });
+
+  it('集群级异常和 Namespace 汇总不受首屏 100 条限制', async () => {
+    const lateWorkload = {
+      id: 1501,
+      cluster_id: 1,
+      namespace: 'late-page',
+      kind: 'Deployment',
+      name: 'late-api',
+      uid: 'late-api-uid',
+      desired_replicas: 3,
+      ready_replicas: 1,
+      conditions: [],
+      last_seen_at: new Date().toISOString(),
+    };
+    server.use(
+      http.get('/api/v1/k8s/clusters/:id/health', () => HttpResponse.json({
+        degraded_workloads: 1,
+        pending_pods: 0,
+        crash_loop_back_off_pods: 0,
+        oom_killed_pods: 0,
+        image_pull_back_off_pods: 0,
+        not_ready_nodes: 0,
+        namespaces: [
+          { namespace: 'first-page', workloads: 100, pods: 100, events: 100, warnings: 0 },
+          { namespace: 'late-page', workloads: 1, pods: 1400, events: 12, warnings: 0 },
+        ],
+      })),
+      http.get('/api/v1/k8s/clusters/:id/workloads', ({ request }) => {
+        const issueOnly = new URL(request.url).searchParams.get('issue_only') === 'true';
+        if (issueOnly) return HttpResponse.json({ items: [lateWorkload], total: 1, limit: 100, offset: 0 });
+        return HttpResponse.json({
+          items: [{ ...lateWorkload, id: 1, namespace: 'first-page', name: 'healthy-api', ready_replicas: 3 }],
+          total: 1501,
+          limit: 100,
+          offset: 0,
+        });
+      }),
+      http.get('/api/v1/k8s/clusters/:id/pods', ({ request }) => {
+        const url = new URL(request.url);
+        if (url.searchParams.get('reason') === 'CrashLoopBackOff' || url.searchParams.get('issue_only') === 'true') {
+          return HttpResponse.json({ items: [], total: 0, limit: 100, offset: 0 });
+        }
+        return HttpResponse.json({ items: [], total: 1500, limit: 100, offset: 0 });
+      }),
+      http.get('/api/v1/k8s/clusters/:id/events', () => HttpResponse.json({ items: [], total: 0, limit: 100, offset: 0 })),
+    );
+
+    renderKubernetesDetail('/kubernetes/1?tab=namespaces');
+
+    expect(await screen.findByText('Deployment/late-api')).toBeInTheDocument();
+    const namespaceCell = (await screen.findAllByText('late-page')).find((item) => item.closest('td'));
+    const row = namespaceCell?.closest('tr');
+    expect(row).not.toBeNull();
+    expect(within(row as HTMLElement).getByText('1400')).toBeInTheDocument();
+    expect(within(row as HTMLElement).getByText('12')).toBeInTheDocument();
+    expect(screen.getAllByRole('option', { name: 'late-page' }).length).toBeGreaterThan(0);
+  });
+
+  it('关键异常先按严重程度排序再截断展示', async () => {
+    const degradedDeployments = Array.from({ length: 8 }, (_, index) => ({
+      id: 1600 + index,
+      cluster_id: 1,
+      namespace: 'apps',
+      kind: 'Deployment',
+      name: `degraded-${index + 1}`,
+      uid: `degraded-${index + 1}-uid`,
+      desired_replicas: 2,
+      ready_replicas: 1,
+      conditions: [],
+      last_seen_at: new Date().toISOString(),
+    }));
+    const failedJob = {
+      id: 1700,
+      cluster_id: 1,
+      namespace: 'apps',
+      kind: 'Job',
+      name: 'critical-failed',
+      uid: 'critical-failed-uid',
+      desired_replicas: 1,
+      ready_replicas: 0,
+      active_replicas: 0,
+      failed_replicas: 1,
+      conditions: [{ type: 'Failed', status: 'True', reason: 'BackoffLimitExceeded' }],
+      last_seen_at: new Date().toISOString(),
+    };
+    server.use(
+      http.get('/api/v1/k8s/clusters/:id/health', () => HttpResponse.json({
+        degraded_workloads: 9,
+        pending_pods: 0,
+        crash_loop_back_off_pods: 0,
+        oom_killed_pods: 0,
+        image_pull_back_off_pods: 0,
+        not_ready_nodes: 0,
+      })),
+      http.get('/api/v1/k8s/clusters/:id/workloads', ({ request }) => {
+        const issueOnly = new URL(request.url).searchParams.get('issue_only') === 'true';
+        const items = issueOnly ? [...degradedDeployments, failedJob] : [];
+        return HttpResponse.json({ items, total: items.length, limit: 100, offset: 0 });
+      }),
+      http.get('/api/v1/k8s/clusters/:id/pods', () => HttpResponse.json({ items: [], total: 0, limit: 100, offset: 0 })),
+      http.get('/api/v1/k8s/clusters/:id/events', () => HttpResponse.json({ items: [], total: 0, limit: 100, offset: 0 })),
+    );
+
+    renderKubernetesDetail('/kubernetes/1?tab=workloads');
+
+    expect(await screen.findByText('Job/critical-failed')).toBeInTheDocument();
+    expect(screen.getByText('9 个待确认问题')).toBeInTheDocument();
+    expect(screen.queryByText('Deployment/degraded-8')).not.toBeInTheDocument();
+  });
+
+  it('异常 Pod 通过 ReplicaSet 合并到 Deployment 根因', async () => {
+    const deployment = {
+      id: 54,
+      cluster_id: 1,
+      namespace: 'apps',
+      kind: 'Deployment',
+      name: 'api',
+      uid: 'deployment-api',
+      desired_replicas: 1,
+      ready_replicas: 0,
+      conditions: [],
+      replica_sets: [{
+        id: 55,
+        cluster_id: 1,
+        namespace: 'apps',
+        kind: 'ReplicaSet',
+        name: 'api-7d8f9',
+        owner_kind: 'Deployment',
+        owner_name: 'api',
+        desired_replicas: 1,
+        ready_replicas: 0,
+        conditions: [],
+        last_seen_at: new Date().toISOString(),
+      }],
+      last_seen_at: new Date().toISOString(),
+    };
+    const pod = {
+      id: 56,
+      cluster_id: 1,
+      namespace: 'apps',
+      name: 'api-7d8f9-broken',
+      uid: 'api-pod-broken',
+      node_name: 'worker-a',
+      phase: 'Running',
+      owner_kind: 'ReplicaSet',
+      owner_name: 'api-7d8f9',
+      restart_count: 6,
+      reason: 'CrashLoopBackOff',
+      last_seen_at: new Date().toISOString(),
+    };
+
+    server.use(
+      http.get('/api/v1/k8s/clusters/:id/health', () => HttpResponse.json({
+        degraded_workloads: 1,
+        pending_pods: 0,
+        crash_loop_back_off_pods: 1,
+        oom_killed_pods: 0,
+        image_pull_back_off_pods: 0,
+        not_ready_nodes: 0,
+      })),
+      http.get('/api/v1/k8s/clusters/:id/workloads', () => HttpResponse.json({
+        items: [deployment], total: 1, limit: 20, offset: 0,
+      })),
+      http.get('/api/v1/k8s/clusters/:id/pods', ({ request }) => {
+        const reason = new URL(request.url).searchParams.get('reason');
+        if (reason === 'CrashLoopBackOff' || reason == null) {
+          return HttpResponse.json({ items: [pod], total: 1, limit: 20, offset: 0 });
+        }
+        return HttpResponse.json({ items: [], total: 0, limit: 20, offset: 0 });
+      }),
+      http.get('/api/v1/k8s/clusters/:id/events', () => HttpResponse.json({ items: [], total: 0, limit: 100, offset: 0 })),
+    );
+
+    renderKubernetesDetail('/kubernetes/1?tab=workloads');
+
+    expect(await screen.findByText('Deployment/api')).toBeInTheDocument();
+    expect(screen.getByText('1 个待确认问题')).toBeInTheDocument();
+    expect(screen.getAllByText('CrashLoopBackOff').length).toBeGreaterThan(0);
+  });
+
+  it('在 Deployment 行内展开关联的 ReplicaSet 发布版本', async () => {
+    const groupedWorkloads = [
+      {
+        id: 61,
+        cluster_id: 1,
+        namespace: 'apps',
+        kind: 'Deployment',
+        name: 'api',
+        desired_replicas: 1,
+        ready_replicas: 1,
+        revision: 3,
+        replica_sets: [
+          {
+            id: 62,
+            cluster_id: 1,
+            namespace: 'apps',
+            kind: 'ReplicaSet',
+            name: 'api-current-7d8f9',
+            desired_replicas: 1,
+            ready_replicas: 1,
+            owner_kind: 'Deployment',
+            owner_name: 'api',
+            revision: 3,
+            creation_timestamp: '2026-07-28T08:09:10Z',
+            last_seen_at: new Date().toISOString(),
+          },
+          {
+            id: 63,
+            cluster_id: 1,
+            namespace: 'apps',
+            kind: 'ReplicaSet',
+            name: 'api-history-6c7e8',
+            desired_replicas: 0,
+            ready_replicas: 0,
+            owner_kind: 'Deployment',
+            owner_name: 'api',
+            revision: 2,
+            creation_timestamp: '2026-07-27T08:09:10Z',
+            last_seen_at: new Date().toISOString(),
+          },
+        ],
+        last_seen_at: new Date().toISOString(),
+      },
+      {
+        id: 64,
+        cluster_id: 1,
+        namespace: 'staging',
+        kind: 'Deployment',
+        name: 'worker',
+        desired_replicas: 1,
+        ready_replicas: 1,
+        revision: 7,
+        replica_sets: [{
+          id: 65,
+          cluster_id: 1,
+          namespace: 'staging',
+          kind: 'ReplicaSet',
+          name: 'worker-current-5b6d7',
+          desired_replicas: 1,
+          ready_replicas: 1,
+          owner_kind: 'Deployment',
+          owner_name: 'worker',
+          revision: 7,
+          creation_timestamp: '2026-07-26T08:09:10Z',
+          last_seen_at: new Date().toISOString(),
+        }],
+        last_seen_at: new Date().toISOString(),
+      },
+      {
+        id: 66,
+        cluster_id: 1,
+        namespace: 'apps',
+        kind: 'ReplicaSet',
+        name: 'standalone-zero',
+        desired_replicas: 0,
+        ready_replicas: 0,
+        last_seen_at: new Date().toISOString(),
+      },
+    ];
+    const groupReplicaSetParams: string[] = [];
+    server.use(
+      http.get('/api/v1/k8s/clusters/:id/workloads', ({ request }) => {
+        const url = new URL(request.url);
+        const namespace = url.searchParams.get('namespace');
+        groupReplicaSetParams.push(url.searchParams.get('group_replica_sets') || 'unset');
+        const matchedItems = namespace
+          ? groupedWorkloads.filter((item) => item.namespace === namespace)
+          : groupedWorkloads;
+        return HttpResponse.json({
+          items: matchedItems,
+          total: matchedItems.length,
+          limit: 100,
+          offset: Number(url.searchParams.get('offset') || 0),
+        });
+      }),
+      http.get('/api/v1/k8s/clusters/:id/pods', () => HttpResponse.json({ items: [], total: 0, limit: 100, offset: 0 })),
+      http.get('/api/v1/k8s/clusters/:id/events', () => HttpResponse.json({ items: [], total: 0, limit: 100, offset: 0 })),
+    );
+
+    renderKubernetesDetail('/kubernetes/1?tab=workloads');
+
+    expect(await screen.findByText('api')).toBeInTheDocument();
+    expect(screen.getByText('standalone-zero')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /显示发布历史/ })).not.toBeInTheDocument();
+    expect(screen.queryByText('api-current-7d8f9')).not.toBeInTheDocument();
+    expect(screen.queryByText('api-history-6c7e8')).not.toBeInTheDocument();
+    expect(groupReplicaSetParams).toContain('true');
+
+    const expand = screen.getByRole('button', { name: '展开 api 的发布版本' });
+    expect(expand).toHaveAttribute('aria-expanded', 'false');
+    expect(expand).toHaveTextContent('2 个版本');
+    fireEvent.click(expand);
+
+    expect(await screen.findByText('api-history-6c7e8')).toBeInTheDocument();
+    expect(screen.getByText('api-current-7d8f9')).toBeInTheDocument();
+    expect(screen.getByText('Revision 3')).toBeInTheDocument();
+    expect(screen.getByText('Revision 2')).toBeInTheDocument();
+    expect(screen.getByText('当前版本')).toBeInTheDocument();
+    expect(screen.getByText('历史版本')).toBeInTheDocument();
+    expect(expand).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.queryByText('worker-current-5b6d7')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole('combobox', { name: '命名空间过滤' }), { target: { value: 'apps' } });
+    await waitFor(() => {
+      expect(screen.queryByText('worker')).not.toBeInTheDocument();
+      expect(screen.getByText('api')).toBeInTheDocument();
+    });
+  });
+
   it('K8s 指标使用 Grafana 11 Explore 深链打开 Prometheus 查询', async () => {
     let launchPayload: { expr?: string } | null = null;
     const replace = vi.fn();
@@ -460,13 +884,15 @@ describe('KubernetesPage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: '升级命令' }));
 
-    expect(screen.getByText('Helm 升级命令')).toBeInTheDocument();
+    expect(screen.getByText('一键 Helm 升级')).toBeInTheDocument();
     const command = screen.getByText(/helm upgrade ongrid-edge/);
     expect(command).toHaveTextContent("'oci://helm.cnb.cool/ongridio/ongrid-edge'");
     expect(command).toHaveTextContent("--version '0.10.0'");
     expect(command).toHaveTextContent("--namespace 'ongrid-system'");
-    expect(command).toHaveTextContent('--reuse-values');
+    expect(command).toHaveTextContent('--reset-then-reuse-values');
     expect(command).toHaveTextContent("manager.tunnelAddr='manager.example:40012'");
+    expect(command).toHaveTextContent('--wait-for-jobs');
+    expect(command).toHaveTextContent('--atomic');
   });
 
   it('已恢复的 Warning Event 不进入健康结论和异常线索', async () => {
@@ -522,6 +948,91 @@ describe('KubernetesPage', () => {
     expect(screen.queryByText('Readiness probe failed: HTTP probe failed with statuscode: 500')).not.toBeInTheDocument();
   });
 
+  it('同一 HPA 的多条 Warning Event 合并为一个异常线索', async () => {
+    server.use(
+      http.get('/api/v1/k8s/clusters/:id/health', () => HttpResponse.json({
+        degraded_workloads: 0,
+        pending_pods: 0,
+        crash_loop_back_off_pods: 0,
+        oom_killed_pods: 0,
+        image_pull_back_off_pods: 0,
+        not_ready_nodes: 0,
+      })),
+      http.get('/api/v1/k8s/clusters/:id/pods', ({ request }) => {
+        const url = new URL(request.url);
+        if (url.searchParams.get('reason') === 'CrashLoopBackOff') {
+          return HttpResponse.json({ items: [], total: 0, limit: 20, offset: 0 });
+        }
+        return HttpResponse.json({
+          items: [{
+            id: 31,
+            cluster_id: 1,
+            namespace: 'ongrid-system',
+            name: 'ongrid-edge-controller-abc',
+            uid: 'pod-healthy',
+            node_name: 'ongrid-k8s-control-plane',
+            phase: 'Running',
+            owner_kind: 'Deployment',
+            owner_name: 'ongrid-edge-controller',
+            restart_count: 0,
+            reason: '',
+            last_seen_at: '2026-06-29T10:00:00Z',
+          }],
+          total: 1,
+          limit: 100,
+          offset: 0,
+        });
+      }),
+      http.get('/api/v1/k8s/clusters/:id/events', ({ request }) => {
+        const url = new URL(request.url);
+        if (url.searchParams.get('issue_only') !== 'true') {
+          return HttpResponse.json({ items: [], total: 0, limit: 100, offset: 0 });
+        }
+        return HttpResponse.json({
+          items: [
+            {
+              id: 71,
+              cluster_id: 1,
+              namespace: 'ongrid-system',
+              name: 'hpa-failed-compute',
+              type: 'Warning',
+              reason: 'FailedComputeMetricsReplicas',
+              message: 'invalid metrics',
+              involved_kind: 'HorizontalPodAutoscaler',
+              involved_namespace: 'ongrid-system',
+              involved_name: 'ongrid-edge-telemetry-gateway',
+              count: 4,
+            },
+            {
+              id: 72,
+              cluster_id: 1,
+              namespace: 'ongrid-system',
+              name: 'hpa-failed-resource',
+              type: 'Warning',
+              reason: 'FailedGetResourceMetric',
+              message: 'did not receive metrics for targeted pods',
+              involved_kind: 'HorizontalPodAutoscaler',
+              involved_namespace: 'ongrid-system',
+              involved_name: 'ongrid-edge-telemetry-gateway',
+              count: 4,
+            },
+          ],
+          total: 2,
+          limit: 100,
+          offset: 0,
+        });
+      }),
+    );
+
+    renderKubernetesDetail('/kubernetes/1');
+
+    expect(await screen.findByText('1 个待确认问题')).toBeInTheDocument();
+    expect(screen.getByText('Warning Event 2')).toBeInTheDocument();
+    expect(screen.queryByText('2 个待确认问题')).not.toBeInTheDocument();
+    expect(screen.getByText('FailedComputeMetricsReplicas')).toBeInTheDocument();
+    expect(screen.getByText('FailedGetResourceMetric')).toBeInTheDocument();
+  });
+
   it('Agent 版本只统计节点 Edge，不把 Controller 纳入覆盖率', async () => {
     server.use(
       http.get('/api/v1/edges', () =>
@@ -561,8 +1072,8 @@ describe('KubernetesPage', () => {
     expect(screen.queryByText('已上报 1/2')).not.toBeInTheDocument();
   });
 
-  it('Pod 资源表支持加载更多快照结果', async () => {
-    const podLimits: number[] = [];
+  it('Pod 资源表使用 offset 分页访问 1500 条结果', async () => {
+    const podPages: Array<{ limit: number; offset: number }> = [];
     server.use(
       http.get('/api/v1/k8s/clusters/:id/pods', ({ request }) => {
         const url = new URL(request.url);
@@ -570,11 +1081,12 @@ describe('KubernetesPage', () => {
           return HttpResponse.json({ items: [], total: 0, limit: 20, offset: 0 });
         }
         const limit = Number(url.searchParams.get('limit') || 100);
-        podLimits.push(limit);
-        const count = Math.min(limit, 150);
+        const offset = Number(url.searchParams.get('offset') || 0);
+        podPages.push({ limit, offset });
+        const count = Math.max(0, Math.min(limit, 1500 - offset));
         return HttpResponse.json({
           items: Array.from({ length: count }, (_, index) => {
-            const n = index + 1;
+            const n = offset + index + 1;
             return {
               id: n,
               cluster_id: 1,
@@ -588,9 +1100,9 @@ describe('KubernetesPage', () => {
               last_seen_at: '2026-06-29T10:00:00Z',
             };
           }),
-          total: 150,
+          total: 1500,
           limit,
-          offset: 0,
+          offset,
         });
       }),
     );
@@ -598,18 +1110,30 @@ describe('KubernetesPage', () => {
     renderKubernetesDetail('/kubernetes/1?tab=pods');
 
     expect(await screen.findByText('pod-001')).toBeInTheDocument();
-    expect(screen.getByText('显示前 100 条，共 150 条')).toBeInTheDocument();
+    expect(screen.getByText('第 1 / 15 页')).toBeInTheDocument();
+    expect(screen.getByText('1–100 / 共 1,500 条')).toBeInTheDocument();
+    expect(screen.queryByText('pod-101')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: '加载更多' }));
+    fireEvent.click(screen.getByRole('button', { name: '下一页' }));
 
     await waitFor(() => {
-      expect(podLimits).toContain(200);
+      expect(podPages).toContainEqual({ limit: 100, offset: 100 });
     });
-    expect(await screen.findByText('pod-150')).toBeInTheDocument();
+    expect(await screen.findByText('pod-101')).toBeInTheDocument();
+    expect(screen.getByText('pod-200')).toBeInTheDocument();
+    expect(screen.queryByText('pod-001')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole('combobox', { name: '页码' }), { target: { value: '15' } });
+    await waitFor(() => {
+      expect(podPages).toContainEqual({ limit: 100, offset: 1400 });
+    });
+    expect(await screen.findByText('pod-1500')).toBeInTheDocument();
+    expect(screen.getByText('第 15 / 15 页')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '下一页' })).toBeDisabled();
   });
 
-  it('Pod 资源表筛选分页明确展示匹配结果', async () => {
-    const podLimits: number[] = [];
+  it('Pod 资源表筛选后从第一页开始按 offset 分页', async () => {
+    const podPages: Array<{ limit: number; offset: number }> = [];
     server.use(
       http.get('/api/v1/k8s/clusters/:id/pods', ({ request }) => {
         const url = new URL(request.url);
@@ -618,12 +1142,13 @@ describe('KubernetesPage', () => {
         }
         const query = url.searchParams.get('q') || '';
         const limit = Number(url.searchParams.get('limit') || 100);
+        const offset = Number(url.searchParams.get('offset') || 0);
         if (query === 'api') {
-          podLimits.push(limit);
-          const count = Math.min(limit, 150);
+          podPages.push({ limit, offset });
+          const count = Math.max(0, Math.min(limit, 150 - offset));
           return HttpResponse.json({
             items: Array.from({ length: count }, (_, index) => {
-              const n = index + 1;
+              const n = offset + index + 1;
               return {
                 id: n,
                 cluster_id: 1,
@@ -639,7 +1164,7 @@ describe('KubernetesPage', () => {
             }),
             total: 150,
             limit,
-            offset: 0,
+            offset,
           });
         }
         return HttpResponse.json({
@@ -668,13 +1193,16 @@ describe('KubernetesPage', () => {
     fireEvent.change(screen.getByRole('textbox', { name: '搜索资源' }), { target: { value: 'api' } });
 
     expect(await screen.findByText('api-pod-001')).toBeInTheDocument();
-    expect(screen.getByText('显示前 100 条匹配，共 150 条匹配')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '加载更多匹配' }));
+    expect(screen.getByText('第 1 / 2 页')).toBeInTheDocument();
+    expect(screen.getByText('1–100 / 共 150 条匹配')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '下一页' }));
 
     await waitFor(() => {
-      expect(podLimits).toContain(200);
+      expect(podPages).toContainEqual({ limit: 100, offset: 100 });
     });
+    expect(await screen.findByText('api-pod-101')).toBeInTheDocument();
     expect(await screen.findByText('api-pod-150')).toBeInTheDocument();
+    expect(screen.queryByText('api-pod-001')).not.toBeInTheDocument();
   });
 
   it('Pod 资源搜索防抖后再请求服务端', async () => {

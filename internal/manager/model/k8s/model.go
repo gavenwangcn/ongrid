@@ -79,18 +79,29 @@ func (Node) TableName() string { return "k8s_nodes" }
 // Workload is the current snapshot of a Kubernetes workload object.
 type Workload struct {
 	ID        uint64 `gorm:"primaryKey;autoIncrement"`
-	ClusterID uint64 `gorm:"not null;column:cluster_id;uniqueIndex:idx_k8s_workloads_key,priority:1;index:idx_k8s_workloads_cluster_seen,priority:1"`
+	ClusterID uint64 `gorm:"not null;column:cluster_id;uniqueIndex:idx_k8s_workloads_key,priority:1;index:idx_k8s_workloads_cluster_seen,priority:1;index:idx_k8s_workloads_owner,priority:1"`
 	Namespace string `gorm:"size:255;not null;default:'';column:namespace;uniqueIndex:idx_k8s_workloads_key,priority:3"`
 	Kind      string `gorm:"size:64;not null;column:kind;uniqueIndex:idx_k8s_workloads_key,priority:2"`
 	Name      string `gorm:"size:255;not null;column:name;uniqueIndex:idx_k8s_workloads_key,priority:4"`
 	UID       string `gorm:"size:128;not null;default:'';column:uid"`
 
-	DesiredReplicas int        `gorm:"not null;default:0;column:desired_replicas"`
-	ReadyReplicas   int        `gorm:"not null;default:0;column:ready_replicas"`
-	LabelsJSON      string     `gorm:"type:text;not null;column:labels_json"`
-	AnnotationsJSON string     `gorm:"type:text;not null;column:annotations_json"`
-	ConditionsJSON  string     `gorm:"type:text;not null;column:conditions_json"`
-	LastSeenAt      *time.Time `gorm:"column:last_seen_at;index:idx_k8s_workloads_cluster_seen,priority:2"`
+	DesiredReplicas   int        `gorm:"not null;default:0;column:desired_replicas"`
+	ReadyReplicas     int        `gorm:"not null;default:0;column:ready_replicas"`
+	ActiveReplicas    int        `gorm:"not null;default:0;column:active_replicas"`
+	FailedReplicas    int        `gorm:"not null;default:0;column:failed_replicas"`
+	IsTerminalFailure bool       `gorm:"not null;default:false;column:is_terminal_failure"`
+	OwnerKind         string     `gorm:"size:64;not null;default:'';column:owner_kind;index:idx_k8s_workloads_owner,priority:2"`
+	OwnerName         string     `gorm:"size:255;not null;default:'';column:owner_name"`
+	OwnerUID          string     `gorm:"size:128;not null;default:'';column:owner_uid;index:idx_k8s_workloads_owner,priority:3"`
+	Revision          int64      `gorm:"not null;default:0;column:revision"`
+	ResourceCreatedAt *time.Time `gorm:"column:resource_created_at"`
+	LabelsJSON        string     `gorm:"type:text;not null;column:labels_json"`
+	AnnotationsJSON   string     `gorm:"type:text;not null;column:annotations_json"`
+	ConditionsJSON    string     `gorm:"type:text;not null;column:conditions_json"`
+	LastSeenAt        *time.Time `gorm:"column:last_seen_at;index:idx_k8s_workloads_cluster_seen,priority:2"`
+
+	// ReplicaSets is populated only for grouped API reads and is never persisted.
+	ReplicaSets []*Workload `gorm:"-"`
 
 	CreatedAt time.Time `gorm:"column:created_at"`
 	UpdatedAt time.Time `gorm:"column:updated_at"`
@@ -169,3 +180,18 @@ type Installation struct {
 }
 
 func (Installation) TableName() string { return "k8s_installations" }
+
+// TelemetryCredential is the cluster-scoped, write-only identity used by
+// Kubernetes telemetry data-plane workloads. It is deliberately separate
+// from Edge credentials: the tunnel authenticator only reads the edges table,
+// so this credential cannot establish a controller tunnel or execute actions.
+type TelemetryCredential struct {
+	ClusterID     uint64 `gorm:"primaryKey;column:cluster_id"`
+	AccessKeyID   string `gorm:"size:128;not null;uniqueIndex:idx_k8s_telemetry_credentials_access_key;column:access_key_id"`
+	SecretKeyHash string `gorm:"size:512;not null;column:secret_key_hash"`
+
+	CreatedAt time.Time `gorm:"column:created_at"`
+	UpdatedAt time.Time `gorm:"column:updated_at"`
+}
+
+func (TelemetryCredential) TableName() string { return "k8s_telemetry_credentials" }

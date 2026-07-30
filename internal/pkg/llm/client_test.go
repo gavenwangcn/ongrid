@@ -335,30 +335,42 @@ func TestSamplingForwardedWhenSet(t *testing.T) {
 	}
 }
 
-// TestReasoningModelOmitsTemperature — a reasoning model (gpt-5.x) must NOT
-// carry a temperature: the SDK's omitempty drops the zero value so the
+// TestReasoningModelOmitsTemperature — fixed-sampling reasoning models must
+// NOT carry a temperature: the SDK's omitempty drops the zero value so the
 // provider applies its fixed default (1) instead of 400-ing on 0.1.
 func TestReasoningModelOmitsTemperature(t *testing.T) {
-	var present bool
-	_, cfg := fakeServer(t, func(w http.ResponseWriter, r *http.Request) {
-		raw, _ := io.ReadAll(r.Body)
-		// Probe the raw body: a present key means we sent it, even if 0.
-		var probe map[string]json.RawMessage
-		_ = json.Unmarshal(raw, &probe)
-		_, present = probe["temperature"]
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(sampleChatResponse("ok", nil))
-	})
-	client := newTestClient(t, cfg, nil)
-	_, err := client.Chat(context.Background(), ChatReq{
-		Model:    "gpt-5.5",
-		Messages: []Message{{Role: "user", Content: "hi"}},
-	})
-	if err != nil {
-		t.Fatalf("Chat: %v", err)
-	}
-	if present {
-		t.Errorf("temperature was sent for a reasoning model, want omitted")
+	for _, model := range []string{"gpt-5.5", "kimi-k2.5", "kimi-k2.6", "kimi-k3"} {
+		t.Run(model, func(t *testing.T) {
+			var present bool
+			_, cfg := fakeServer(t, func(w http.ResponseWriter, r *http.Request) {
+				raw, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Errorf("read request body: %v", err)
+					return
+				}
+				// Probe the raw body: a present key means we sent it, even if 0.
+				var probe map[string]json.RawMessage
+				if err := json.Unmarshal(raw, &probe); err != nil {
+					t.Errorf("decode request body: %v", err)
+					return
+				}
+				_, present = probe["temperature"]
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write(sampleChatResponse("ok", nil))
+			})
+			client := newTestClient(t, cfg, nil)
+			_, err := client.Chat(context.Background(), ChatReq{
+				Model:       model,
+				Messages:    []Message{{Role: "user", Content: "hi"}},
+				Temperature: 0.1,
+			})
+			if err != nil {
+				t.Fatalf("Chat: %v", err)
+			}
+			if present {
+				t.Errorf("temperature was sent for model %q, want omitted", model)
+			}
+		})
 	}
 }
 
@@ -419,9 +431,16 @@ func TestSamplingErrorTriggersRetry(t *testing.T) {
 	}
 }
 
+func TestIsSamplingParamError_KimiOnlyOneAllowed(t *testing.T) {
+	err := errors.New("error, status code: 400, status: 400 Bad Request, message: invalid temperature: only 1 is allowed for this model")
+	if !isSamplingParamError(err) {
+		t.Fatal("isSamplingParamError returned false for Kimi fixed-temperature error")
+	}
+}
+
 // TestIsReasoningModel spot-checks the name heuristic.
 func TestIsReasoningModel(t *testing.T) {
-	reasoning := []string{"gpt-5", "gpt-5.5", "gpt-5.6-sol", "GPT-5-mini", "o1", "o1-mini", "o3-mini", "o4-mini", "deepseek-reasoner"}
+	reasoning := []string{"gpt-5", "gpt-5.5", "gpt-5.6-sol", "GPT-5-mini", "o1", "o1-mini", "o3-mini", "o4-mini", "deepseek-reasoner", "kimi-k2.5", "KIMI-K2.6", "kimi-k3"}
 	for _, m := range reasoning {
 		if !isReasoningModel(m) {
 			t.Errorf("isReasoningModel(%q) = false, want true", m)

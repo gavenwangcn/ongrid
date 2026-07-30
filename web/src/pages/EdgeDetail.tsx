@@ -8,7 +8,7 @@ import {
   Tooltip,
   XAxis,
   YAxis,
-  Legend,
+  type TooltipProps,
 } from 'recharts';
 import {
   ChevronLeft,
@@ -113,6 +113,12 @@ type PanelData = {
   series: SeriesDescriptor[];
 };
 
+type TooltipEntry = {
+  color?: string;
+  dataKey?: string | number;
+  value?: unknown;
+};
+
 type PanelKey = 'cpu' | 'mem' | 'disk' | 'netRx' | 'netTx';
 
 const EMPTY_PANEL: PanelData = { rows: [], series: [] };
@@ -137,12 +143,12 @@ export default function EdgeDetailPage() {
   });
   const [metricsErr, setMetricsErr] = useState<string | null>(null);
   const [promErr, setPromErr] = useState<string | null>(null);
-  const [hidden, setHidden] = useState<Record<PanelKey, Set<string>>>({
-    cpu: new Set(),
-    mem: new Set(),
-    disk: new Set(),
-    netRx: new Set(),
-    netTx: new Set(),
+  const [selectedSeriesKeys, setSelectedSeriesKeys] = useState<Record<PanelKey, string | null>>({
+    cpu: null,
+    mem: null,
+    disk: null,
+    netRx: null,
+    netTx: null,
   });
 
   const [tab, setTab] = useState<Tab>('metrics');
@@ -318,12 +324,10 @@ export default function EdgeDetailPage() {
   );
 
   const toggleSeries = (panel: PanelKey, key: string) => {
-    setHidden((prev) => {
-      const nextSet = new Set(prev[panel]);
-      if (nextSet.has(key)) nextSet.delete(key);
-      else nextSet.add(key);
-      return { ...prev, [panel]: nextSet };
-    });
+    setSelectedSeriesKeys((prev) => ({
+      ...prev,
+      [panel]: prev[panel] === key ? null : key,
+    }));
   };
 
   const displayName = device?.name || device?.hostname || edge?.name || edgeId;
@@ -396,7 +400,7 @@ export default function EdgeDetailPage() {
                 subtitle={tr('最近 6 小时 · 1m 粒度 · 每条线 = 一个 cpu', 'Last 6h · 1m step · one line per CPU')}
                 icon={Cpu}
                 panel={panels.cpu}
-                hidden={hidden.cpu}
+                selectedSeriesKey={selectedSeriesKeys.cpu}
                 onToggle={(k) => toggleSeries('cpu', k)}
                 formatValue={(v) => `${v.toFixed(1)}%`}
                 yDomain={[0, 100]}
@@ -413,7 +417,7 @@ export default function EdgeDetailPage() {
                 )}
                 icon={MemoryStick}
                 panel={panels.mem}
-                hidden={hidden.mem}
+                selectedSeriesKey={selectedSeriesKeys.mem}
                 onToggle={(k) => toggleSeries('mem', k)}
                 formatValue={(v) => `${v.toFixed(1)}%`}
                 yDomain={[0, 100]}
@@ -427,7 +431,7 @@ export default function EdgeDetailPage() {
                 subtitle={tr('最近 6 小时 · 1m 粒度 · 每条线 = 一个物理设备', 'Last 6h · 1m step · one line per physical device')}
                 icon={HardDrive}
                 panel={panels.disk}
-                hidden={hidden.disk}
+                selectedSeriesKey={selectedSeriesKeys.disk}
                 onToggle={(k) => toggleSeries('disk', k)}
                 formatValue={(v) => `${v.toFixed(1)}%`}
                 yDomain={[0, 100]}
@@ -443,7 +447,7 @@ export default function EdgeDetailPage() {
                 subtitle={tr('最近 6 小时 · 1m 粒度 · 每条线 = 一个 device · bytes/s', 'Last 6h · 1m step · one line per device · bytes/s')}
                 icon={ArrowDownRight}
                 panel={panels.netRx}
-                hidden={hidden.netRx}
+                selectedSeriesKey={selectedSeriesKeys.netRx}
                 onToggle={(k) => toggleSeries('netRx', k)}
                 formatValue={formatBytesPerSec}
                 onOpenDrilldown={
@@ -458,7 +462,7 @@ export default function EdgeDetailPage() {
                 subtitle={tr('最近 6 小时 · 1m 粒度 · 每条线 = 一个 device · bytes/s', 'Last 6h · 1m step · one line per device · bytes/s')}
                 icon={ArrowUpRight}
                 panel={panels.netTx}
-                hidden={hidden.netTx}
+                selectedSeriesKey={selectedSeriesKeys.netTx}
                 onToggle={(k) => toggleSeries('netTx', k)}
                 formatValue={formatBytesPerSec}
                 onOpenDrilldown={
@@ -708,7 +712,12 @@ function matrixToPanel(
       const key = `${panelKey}_${labelVal}`;
       return { labelVal, key, raw: s };
     })
-    .sort((a, b) => a.labelVal.localeCompare(b.labelVal))
+    .sort((a, b) =>
+      a.labelVal.localeCompare(b.labelVal, undefined, {
+        numeric: true,
+        sensitivity: 'base',
+      }),
+    )
     .map((entry, idx) => ({
       key: entry.key,
       label: entry.labelVal,
@@ -780,7 +789,7 @@ function MultiLinePanel({
   subtitle,
   icon: Icon,
   panel,
-  hidden,
+  selectedSeriesKey,
   onToggle,
   formatValue,
   yDomain,
@@ -790,14 +799,22 @@ function MultiLinePanel({
   subtitle: string;
   icon: typeof Cpu;
   panel: PanelData;
-  hidden: Set<string>;
+  selectedSeriesKey: string | null;
   onToggle(key: string): void;
   formatValue(v: number): string;
   yDomain?: [number, number];
   onOpenDrilldown?(): void;
 }) {
   const { tr } = useI18n();
-  const visibleSeries = panel.series.filter((s) => !hidden.has(s.key));
+  const visibleSeries = useMemo(() => {
+    if (!selectedSeriesKey) return panel.series;
+    const selectedSeries = panel.series.find((series) => series.key === selectedSeriesKey);
+    return selectedSeries ? [selectedSeries] : panel.series;
+  }, [panel.series, selectedSeriesKey]);
+  const tooltipYDomain = useMemo(
+    () => calculateTooltipYDomain(panel.rows, visibleSeries, yDomain),
+    [panel.rows, visibleSeries, yDomain],
+  );
 
   return (
     <section className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
@@ -823,35 +840,6 @@ function MultiLinePanel({
         )}
       </div>
 
-      {panel.series.length > 0 && (
-        <div className="mb-3 flex flex-wrap gap-x-3 gap-y-1.5">
-          {panel.series.map((s) => {
-            const isHidden = hidden.has(s.key);
-            return (
-              <button
-                key={s.key}
-                type="button"
-                onClick={() => onToggle(s.key)}
-                className={cn(
-                  'inline-flex items-center gap-1.5 rounded-md border border-transparent px-1.5 py-0.5 text-[11px] transition-colors',
-                  isHidden
-                    ? 'text-zinc-600 hover:bg-zinc-900 hover:text-zinc-400'
-                    : 'text-zinc-300 hover:bg-zinc-800/60',
-                )}
-              >
-                <span
-                  className="h-2 w-3 rounded-sm"
-                  style={{ backgroundColor: isHidden ? '#3f3f46' : s.color }}
-                />
-                <span className={cn('font-mono', isHidden && 'line-through decoration-zinc-600')}>
-                  {s.label}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      )}
-
       <div className="h-60 w-full">
         {panel.rows.length === 0 || panel.series.length === 0 ? (
           <div className="flex h-full items-center justify-center text-xs text-zinc-500">
@@ -876,28 +864,13 @@ function MultiLinePanel({
                 tickFormatter={(v) => formatValue(v as number)}
               />
               <Tooltip
-                contentStyle={{
-                  background: '#0a0a0aee',
-                  border: '1px solid #27272a',
-                  borderRadius: 8,
-                  fontSize: 12,
-                  color: '#e4e4e7',
-                  padding: '8px 10px',
-                }}
-                labelStyle={{ color: '#a1a1aa', marginBottom: 4 }}
-                itemStyle={{ padding: '1px 0' }}
-                formatter={(value, name) => {
-                  const desc = panel.series.find((s) => s.key === String(name));
-                  return [formatValue(value as number), desc?.label ?? String(name)];
-                }}
-              />
-              <Legend
-                wrapperStyle={{ fontSize: 10, color: '#a1a1aa', paddingTop: 8 }}
-                iconType="plainline"
-                formatter={(value) => {
-                  const desc = panel.series.find((s) => s.key === String(value));
-                  return desc?.label ?? String(value);
-                }}
+                content={
+                  <SingleSeriesTooltip
+                    series={visibleSeries}
+                    yDomain={tooltipYDomain}
+                    formatValue={formatValue}
+                  />
+                }
               />
               {visibleSeries.map((s) => (
                 <Line
@@ -909,8 +882,9 @@ function MultiLinePanel({
                   type="linear"
                   dataKey={s.key}
                   stroke={s.color}
-                  strokeWidth={1.4}
+                  strokeWidth={s.key === selectedSeriesKey ? 2.6 : 1.4}
                   dot={false}
+                  activeDot={false}
                   // false on purpose: gaps in the underlying Prom data
                   // (manager outages / scrape failures) MUST render as
                   // breaks, not silently get connected. Matches the
@@ -923,7 +897,145 @@ function MultiLinePanel({
           </ResponsiveContainer>
         )}
       </div>
+
+      {panel.series.length > 0 && (
+        <div
+          role="group"
+          aria-label={tr('序列图例', 'Series legend')}
+          className="mt-3 flex flex-wrap gap-x-3 gap-y-1.5"
+        >
+          {panel.series.map((s) => {
+            const isSelected = s.key === selectedSeriesKey;
+            const stateLabel = isSelected ? tr('已选中', 'Selected') : tr('正常', 'Normal');
+            return (
+              <button
+                key={s.key}
+                type="button"
+                aria-label={`${s.label} · ${stateLabel}`}
+                aria-pressed={isSelected}
+                title={tr(
+                  '点击只看此序列；再次点击恢复全部',
+                  'Click to show only this series; click again to restore all',
+                )}
+                onClick={() => onToggle(s.key)}
+                className={cn(
+                  'inline-flex items-center gap-1.5 rounded-md border px-1.5 py-0.5 text-[11px] transition-colors',
+                  isSelected
+                    ? 'border-indigo-400/50 bg-indigo-500/15 text-indigo-700 dark:text-indigo-200'
+                    : 'border-transparent text-zinc-300 hover:bg-zinc-800/60',
+                )}
+              >
+                <span
+                  className={cn('h-2 w-3 rounded-sm', isSelected && 'ring-1 ring-indigo-300')}
+                  style={{ backgroundColor: s.color }}
+                />
+                <span className="font-mono">{s.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
     </section>
+  );
+}
+
+export function calculateTooltipYDomain(
+  rows: ChartRow[],
+  series: SeriesDescriptor[],
+  fixedDomain?: [number, number],
+): [number, number] {
+  if (fixedDomain) return fixedDomain;
+
+  // The network panels use Recharts' automatic numeric domain. Derive the
+  // same data span here instead of assuming a zero baseline, otherwise a
+  // tightly clustered positive range can select the wrong hovered line.
+  let min = Number.POSITIVE_INFINITY;
+  let max = Number.NEGATIVE_INFINITY;
+  for (const row of rows) {
+    for (const descriptor of series) {
+      const value = row[descriptor.key];
+      if (typeof value !== 'number' || !Number.isFinite(value)) continue;
+      min = Math.min(min, value);
+      max = Math.max(max, value);
+    }
+  }
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return [0, 1];
+  if (min === max) {
+    const padding = Math.abs(min) * 0.01 || 1;
+    return [min - padding, max + padding];
+  }
+  return [min, max];
+}
+
+export function findNearestTooltipEntry(
+  payload: ReadonlyArray<TooltipEntry>,
+  cursorY: number | undefined,
+  viewBox: { y?: number; height?: number } | undefined,
+  yDomain: [number, number],
+): TooltipEntry | null {
+  const entries = payload.filter((entry) => Number.isFinite(Number(entry.value)));
+  if (entries.length === 0) return null;
+
+  const top = viewBox?.y;
+  const height = viewBox?.height;
+  if (cursorY === undefined || top === undefined || !height) return entries[0];
+
+  const [domainMin, domainMax] = yDomain;
+  const domainRange = domainMax - domainMin || 1;
+  let nearest = entries[0];
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  for (const entry of entries) {
+    const value = Number(entry.value);
+    const lineY = top + ((domainMax - value) / domainRange) * height;
+    const distance = Math.abs(lineY - cursorY);
+    if (distance < nearestDistance) {
+      nearest = entry;
+      nearestDistance = distance;
+    }
+  }
+  return nearest;
+}
+
+function SingleSeriesTooltip({
+  active,
+  payload,
+  label,
+  coordinate,
+  viewBox,
+  series,
+  yDomain,
+  formatValue,
+}: TooltipProps<number, string> & {
+  series: SeriesDescriptor[];
+  yDomain: [number, number];
+  formatValue(value: number): string;
+}) {
+  if (!active || !payload?.length) return null;
+
+  const entry = findNearestTooltipEntry(payload, coordinate?.y, viewBox, yDomain);
+  if (!entry) return null;
+  const value = Number(entry.value);
+  const descriptor = series.find((item) => item.key === String(entry.dataKey));
+
+  return (
+    <div
+      role="tooltip"
+      className="pointer-events-none min-w-32 rounded-lg border border-zinc-700 bg-zinc-950/95 px-2.5 py-2 text-xs text-white shadow-xl"
+    >
+      <div className="mb-1.5 text-[11px] text-zinc-400">{String(label ?? '')}</div>
+      <div className="flex items-center gap-2">
+        <span
+          className="h-2 w-2 shrink-0 rounded-sm"
+          style={{ backgroundColor: entry.color ?? descriptor?.color ?? '#a1a1aa' }}
+        />
+        <span className="min-w-0 flex-1 truncate font-mono">
+          {descriptor?.label ?? String(entry.dataKey ?? '')}
+        </span>
+        <span className="shrink-0 font-mono tabular-nums text-white">
+          {formatValue(value)}
+        </span>
+      </div>
+    </div>
   );
 }
 

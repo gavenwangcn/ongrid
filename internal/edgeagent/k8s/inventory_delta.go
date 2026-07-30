@@ -135,8 +135,12 @@ func (c *inventoryCache) applyWatchUpsert(spec inventoryWatchSpec, event k8sWatc
 		c.mu.Unlock()
 		trigger.events = []tunnel.KubernetesEventSnapshot{snap}
 	case watchResourceWorkloads:
-		var item workloadItem
-		if err := unmarshalWatchObject(event, &item); err != nil {
+		var apiItem workloadAPIItem
+		if err := unmarshalWatchObject(event, &apiItem); err != nil {
+			return inventoryWatchTrigger{}, err
+		}
+		item, err := decodeWorkloadItem(spec.workloadKind, apiItem)
+		if err != nil {
 			return inventoryWatchTrigger{}, err
 		}
 		snap := workloadSnapshotFromItem(spec.workloadKind, item)
@@ -246,16 +250,24 @@ func nodeSnapshotFromItem(item nodeItem) tunnel.KubernetesNodeSnapshot {
 }
 
 func workloadSnapshotFromItem(kind string, item workloadItem) tunnel.KubernetesWorkloadSnapshot {
+	ownerKind, ownerName, ownerUID := controllerOwnerDetails(item.Metadata.OwnerReferences)
 	return tunnel.KubernetesWorkloadSnapshot{
-		Kind:            kind,
-		Namespace:       item.Metadata.Namespace,
-		Name:            item.Metadata.Name,
-		UID:             item.Metadata.UID,
-		DesiredReplicas: desiredReplicas(kind, item),
-		ReadyReplicas:   readyReplicas(kind, item),
-		Labels:          item.Metadata.Labels,
-		Annotations:     item.Metadata.Annotations,
-		Conditions:      conditionMaps(item.Status.Conditions),
+		Kind:              kind,
+		Namespace:         item.Metadata.Namespace,
+		Name:              item.Metadata.Name,
+		UID:               item.Metadata.UID,
+		DesiredReplicas:   item.DesiredReplicas,
+		ReadyReplicas:     item.ReadyReplicas,
+		ActiveReplicas:    item.ActiveReplicas,
+		FailedReplicas:    item.FailedReplicas,
+		OwnerKind:         ownerKind,
+		OwnerName:         ownerName,
+		OwnerUID:          ownerUID,
+		Revision:          workloadRevision(item.Metadata.Annotations),
+		CreationTimestamp: item.Metadata.CreationTimestamp,
+		Labels:            item.Metadata.Labels,
+		Annotations:       item.Metadata.Annotations,
+		Conditions:        conditionMaps(item.Conditions),
 	}
 }
 
@@ -291,11 +303,38 @@ func eventSnapshotFromItem(item eventItem) tunnel.KubernetesEventSnapshot {
 		ReportingController: item.ReportingComponent,
 		ReportingInstance:   item.ReportingInstance,
 		Action:              item.Action,
-		Count:               item.Count,
+		Count:               eventOccurrenceCount(item),
 		FirstTimestamp:      item.FirstTimestamp,
-		LastTimestamp:       item.LastTimestamp,
+		LastTimestamp:       eventLastObservedTimestamp(item),
 		EventTime:           item.EventTime,
 	}
+}
+
+func eventOccurrenceCount(item eventItem) int {
+	if item.Series != nil && item.Series.Count > item.Count {
+		return item.Series.Count
+	}
+	return item.Count
+}
+
+func eventLastObservedTimestamp(item eventItem) string {
+	current := strings.TrimSpace(item.LastTimestamp)
+	if item.Series == nil {
+		return current
+	}
+	candidate := strings.TrimSpace(item.Series.LastObservedTime)
+	if candidate == "" {
+		return current
+	}
+	candidateTime, err := time.Parse(time.RFC3339Nano, candidate)
+	if err != nil {
+		return current
+	}
+	currentTime, err := time.Parse(time.RFC3339Nano, current)
+	if err != nil || candidateTime.After(currentTime) {
+		return candidate
+	}
+	return current
 }
 
 func nodeSnapshotKey(item tunnel.KubernetesNodeSnapshot) string {

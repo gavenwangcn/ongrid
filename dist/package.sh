@@ -117,6 +117,8 @@ copy_opt "${REPO_ROOT}/deploy/install/README.md"           "${STAGE_DIR}/README.
 copy_opt "${REPO_ROOT}/deploy/install/install.sh"          "${STAGE_DIR}/install.sh"          755
 copy_opt "${REPO_ROOT}/deploy/install/uninstall.sh"        "${STAGE_DIR}/uninstall.sh"        755
 copy_opt "${REPO_ROOT}/deploy/install/upgrade.sh"          "${STAGE_DIR}/upgrade.sh"          755
+copy_opt "${REPO_ROOT}/deploy/install/public-url.sh"       "${STAGE_DIR}/public-url.sh"       644
+copy_opt "${REPO_ROOT}/deploy/install/data-permissions.sh"  "${STAGE_DIR}/data-permissions.sh"  644
 copy_opt "${REPO_ROOT}/deploy/install/docker-compose.yml"  "${STAGE_DIR}/docker-compose.yml"
 copy_opt "${REPO_ROOT}/deploy/install/.env.example"        "${STAGE_DIR}/.env.example"
 copy_opt "${REPO_ROOT}/deploy/install/frontier.yaml"       "${STAGE_DIR}/frontier.yaml"

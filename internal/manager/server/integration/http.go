@@ -41,7 +41,8 @@ type PromQuerier interface {
 // URLProbe is the narrow surface for the Loki / Tempo test endpoints.
 // The Probe(ctx) method does whatever lightweight check the resolver
 // owner thinks proves the URL is reachable + auth-accepted (Loki:
-// /ready; Tempo: /ready or /api/echo). Returning nil = ok.
+// GET /ready; Tempo: GET /ready or empty OTLP/HTTP export, depending on
+// the configured URL shape). Returning nil = ok.
 type URLProbe interface {
 	Probe(ctx context.Context) error
 }

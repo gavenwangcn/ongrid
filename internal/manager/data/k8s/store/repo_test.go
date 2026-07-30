@@ -99,6 +99,10 @@ func TestRepo_BindControllerEnrollmentUpsertsInstallationOnSQLite(t *testing.T) 
 		ControllerEdgeID: &firstEdgeID,
 		CapabilitiesJSON: `["inventory"]`,
 		LastSeenAt:       &firstSeen,
+	}, &model.TelemetryCredential{
+		ClusterID:     cluster.ID,
+		AccessKeyID:   "kt_first",
+		SecretKeyHash: "first-hash",
 	}); err != nil {
 		t.Fatalf("BindControllerEnrollment(first): %v", err)
 	}
@@ -119,6 +123,10 @@ func TestRepo_BindControllerEnrollmentUpsertsInstallationOnSQLite(t *testing.T) 
 		ControllerEdgeID: &secondEdgeID,
 		CapabilitiesJSON: `["inventory","events"]`,
 		LastSeenAt:       &secondSeen,
+	}, &model.TelemetryCredential{
+		ClusterID:     cluster.ID,
+		AccessKeyID:   "kt_second",
+		SecretKeyHash: "second-hash",
 	}); err != nil {
 		t.Fatalf("BindControllerEnrollment(second): %v", err)
 	}
@@ -136,6 +144,13 @@ func TestRepo_BindControllerEnrollmentUpsertsInstallationOnSQLite(t *testing.T) 
 	}
 	if installation.CapabilitiesJSON != `["inventory","events"]` {
 		t.Fatalf("installation capabilities = %s", installation.CapabilitiesJSON)
+	}
+	credential, err := repo.GetTelemetryCredentialByAccessKey(ctx, "kt_second")
+	if err != nil {
+		t.Fatalf("GetTelemetryCredentialByAccessKey: %v", err)
+	}
+	if credential.ClusterID != cluster.ID || credential.SecretKeyHash != "second-hash" {
+		t.Fatalf("telemetry credential = %+v", credential)
 	}
 
 	var updated model.Cluster
@@ -222,6 +237,8 @@ func TestRepo_SnapshotUpsertsWorkOnSQLite(t *testing.T) {
 		UID:             "workload-v1",
 		DesiredReplicas: 1,
 		ReadyReplicas:   0,
+		ActiveReplicas:  1,
+		FailedReplicas:  0,
 		LabelsJSON:      "{}",
 		AnnotationsJSON: "{}",
 		ConditionsJSON:  "[]",
@@ -232,12 +249,15 @@ func TestRepo_SnapshotUpsertsWorkOnSQLite(t *testing.T) {
 	}
 	workload.UID = "workload-v2"
 	workload.ReadyReplicas = 1
+	workload.ActiveReplicas = 0
+	workload.FailedReplicas = 1
+	workload.IsTerminalFailure = true
 	workload.LastSeenAt = &secondSeen
 	if err := repo.UpsertWorkloads(ctx, []*model.Workload{workload}); err != nil {
 		t.Fatalf("UpsertWorkloads(second): %v", err)
 	}
 	workloads, err := repo.ListWorkloads(ctx, biz.ListWorkloadsFilter{ClusterID: 1})
-	if err != nil || len(workloads) != 1 || workloads[0].UID != "workload-v2" || workloads[0].ReadyReplicas != 1 {
+	if err != nil || len(workloads) != 1 || workloads[0].UID != "workload-v2" || workloads[0].ReadyReplicas != 1 || workloads[0].ActiveReplicas != 0 || workloads[0].FailedReplicas != 1 || !workloads[0].IsTerminalFailure {
 		t.Fatalf("workload upsert result=%+v err=%v", workloads, err)
 	}
 
@@ -274,6 +294,8 @@ func TestRepo_SnapshotUpsertsWorkOnSQLite(t *testing.T) {
 func TestRepo_ListWorkloadsSupportsQueryAndIssueOnly(t *testing.T) {
 	db, repo := newTestRepo(t)
 	now := time.Now()
+	previousRelease := now.Add(-24 * time.Hour)
+	currentRelease := now.Add(-time.Hour)
 	workloads := []*model.Workload{
 		{
 			ClusterID:       1,
@@ -283,6 +305,50 @@ func TestRepo_ListWorkloadsSupportsQueryAndIssueOnly(t *testing.T) {
 			UID:             "workload-checkout",
 			DesiredReplicas: 3,
 			ReadyReplicas:   2,
+			Revision:        3,
+			LabelsJSON:      "{}",
+			AnnotationsJSON: "{}",
+			ConditionsJSON:  "[]",
+			LastSeenAt:      &now,
+		},
+		{
+			ClusterID:       1,
+			Namespace:       "jobs",
+			Kind:            "Job",
+			Name:            "active-job",
+			UID:             "job-active",
+			DesiredReplicas: 1,
+			ReadyReplicas:   0,
+			ActiveReplicas:  1,
+			LabelsJSON:      "{}",
+			AnnotationsJSON: "{}",
+			ConditionsJSON:  "[]",
+			LastSeenAt:      &now,
+		},
+		{
+			ClusterID:         1,
+			Namespace:         "jobs",
+			Kind:              "Job",
+			Name:              "failed-job",
+			UID:               "job-failed",
+			DesiredReplicas:   1,
+			ReadyReplicas:     0,
+			FailedReplicas:    1,
+			IsTerminalFailure: true,
+			LabelsJSON:        "{}",
+			AnnotationsJSON:   "{}",
+			ConditionsJSON:    `[{"type":"Failed","status":"True"}]`,
+			LastSeenAt:        &now,
+		},
+		{
+			ClusterID:       1,
+			Namespace:       "jobs",
+			Kind:            "Job",
+			Name:            "retrying-job",
+			UID:             "job-retrying",
+			DesiredReplicas: 1,
+			ReadyReplicas:   0,
+			FailedReplicas:  1,
 			LabelsJSON:      "{}",
 			AnnotationsJSON: "{}",
 			ConditionsJSON:  "[]",
@@ -301,12 +367,90 @@ func TestRepo_ListWorkloadsSupportsQueryAndIssueOnly(t *testing.T) {
 			ConditionsJSON:  "[]",
 			LastSeenAt:      &now,
 		},
+		{
+			ClusterID:       1,
+			Namespace:       "default",
+			Kind:            "Deployment",
+			Name:            "paused-api",
+			UID:             "workload-paused",
+			DesiredReplicas: 0,
+			ReadyReplicas:   0,
+			LabelsJSON:      "{}",
+			AnnotationsJSON: "{}",
+			ConditionsJSON:  "[]",
+			LastSeenAt:      &now,
+		},
+		{
+			ClusterID:         1,
+			Namespace:         "default",
+			Kind:              "ReplicaSet",
+			Name:              "checkout-api-history",
+			UID:               "workload-history",
+			DesiredReplicas:   0,
+			ReadyReplicas:     0,
+			OwnerKind:         "Deployment",
+			OwnerName:         "checkout-api",
+			OwnerUID:          "workload-checkout",
+			Revision:          2,
+			ResourceCreatedAt: &previousRelease,
+			LabelsJSON:        "{}",
+			AnnotationsJSON:   "{}",
+			ConditionsJSON:    "[]",
+			LastSeenAt:        &now,
+		},
+		{
+			ClusterID:         1,
+			Namespace:         "default",
+			Kind:              "ReplicaSet",
+			Name:              "checkout-api-current",
+			UID:               "workload-current",
+			DesiredReplicas:   3,
+			ReadyReplicas:     2,
+			OwnerKind:         "Deployment",
+			OwnerName:         "checkout-api",
+			OwnerUID:          "workload-checkout",
+			Revision:          3,
+			ResourceCreatedAt: &currentRelease,
+			LabelsJSON:        "{}",
+			AnnotationsJSON:   "{}",
+			ConditionsJSON:    "[]",
+			LastSeenAt:        &now,
+		},
+		{
+			ClusterID:       1,
+			Namespace:       "default",
+			Kind:            "ReplicaSet",
+			Name:            "standalone-zero",
+			UID:             "standalone-zero",
+			DesiredReplicas: 0,
+			ReadyReplicas:   0,
+			LabelsJSON:      "{}",
+			AnnotationsJSON: "{}",
+			ConditionsJSON:  "[]",
+			LastSeenAt:      &now,
+		},
+		{
+			ClusterID:       1,
+			Namespace:       "default",
+			Kind:            "ReplicaSet",
+			Name:            "checkout-api-stale-owner",
+			UID:             "stale-owner-rs",
+			DesiredReplicas: 0,
+			ReadyReplicas:   0,
+			OwnerKind:       "Deployment",
+			OwnerName:       "checkout-api",
+			OwnerUID:        "deleted-deployment-uid",
+			LabelsJSON:      "{}",
+			AnnotationsJSON: "{}",
+			ConditionsJSON:  "[]",
+			LastSeenAt:      &now,
+		},
 	}
 	if err := db.Create(&workloads).Error; err != nil {
 		t.Fatalf("Create workloads: %v", err)
 	}
 
-	filter := biz.ListWorkloadsFilter{ClusterID: 1, Query: "checkout", IssueOnly: true}
+	filter := biz.ListWorkloadsFilter{ClusterID: 1, Query: "checkout", IssueOnly: true, GroupReplicaSets: true}
 	items, err := repo.ListWorkloads(context.Background(), filter)
 	if err != nil {
 		t.Fatalf("ListWorkloads: %v", err)
@@ -320,6 +464,131 @@ func TestRepo_ListWorkloadsSupportsQueryAndIssueOnly(t *testing.T) {
 	}
 	if total != 1 {
 		t.Fatalf("total=%d want 1", total)
+	}
+
+	issueFilter := biz.ListWorkloadsFilter{ClusterID: 1, IssueOnly: true, GroupReplicaSets: true}
+	issues, err := repo.ListWorkloads(context.Background(), issueFilter)
+	if err != nil {
+		t.Fatalf("ListWorkloads(issue only): %v", err)
+	}
+	if len(issues) != 2 || issues[0].Name != "checkout-api" || issues[1].Name != "failed-job" {
+		t.Fatalf("issue workloads: %+v", issues)
+	}
+	issueTotal, err := repo.CountWorkloads(context.Background(), issueFilter)
+	if err != nil {
+		t.Fatalf("CountWorkloads(issue only): %v", err)
+	}
+	if issueTotal != 2 {
+		t.Fatalf("issue total=%d want 2", issueTotal)
+	}
+
+	visibleFilter := biz.ListWorkloadsFilter{ClusterID: 1, GroupReplicaSets: true}
+	visible, err := repo.ListWorkloads(context.Background(), visibleFilter)
+	if err != nil {
+		t.Fatalf("ListWorkloads(group replica sets): %v", err)
+	}
+	if len(visible) != 7 {
+		t.Fatalf("visible workloads=%d want 7", len(visible))
+	}
+	for _, item := range visible {
+		if item.Name == "checkout-api-history" || item.Name == "checkout-api-current" {
+			t.Fatalf("deployment-owned ReplicaSet was not grouped: %+v", item)
+		}
+	}
+	if visible[3].Name != "standalone-zero" {
+		t.Fatalf("standalone ReplicaSet should remain top-level: %+v", visible)
+	}
+	visibleTotal, err := repo.CountWorkloads(context.Background(), visibleFilter)
+	if err != nil {
+		t.Fatalf("CountWorkloads(group replica sets): %v", err)
+	}
+	if visibleTotal != 7 {
+		t.Fatalf("visible total=%d want 7", visibleTotal)
+	}
+
+	ownerFilter := biz.ListWorkloadsFilter{
+		ClusterID: 1,
+		OwnerRefs: []biz.WorkloadOwnerRef{{
+			Namespace: "default",
+			Kind:      "Deployment",
+			Name:      "checkout-api",
+			UID:       "workload-checkout",
+		}},
+	}
+	history, err := repo.ListWorkloads(context.Background(), ownerFilter)
+	if err != nil {
+		t.Fatalf("ListWorkloads(owner refs): %v", err)
+	}
+	if len(history) != 2 || history[0].Name != "checkout-api-current" || history[1].Name != "checkout-api-history" {
+		t.Fatalf("deployment ReplicaSet versions: %+v", history)
+	}
+	historyTotal, err := repo.CountWorkloads(context.Background(), ownerFilter)
+	if err != nil {
+		t.Fatalf("CountWorkloads(owner refs): %v", err)
+	}
+	if historyTotal != 2 {
+		t.Fatalf("deployment ReplicaSet total=%d want 2", historyTotal)
+	}
+
+	childQueryFilter := biz.ListWorkloadsFilter{ClusterID: 1, GroupReplicaSets: true, Query: "checkout-api-history"}
+	parents, err := repo.ListWorkloads(context.Background(), childQueryFilter)
+	if err != nil {
+		t.Fatalf("ListWorkloads(grouped child query): %v", err)
+	}
+	if len(parents) != 1 || parents[0].Name != "checkout-api" {
+		t.Fatalf("grouped child query parents: %+v", parents)
+	}
+	parentTotal, err := repo.CountWorkloads(context.Background(), childQueryFilter)
+	if err != nil || parentTotal != 1 {
+		t.Fatalf("grouped child query total=%d err=%v, want 1", parentTotal, err)
+	}
+}
+
+func TestRepo_ListNamespaceSummariesAggregatesAllGroupedResources(t *testing.T) {
+	db, repo := newTestRepo(t)
+	now := time.Now().UTC()
+	workloads := []*model.Workload{
+		{ClusterID: 1, Namespace: "apps", Kind: "Deployment", Name: "api", UID: "deployment-uid", LabelsJSON: "{}", AnnotationsJSON: "{}", ConditionsJSON: "[]", LastSeenAt: &now},
+		{ClusterID: 1, Namespace: "apps", Kind: "ReplicaSet", Name: "api-7d8f9", UID: "rs-uid", OwnerKind: "Deployment", OwnerName: "api", OwnerUID: "deployment-uid", LabelsJSON: "{}", AnnotationsJSON: "{}", ConditionsJSON: "[]", LastSeenAt: &now},
+		{ClusterID: 1, Namespace: "jobs", Kind: "CronJob", Name: "cleanup", UID: "cronjob-uid", LabelsJSON: "{}", AnnotationsJSON: "{}", ConditionsJSON: "[]", LastSeenAt: &now},
+	}
+	pods := []*model.Pod{
+		{ClusterID: 1, Namespace: "apps", Name: "api-1", UID: "pod-apps", LastSeenAt: &now},
+		{ClusterID: 1, Namespace: "late-page", Name: "worker-1500", UID: "pod-late", LastSeenAt: &now},
+	}
+	events := []*model.Event{
+		{ClusterID: 1, Namespace: "apps", Name: "scheduled", UID: "event-apps", LastSeenAt: &now},
+		{ClusterID: 1, Namespace: "", Name: "late-warning", UID: "event-late", InvolvedNamespace: "late-page", LastSeenAt: &now},
+	}
+	if err := db.Create(&workloads).Error; err != nil {
+		t.Fatalf("Create workloads: %v", err)
+	}
+	if err := db.Create(&pods).Error; err != nil {
+		t.Fatalf("Create pods: %v", err)
+	}
+	if err := db.Create(&events).Error; err != nil {
+		t.Fatalf("Create events: %v", err)
+	}
+
+	summaries, err := repo.ListNamespaceSummaries(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("ListNamespaceSummaries: %v", err)
+	}
+	if len(summaries) != 3 {
+		t.Fatalf("namespace summaries = %+v, want 3 namespaces", summaries)
+	}
+	byNamespace := make(map[string]biz.NamespaceSummary, len(summaries))
+	for _, summary := range summaries {
+		byNamespace[summary.Namespace] = summary
+	}
+	if got := byNamespace["apps"]; got.Workloads != 1 || got.Pods != 1 || got.Events != 1 || got.LastSeenAt == nil {
+		t.Fatalf("apps summary = %+v", got)
+	}
+	if got := byNamespace["jobs"]; got.Workloads != 1 || got.Pods != 0 || got.Events != 0 {
+		t.Fatalf("jobs summary = %+v", got)
+	}
+	if got := byNamespace["late-page"]; got.Workloads != 0 || got.Pods != 1 || got.Events != 1 {
+		t.Fatalf("late-page summary = %+v", got)
 	}
 }
 
@@ -699,6 +968,13 @@ func TestRepo_DeleteClusterDeletesSnapshots(t *testing.T) {
 	}).Error; err != nil {
 		t.Fatalf("Create installation: %v", err)
 	}
+	if err := db.Create(&model.TelemetryCredential{
+		ClusterID:     cluster.ID,
+		AccessKeyID:   "kt_cluster",
+		SecretKeyHash: "secret-hash",
+	}).Error; err != nil {
+		t.Fatalf("Create telemetry credential: %v", err)
+	}
 
 	if err := repo.DeleteCluster(context.Background(), cluster.ID); err != nil {
 		t.Fatalf("DeleteCluster: %v", err)
@@ -709,6 +985,7 @@ func TestRepo_DeleteClusterDeletesSnapshots(t *testing.T) {
 	assertTableCount(t, db, &model.Pod{}, "cluster_id = ?", cluster.ID, 0)
 	assertTableCount(t, db, &model.Event{}, "cluster_id = ?", cluster.ID, 0)
 	assertTableCount(t, db, &model.Installation{}, "cluster_id = ?", cluster.ID, 0)
+	assertTableCount(t, db, &model.TelemetryCredential{}, "cluster_id = ?", cluster.ID, 0)
 }
 
 func assertTableCount(t *testing.T, db *gorm.DB, model any, query string, arg any, want int64) {

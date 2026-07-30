@@ -2,10 +2,12 @@ package k8s
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -51,6 +53,71 @@ func TestAPIClientWatchDecodesEventsAndBookmarks(t *testing.T) {
 	}
 	if len(gotTypes) != 2 || gotTypes[0] != "ADDED" || gotTypes[1] != "BOOKMARK" {
 		t.Fatalf("event types = %v", gotTypes)
+	}
+}
+
+func TestAPIClientWatchHandlesErrorEvents(t *testing.T) {
+	tests := []struct {
+		name      string
+		status    string
+		wantError error
+		wantText  string
+	}{
+		{
+			name:      "expired code",
+			status:    `{"code":410,"reason":"Expired","message":"too old resource version"}`,
+			wantError: errResourceExpired,
+		},
+		{
+			name:      "expired reason",
+			status:    `{"reason":"Expired","message":"resource version compacted"}`,
+			wantError: errResourceExpired,
+		},
+		{
+			name:      "forbidden",
+			status:    `{"code":403,"reason":"Forbidden"}`,
+			wantError: errForbidden,
+		},
+		{
+			name:      "not found",
+			status:    `{"code":404,"reason":"NotFound"}`,
+			wantError: errNotFound,
+		},
+		{
+			name:     "server failure",
+			status:   `{"code":500,"reason":"InternalError","message":"temporary failure"}`,
+			wantText: `code=500`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if _, err := fmt.Fprintf(w, `{"type":"ERROR","object":%s}`+"\n", tt.status); err != nil {
+					t.Errorf("write watch response: %v", err)
+				}
+			}))
+			defer srv.Close()
+
+			client := &apiClient{baseURL: srv.URL, token: "test-token", http: srv.Client()}
+			callbackCalled := false
+			latest, err := client.watch(context.Background(), "/api/v1/events", "100", func(k8sWatchEvent) error {
+				callbackCalled = true
+				return nil
+			})
+			if tt.wantError != nil && !errors.Is(err, tt.wantError) {
+				t.Fatalf("watch() error = %v, want %v", err, tt.wantError)
+			}
+			if tt.wantText != "" && (err == nil || !strings.Contains(err.Error(), tt.wantText)) {
+				t.Fatalf("watch() error = %v, want text %q", err, tt.wantText)
+			}
+			if latest != "100" {
+				t.Fatalf("latest resourceVersion = %q, want 100", latest)
+			}
+			if callbackCalled {
+				t.Fatal("watch callback called for ERROR event")
+			}
+		})
 	}
 }
 

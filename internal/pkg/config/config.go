@@ -373,9 +373,10 @@ type AdminConfig struct {
 
 // EdgeConfig is consumed only by ongrid-edge to dial the cloud tunnel.
 type EdgeConfig struct {
-	CloudAddr string
-	AccessKey string
-	SecretKey string
+	CloudAddr        string
+	AccessKey        string
+	SecretKey        string
+	ManagerPublicURL string
 
 	// CollectorMode selects how the edge's periodic metric-push path
 	// behaves. Defaults to "off" because the hostmetrics + procmetrics

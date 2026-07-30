@@ -14,7 +14,10 @@ spec:
   selector:
     app.kubernetes.io/name: {{ include "ongrid-edge.name" . }}
     app.kubernetes.io/instance: {{ .Release.Name }}
-    app.kubernetes.io/component: controller
+    # The selector is stable across embedded/deployment modes. The pre-upgrade
+    # hook adds this label to a legacy embedded Controller before Helm changes
+    # the Service, then the final manifests hand it to the standalone Gateway.
+    {{ include "ongrid-edge.telemetryBackendLabel" . }}: "true"
   ports:
     - name: otlp-grpc
       port: {{ default 4317 $svc.grpcPort }}

@@ -1196,7 +1196,7 @@ function TempoCard() {
         </button>
         {err && <span className="break-all text-xs text-red-400">{err}</span>}
       </div>
-      <ProbeLine probe={probe} okLabel={tr('✓ Tempo 可达，/ready 返回成功', '✓ Tempo reachable, /ready returned success')} />
+      <ProbeLine probe={probe} okLabel={tr('✓ Tempo 连接测试成功', '✓ Tempo connection test succeeded')} />
     </Card>
   );
 }

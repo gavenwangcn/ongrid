@@ -1,12 +1,216 @@
 package k8s
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/go-chi/chi/v5"
 
 	biz "github.com/ongridio/ongrid/internal/manager/biz/k8s"
 	model "github.com/ongridio/ongrid/internal/manager/model/k8s"
 )
+
+type telemetryRefreshService struct {
+	Service
+	controllerEdgeID uint64
+	proof            biz.TelemetryCredentialProof
+	out              *biz.TelemetryConfig
+	err              error
+}
+
+type workloadPageService struct {
+	Service
+	listFilter   biz.ListWorkloadsFilter
+	countFilters []biz.ListWorkloadsFilter
+}
+
+func (s *workloadPageService) ListWorkloads(_ context.Context, f biz.ListWorkloadsFilter) ([]*model.Workload, error) {
+	s.listFilter = f
+	createdAt := time.Date(2026, time.July, 28, 8, 9, 10, 0, time.UTC)
+	return []*model.Workload{{
+		ID:              1401,
+		ClusterID:       f.ClusterID,
+		Namespace:       "default",
+		Kind:            "Deployment",
+		Name:            "api-1401",
+		DesiredReplicas: 1,
+		ReadyReplicas:   1,
+		Revision:        12,
+		ReplicaSets: []*model.Workload{{
+			ID:                1501,
+			ClusterID:         f.ClusterID,
+			Namespace:         "default",
+			Kind:              "ReplicaSet",
+			Name:              "api-1401-7d8f9",
+			OwnerKind:         "Deployment",
+			OwnerName:         "api-1401",
+			OwnerUID:          "deployment-uid",
+			Revision:          12,
+			DesiredReplicas:   1,
+			ReadyReplicas:     1,
+			ResourceCreatedAt: &createdAt,
+		}},
+	}}, nil
+}
+
+func (s *workloadPageService) CountWorkloads(_ context.Context, f biz.ListWorkloadsFilter) (int64, error) {
+	s.countFilters = append(s.countFilters, f)
+	return 1500, nil
+}
+
+func (s *telemetryRefreshService) RefreshTelemetryConfig(_ context.Context, controllerEdgeID uint64, proof biz.TelemetryCredentialProof) (*biz.TelemetryConfig, error) {
+	s.controllerEdgeID = controllerEdgeID
+	s.proof = proof
+	return s.out, s.err
+}
+
+func TestRefreshTelemetryConfigUsesAuthenticatedControllerIdentity(t *testing.T) {
+	svc := &telemetryRefreshService{out: &biz.TelemetryConfig{
+		ClusterID:           7,
+		AccessKey:           "kt_access",
+		SecretKey:           "ks_secret",
+		ManagerPublicURL:    "https://manager.example",
+		TracesEndpoint:      "https://tempo.example/v1/traces",
+		TracesAuthMode:      "backend",
+		TracesBasicUser:     "tempo-user",
+		TracesBasicPass:     "tempo-pass",
+		TracesTLSInsecure:   true,
+		LogsEndpoint:        "https://loki.example/loki/api/v1/push",
+		LogsAuthMode:        "backend",
+		RemoteWriteEndpoint: "https://manager.example/prometheus/api/v1/write",
+	}}
+	h := NewHandler(svc)
+	req := httptest.NewRequest(http.MethodPost, "/internal/k8s/telemetry-config", bytes.NewBufferString(`{"access_key":"kt_current","secret_key":"ks_current"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Edge-Id", "41")
+	resp := httptest.NewRecorder()
+
+	h.refreshTelemetryConfig(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", resp.Code, resp.Body.String())
+	}
+	if svc.controllerEdgeID != 41 {
+		t.Fatalf("controller edge id = %d, want 41", svc.controllerEdgeID)
+	}
+	if svc.proof.AccessKey != "kt_current" || svc.proof.SecretKey != "ks_current" {
+		t.Fatalf("credential proof = %#v", svc.proof)
+	}
+	var got telemetryConfigResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.ClusterID != 7 || got.AccessKey != "kt_access" || got.SecretKey != "ks_secret" ||
+		got.ManagerPublicURL != "https://manager.example" {
+		t.Fatalf("response = %#v", got)
+	}
+	if got.TracesEndpoint != "https://tempo.example/v1/traces" || got.TracesAuthMode != "backend" ||
+		got.TracesBasicUser != "tempo-user" || got.TracesBasicPass != "tempo-pass" || !got.TracesTLSInsecure ||
+		got.LogsEndpoint != "https://loki.example/loki/api/v1/push" || got.LogsAuthMode != "backend" {
+		t.Fatalf("signal target response = %#v", got)
+	}
+}
+
+func TestRefreshTelemetryConfigRejectsMissingAuthenticatedIdentity(t *testing.T) {
+	h := NewHandler(&telemetryRefreshService{})
+	resp := httptest.NewRecorder()
+	h.refreshTelemetryConfig(resp, httptest.NewRequest(http.MethodPost, "/internal/k8s/telemetry-config", nil))
+	if resp.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", resp.Code)
+	}
+}
+
+func TestWorkloadDTOFromModelIncludesExecutionCounts(t *testing.T) {
+	dto := workloadDTOFromModel(&model.Workload{
+		ClusterID:       48,
+		Namespace:       "jobs",
+		Kind:            "Job",
+		Name:            "batch",
+		DesiredReplicas: 3,
+		ReadyReplicas:   1,
+		ActiveReplicas:  1,
+		FailedReplicas:  1,
+		LabelsJSON:      "{}",
+		AnnotationsJSON: "{}",
+		ConditionsJSON:  "[]",
+	})
+
+	if dto.ActiveReplicas != 1 || dto.FailedReplicas != 1 {
+		t.Fatalf("workload execution = active:%d failed:%d, want 1/1", dto.ActiveReplicas, dto.FailedReplicas)
+	}
+}
+
+func TestNamespaceSummaryDTOsPreservesClusterWideCounts(t *testing.T) {
+	now := time.Now().UTC()
+	items := namespaceSummaryDTOs([]biz.NamespaceSummary{{
+		Namespace:  "late-page",
+		Workloads:  1,
+		Pods:       1400,
+		Events:     12,
+		Warnings:   2,
+		LastSeenAt: &now,
+	}})
+
+	if len(items) != 1 || items[0].Namespace != "late-page" || items[0].Workloads != 1 || items[0].Pods != 1400 || items[0].Events != 12 || items[0].Warnings != 2 || items[0].LastSeenAt == nil {
+		t.Fatalf("namespace summary DTOs = %+v", items)
+	}
+}
+
+func TestListWorkloadsUsesOffsetAndReturnsGroupedReplicaSetVersions(t *testing.T) {
+	svc := &workloadPageService{}
+	h := NewHandler(svc)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/k8s/clusters/48/workloads?limit=100&offset=1400&group_replica_sets=true", nil)
+	routeCtx := chi.NewRouteContext()
+	routeCtx.URLParams.Add("cluster_id", "48")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, routeCtx))
+	resp := httptest.NewRecorder()
+
+	h.listWorkloads(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", resp.Code, resp.Body.String())
+	}
+	if svc.listFilter.Limit != 100 || svc.listFilter.Offset != 1400 || !svc.listFilter.GroupReplicaSets {
+		t.Fatalf("list filter = %+v", svc.listFilter)
+	}
+	if len(svc.countFilters) != 1 || !svc.countFilters[0].GroupReplicaSets {
+		t.Fatalf("count filters = %+v", svc.countFilters)
+	}
+	var got struct {
+		Items []struct {
+			Revision    int64 `json:"revision"`
+			ReplicaSets []struct {
+				Name              string     `json:"name"`
+				OwnerKind         string     `json:"owner_kind"`
+				OwnerName         string     `json:"owner_name"`
+				OwnerUID          string     `json:"owner_uid"`
+				Revision          int64      `json:"revision"`
+				CreationTimestamp *time.Time `json:"creation_timestamp"`
+			} `json:"replica_sets"`
+		} `json:"items"`
+		Total  int64 `json:"total"`
+		Limit  int   `json:"limit"`
+		Offset int   `json:"offset"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.Total != 1500 || got.Limit != 100 || got.Offset != 1400 {
+		t.Fatalf("response = %+v", got)
+	}
+	if len(got.Items) != 1 || got.Items[0].Revision != 12 || len(got.Items[0].ReplicaSets) != 1 {
+		t.Fatalf("grouped response = %+v", got.Items)
+	}
+	rs := got.Items[0].ReplicaSets[0]
+	if rs.Name != "api-1401-7d8f9" || rs.OwnerKind != "Deployment" || rs.OwnerName != "api-1401" || rs.OwnerUID != "deployment-uid" || rs.Revision != 12 || rs.CreationTimestamp == nil {
+		t.Fatalf("ReplicaSet response = %+v", rs)
+	}
+}
 
 func TestClusterCapabilitiesFromModel(t *testing.T) {
 	edgeID := uint64(42)

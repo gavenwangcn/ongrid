@@ -48,8 +48,9 @@ func (p *LokiURLProbe) Probe(ctx context.Context) error {
 	return probeReadyEndpoint(ctx, u+"/ready", user, pass, tlsInsecure, p.timeout)
 }
 
-// TempoURLProbe is the trace-side counterpart. Tempo also exposes
-// /ready returning 200 once compactors and ingesters have replayed.
+// TempoURLProbe verifies the configured Tempo integration URL. Explicit
+// OTLP/HTTP endpoints ending in /v1/traces receive an empty export request;
+// the built-in/legacy query URL shape is checked through GET /ready.
 type TempoURLProbe struct {
 	resolver *TempoResolver
 	timeout  time.Duration
@@ -60,9 +61,9 @@ func NewTempoURLProbe(r *TempoResolver) *TempoURLProbe {
 	return &TempoURLProbe{resolver: r, timeout: 5 * time.Second}
 }
 
-// Probe runs a GET <base>/ready against the configured Tempo. The
-// admin-supplied URL may be the OTLP push URL ending in /v1/traces; we
-// strip a /v1/traces suffix so /ready lands on the API root.
+// Probe checks the configured Tempo URL without conflating its two listeners:
+// /v1/traces is the OTLP/HTTP receiver, while a URL without that path denotes
+// the Tempo query API and exposes /ready.
 func (p *TempoURLProbe) Probe(ctx context.Context) error {
 	if p == nil || p.resolver == nil {
 		return fmt.Errorf("tempo probe not wired")
@@ -71,12 +72,37 @@ func (p *TempoURLProbe) Probe(ctx context.Context) error {
 	if u == "" {
 		return fmt.Errorf("tempo url is empty")
 	}
-	// Tempo's /ready lives at the API root; the OTLP push URL on
-	// otelcol-style endpoints is /v1/traces. Strip if present.
-	base := strings.TrimSuffix(u, "/v1/traces")
 	user, pass := p.resolver.Auth(ctx)
 	tlsInsecure := p.resolver.TLSInsecure(ctx)
-	return probeReadyEndpoint(ctx, base+"/ready", user, pass, tlsInsecure, p.timeout)
+	if strings.HasSuffix(u, "/v1/traces") {
+		return probeOTLPHTTPTraceEndpoint(ctx, u, user, pass, tlsInsecure, p.timeout)
+	}
+	return probeReadyEndpoint(ctx, u+"/ready", user, pass, tlsInsecure, p.timeout)
+}
+
+// TempoReadinessProbe checks the manager-side Tempo query API. This URL is
+// intentionally independent from TempoURLProbe's edge-facing OTLP endpoint:
+// a standard Tempo deployment serves /ready on port 3200 and OTLP/HTTP on
+// port 4318.
+type TempoReadinessProbe struct {
+	baseURL string
+	timeout time.Duration
+}
+
+// NewTempoReadinessProbe builds a readiness probe for the Tempo query API.
+func NewTempoReadinessProbe(baseURL string) *TempoReadinessProbe {
+	return &TempoReadinessProbe{
+		baseURL: strings.TrimRight(strings.TrimSpace(baseURL), "/"),
+		timeout: 5 * time.Second,
+	}
+}
+
+// Probe runs GET <query-api-url>/ready.
+func (p *TempoReadinessProbe) Probe(ctx context.Context) error {
+	if p == nil || p.baseURL == "" {
+		return fmt.Errorf("tempo query url is empty")
+	}
+	return probeReadyEndpoint(ctx, p.baseURL+"/ready", "", "", false, p.timeout)
 }
 
 // WebSearchProbe is the integration-handler-side probe for the
@@ -284,6 +310,32 @@ func probeReadyEndpoint(ctx context.Context, fullURL, user, pass string, insecur
 		},
 	}
 	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("dial %s: %w", fullURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
+	return fmt.Errorf("status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+}
+
+// probeOTLPHTTPTraceEndpoint verifies both transport reachability and the
+// configured OTLP path. An empty ExportTraceServiceRequest is a valid protobuf
+// message and Tempo accepts it without storing a trace.
+func probeOTLPHTTPTraceEndpoint(ctx context.Context, fullURL, user, pass string, insecure bool, timeout time.Duration) error {
+	cctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(cctx, http.MethodPost, fullURL, http.NoBody)
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-protobuf")
+	if user != "" {
+		req.SetBasicAuth(user, pass)
+	}
+	resp, err := newHTTPClient(timeout, insecure).Do(req)
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", fullURL, err)
 	}

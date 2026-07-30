@@ -98,13 +98,13 @@ export function UpgradeCommandModal({
   const { tr } = useI18n();
   if (!cluster) return null;
   return (
-    <Modal open onClose={onClose} title={tr('Helm 升级命令', 'Helm upgrade command')} size="lg">
+    <Modal open onClose={onClose} title={tr('一键 Helm 升级', 'One-command Helm upgrade')} size="lg">
       <div className="space-y-3 text-xs">
         <ClusterIdentity cluster={cluster} />
         <div className="rounded-md border border-sky-500/20 bg-sky-500/10 px-2 py-1.5 text-sky-200">
           {tr(
-            '在目标 Kubernetes 集群执行该命令，会复用现有 Helm values，并从 CNB 公共镜像仓库拉取新版多架构镜像后滚动升级 Controller 与 Node Edge。',
-            'Run this in the target Kubernetes cluster. It reuses existing Helm values, pulls the new multi-arch image from the public CNB registry, and rolls both Controller and Node Edge agents.',
+            '在目标 Kubernetes 集群执行这一条命令即可（需要 Helm 3.14+）。Chart 会先采用新版默认值、再合并现有自定义 values，自动完成必要的数据面迁移和健康检查；失败时自动回滚。仅更新镜像的版本不会重复执行迁移。',
+            'Run this single command in the target Kubernetes cluster (Helm 3.14+ required). The chart starts from the new defaults, reapplies existing custom values, performs any required data-plane migration and health checks, and rolls back automatically on failure. Image-only upgrades do not repeat completed migrations.',
           )}
         </div>
         <CommandBlock label={tr('升级命令', 'Upgrade command')} command={kubernetesUpgradeCommand(cluster)} />

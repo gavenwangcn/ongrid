@@ -2,8 +2,10 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -164,8 +166,8 @@ func (r *Repo) TouchClusterControllerHeartbeat(ctx context.Context, edgeID uint6
 		}).Error
 }
 
-func (r *Repo) BindControllerEnrollment(ctx context.Context, id uint64, registration biz.ClusterControllerRegistration, installation *model.Installation) error {
-	if installation == nil {
+func (r *Repo) BindControllerEnrollment(ctx context.Context, id uint64, registration biz.ClusterControllerRegistration, installation *model.Installation, telemetryCredential *model.TelemetryCredential) error {
+	if installation == nil || telemetryCredential == nil || installation.ClusterID != id || telemetryCredential.ClusterID != id {
 		return errs.ErrInvalid
 	}
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -183,7 +185,7 @@ func (r *Repo) BindControllerEnrollment(ctx context.Context, id uint64, registra
 		if res.RowsAffected == 0 {
 			return errs.ErrNotFound
 		}
-		return tx.Clauses(clause.OnConflict{
+		if err := tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{
 				{Name: "cluster_id"},
 				{Name: "mode"},
@@ -199,8 +201,43 @@ func (r *Repo) BindControllerEnrollment(ctx context.Context, id uint64, registra
 				"last_seen_at":       installation.LastSeenAt,
 				"updated_at":         time.Now(),
 			}),
-		}).Create(installation).Error
+		}).Create(installation).Error; err != nil {
+			return err
+		}
+		return tx.Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "cluster_id"}},
+			DoUpdates: clause.Assignments(map[string]any{
+				"access_key_id":   telemetryCredential.AccessKeyID,
+				"secret_key_hash": telemetryCredential.SecretKeyHash,
+				"updated_at":      time.Now(),
+			}),
+		}).Create(telemetryCredential).Error
 	})
+}
+
+func (r *Repo) GetTelemetryCredentialByAccessKey(ctx context.Context, accessKey string) (*model.TelemetryCredential, error) {
+	var credential model.TelemetryCredential
+	if err := r.db.WithContext(ctx).Where("access_key_id = ?", accessKey).First(&credential).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errs.ErrNotFound
+		}
+		return nil, err
+	}
+	return &credential, nil
+}
+
+func (r *Repo) UpsertTelemetryCredential(ctx context.Context, credential *model.TelemetryCredential) error {
+	if credential == nil || credential.ClusterID == 0 || credential.AccessKeyID == "" || credential.SecretKeyHash == "" {
+		return errs.ErrInvalid
+	}
+	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "cluster_id"}},
+		DoUpdates: clause.Assignments(map[string]any{
+			"access_key_id":   credential.AccessKeyID,
+			"secret_key_hash": credential.SecretKeyHash,
+			"updated_at":      time.Now(),
+		}),
+	}).Create(credential).Error
 }
 
 func (r *Repo) UpdateClusterInventorySync(ctx context.Context, id uint64, in biz.ClusterInventorySync) error {
@@ -329,6 +366,7 @@ func (r *Repo) DeleteCluster(ctx context.Context, id uint64) error {
 			&model.Pod{},
 			&model.Event{},
 			&model.Installation{},
+			&model.TelemetryCredential{},
 		} {
 			if err := tx.Where("cluster_id = ?", id).Delete(item).Error; err != nil {
 				return err
@@ -496,6 +534,14 @@ func (r *Repo) UpsertWorkloads(ctx context.Context, items []*model.Workload) err
 			"uid",
 			"desired_replicas",
 			"ready_replicas",
+			"active_replicas",
+			"failed_replicas",
+			"is_terminal_failure",
+			"owner_kind",
+			"owner_name",
+			"owner_uid",
+			"revision",
+			"resource_created_at",
 			"labels_json",
 			"annotations_json",
 			"conditions_json",
@@ -859,7 +905,11 @@ func (r *Repo) ListWorkloads(ctx context.Context, f biz.ListWorkloadsFilter) ([]
 		tx = tx.Offset(f.Offset)
 	}
 	var out []*model.Workload
-	if err := tx.Order("namespace ASC, kind ASC, name ASC").Find(&out).Error; err != nil {
+	order := "namespace ASC, kind ASC, name ASC"
+	if len(f.OwnerRefs) > 0 {
+		order = "namespace ASC, owner_name ASC, revision DESC, resource_created_at DESC, name DESC"
+	}
+	if err := tx.Order(order).Find(&out).Error; err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -871,6 +921,112 @@ func (r *Repo) CountWorkloads(ctx context.Context, f biz.ListWorkloadsFilter) (i
 		return 0, err
 	}
 	return total, nil
+}
+
+func (r *Repo) ListNamespaceSummaries(ctx context.Context, clusterID uint64) ([]biz.NamespaceSummary, error) {
+	type resourceCountRow struct {
+		Namespace  string
+		Total      int64
+		LastSeenAt sql.NullString
+	}
+	type eventCountRow struct {
+		Namespace         string
+		InvolvedNamespace string
+		Total             int64
+		LastSeenAt        sql.NullString
+	}
+
+	byNamespace := make(map[string]*biz.NamespaceSummary)
+	ensure := func(namespace string) *biz.NamespaceSummary {
+		namespace = strings.TrimSpace(namespace)
+		if namespace == "" {
+			namespace = "default"
+		}
+		if summary := byNamespace[namespace]; summary != nil {
+			return summary
+		}
+		summary := &biz.NamespaceSummary{Namespace: namespace}
+		byNamespace[namespace] = summary
+		return summary
+	}
+	touch := func(summary *biz.NamespaceSummary, rawLastSeenAt sql.NullString) {
+		if !rawLastSeenAt.Valid {
+			return
+		}
+		lastSeenAt := parseAggregateTime(rawLastSeenAt.String)
+		if lastSeenAt == nil || (summary.LastSeenAt != nil && !lastSeenAt.After(*summary.LastSeenAt)) {
+			return
+		}
+		ts := *lastSeenAt
+		summary.LastSeenAt = &ts
+	}
+
+	var workloads []resourceCountRow
+	if err := applyWorkloadFilter(
+		r.db.WithContext(ctx).Model(&model.Workload{}),
+		biz.ListWorkloadsFilter{ClusterID: clusterID, GroupReplicaSets: true},
+	).Select("namespace, COUNT(*) AS total, CAST(MAX(last_seen_at) AS CHAR) AS last_seen_at").
+		Group("namespace").Scan(&workloads).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range workloads {
+		summary := ensure(row.Namespace)
+		summary.Workloads += row.Total
+		touch(summary, row.LastSeenAt)
+	}
+
+	var pods []resourceCountRow
+	if err := r.db.WithContext(ctx).Model(&model.Pod{}).
+		Where("cluster_id = ?", clusterID).
+		Select("namespace, COUNT(*) AS total, CAST(MAX(last_seen_at) AS CHAR) AS last_seen_at").
+		Group("namespace").Scan(&pods).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range pods {
+		summary := ensure(row.Namespace)
+		summary.Pods += row.Total
+		touch(summary, row.LastSeenAt)
+	}
+
+	var events []eventCountRow
+	if err := r.db.WithContext(ctx).Model(&model.Event{}).
+		Where("cluster_id = ?", clusterID).
+		Select("namespace, involved_namespace, COUNT(*) AS total, CAST(MAX(last_seen_at) AS CHAR) AS last_seen_at").
+		Group("namespace, involved_namespace").Scan(&events).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range events {
+		namespace := row.Namespace
+		if strings.TrimSpace(namespace) == "" {
+			namespace = row.InvolvedNamespace
+		}
+		summary := ensure(namespace)
+		summary.Events += row.Total
+		touch(summary, row.LastSeenAt)
+	}
+
+	out := make([]biz.NamespaceSummary, 0, len(byNamespace))
+	for _, summary := range byNamespace {
+		out = append(out, *summary)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Namespace < out[j].Namespace })
+	return out, nil
+}
+
+func parseAggregateTime(value string) *time.Time {
+	value = strings.TrimSpace(value)
+	for _, layout := range []string{
+		time.RFC3339Nano,
+		"2006-01-02 15:04:05.999999999-07:00",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05-07:00",
+		"2006-01-02 15:04:05",
+	} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return &parsed
+		}
+	}
+	return nil
 }
 
 func (r *Repo) ListPods(ctx context.Context, f biz.ListPodsFilter) ([]*model.Pod, error) {
@@ -948,10 +1104,76 @@ func applyWorkloadFilter(tx *gorm.DB, f biz.ListWorkloadsFilter) *gorm.DB {
 		tx = tx.Where("kind = ?", f.Kind)
 	}
 	if f.IssueOnly {
-		tx = tx.Where("ready_replicas < desired_replicas")
+		tx = tx.Where(`
+			(LOWER(kind) <> ? AND ready_replicas < desired_replicas)
+			OR
+			(LOWER(kind) = ? AND is_terminal_failure = ?)
+		`, "job", "job", true)
 	}
-	tx = applyLikeAny(tx, f.Query, []string{"namespace", "kind", "name", "uid"})
+	if f.GroupReplicaSets {
+		tx = tx.Where("NOT (kind = ? AND owner_kind = ? AND (owner_uid <> ? OR owner_name <> ?))", "ReplicaSet", "Deployment", "", "")
+	}
+	if len(f.OwnerRefs) > 0 {
+		clauses := make([]string, 0, len(f.OwnerRefs))
+		args := make([]any, 0, len(f.OwnerRefs)*6)
+		for _, ref := range f.OwnerRefs {
+			namespace := strings.TrimSpace(ref.Namespace)
+			kind := strings.TrimSpace(ref.Kind)
+			name := strings.TrimSpace(ref.Name)
+			uid := strings.TrimSpace(ref.UID)
+			if kind == "" || (name == "" && uid == "") {
+				continue
+			}
+			if uid != "" {
+				clauses = append(clauses, "(namespace = ? AND owner_kind = ? AND (owner_uid = ? OR (owner_uid = ? AND owner_name = ?)))")
+				args = append(args, namespace, kind, uid, "", name)
+				continue
+			}
+			clauses = append(clauses, "(namespace = ? AND owner_kind = ? AND owner_name = ?)")
+			args = append(args, namespace, kind, name)
+		}
+		if len(clauses) == 0 {
+			tx = tx.Where("1 = 0")
+		} else {
+			tx = tx.Where("kind = ?", "ReplicaSet").Where("("+strings.Join(clauses, " OR ")+")", args...)
+		}
+	}
+	if f.GroupReplicaSets {
+		tx = applyGroupedWorkloadQuery(tx, f.Query)
+	} else {
+		tx = applyLikeAny(tx, f.Query, []string{"namespace", "kind", "name", "uid"})
+	}
 	return tx
+}
+
+func applyGroupedWorkloadQuery(tx *gorm.DB, query string) *gorm.DB {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return tx
+	}
+	pattern := "%" + query + "%"
+	return tx.Where(`
+		k8s_workloads.namespace LIKE ?
+		OR k8s_workloads.kind LIKE ?
+		OR k8s_workloads.name LIKE ?
+		OR k8s_workloads.uid LIKE ?
+		OR (
+			k8s_workloads.kind = ?
+			AND EXISTS (
+				SELECT 1
+				FROM k8s_workloads AS child
+				WHERE child.cluster_id = k8s_workloads.cluster_id
+					AND child.namespace = k8s_workloads.namespace
+					AND child.kind = ?
+					AND child.owner_kind = ?
+					AND (
+						(child.owner_uid <> '' AND k8s_workloads.uid <> '' AND child.owner_uid = k8s_workloads.uid)
+						OR ((child.owner_uid = '' OR k8s_workloads.uid = '') AND child.owner_name = k8s_workloads.name)
+					)
+					AND (child.namespace LIKE ? OR child.kind LIKE ? OR child.name LIKE ? OR child.uid LIKE ?)
+			)
+		)
+	`, pattern, pattern, pattern, pattern, "Deployment", "ReplicaSet", "Deployment", pattern, pattern, pattern, pattern)
 }
 
 func applyNodeFilter(tx *gorm.DB, f biz.ListNodesFilter) *gorm.DB {

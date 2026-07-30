@@ -77,10 +77,10 @@ export function testPromConnection(): Promise<{ status: string }> {
   return request<{ status: string }>('POST', '/integrations/prom/test');
 }
 
-// testLokiConnection / testTempoConnection: GET /ready probes that
-// proxy through the manager so the auth + TLS-skip + URL come from
-// system_settings (loki / tempo categories) rather than from the
-// browser. The handler validates URL is set before dialing.
+// testLokiConnection / testTempoConnection proxy through the manager so
+// auth + TLS-skip + URL come from system_settings rather than the browser.
+// Loki checks GET /ready; Tempo checks /ready for a query URL or sends an
+// empty OTLP/HTTP export when the configured URL ends in /v1/traces.
 export function testLokiConnection(): Promise<{ status: string }> {
   return request<{ status: string }>('POST', '/integrations/loki/test');
 }

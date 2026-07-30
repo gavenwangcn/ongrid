@@ -126,6 +126,16 @@ message GetClusterHealthResponse {
     int64 oom_killed_pods = 4 [json_name = "oom_killed_pods"];
     int64 image_pull_back_off_pods = 5 [json_name = "image_pull_back_off_pods"];
     int64 not_ready_nodes = 6 [json_name = "not_ready_nodes"];
+    repeated KubernetesNamespaceSummary namespaces = 7 [json_name = "namespaces"];
+}
+
+message KubernetesNamespaceSummary {
+    string namespace = 1 [json_name = "namespace"];
+    int64 workloads = 2 [json_name = "workloads"];
+    int64 pods = 3 [json_name = "pods"];
+    int64 events = 4 [json_name = "events"];
+    int64 warnings = 5 [json_name = "warnings"];
+    google.protobuf.Timestamp last_seen_at = 6 [json_name = "last_seen_at"];
 }
 
 message ListEdgeAttachmentsRequest {
@@ -195,6 +205,14 @@ message KubernetesWorkload {
     string annotations_json = 10 [json_name = "annotations_json"];
     string conditions_json = 11 [json_name = "conditions_json"];
     google.protobuf.Timestamp last_seen_at = 12 [json_name = "last_seen_at"];
+    int32 active_replicas = 13 [json_name = "active_replicas"];
+    int32 failed_replicas = 14 [json_name = "failed_replicas"];
+    string owner_kind = 15 [json_name = "owner_kind"];
+    string owner_name = 16 [json_name = "owner_name"];
+    string owner_uid = 17 [json_name = "owner_uid"];
+    int64 revision = 18 [json_name = "revision"];
+    google.protobuf.Timestamp creation_timestamp = 19 [json_name = "creation_timestamp"];
+    repeated KubernetesWorkload replica_sets = 20 [json_name = "replica_sets"];
 }
 
 message KubernetesPod {
@@ -260,6 +278,7 @@ message ListWorkloadsRequest {
     int32 offset = 5 [json_name = "offset"];
     string q = 6 [json_name = "q"];
     bool issue_only = 7 [json_name = "issue_only"];
+    bool group_replica_sets = 8 [json_name = "group_replica_sets"];
 }
 
 message ListWorkloadsResponse {

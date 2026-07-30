@@ -1,6 +1,9 @@
 package tunnel
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 // This file hand-mirrors api/tunnel/v1/tunnel.proto message shapes as Go
 // structs with JSON tags. the tunnel body wire format is JSON
@@ -438,15 +441,22 @@ type KubernetesNodeSnapshot struct {
 }
 
 type KubernetesWorkloadSnapshot struct {
-	Kind            string              `json:"kind"`
-	Namespace       string              `json:"namespace,omitempty"`
-	Name            string              `json:"name"`
-	UID             string              `json:"uid,omitempty"`
-	DesiredReplicas int                 `json:"desired_replicas,omitempty"`
-	ReadyReplicas   int                 `json:"ready_replicas,omitempty"`
-	Labels          map[string]string   `json:"labels,omitempty"`
-	Annotations     map[string]string   `json:"annotations,omitempty"`
-	Conditions      []map[string]string `json:"conditions,omitempty"`
+	Kind              string              `json:"kind"`
+	Namespace         string              `json:"namespace,omitempty"`
+	Name              string              `json:"name"`
+	UID               string              `json:"uid,omitempty"`
+	DesiredReplicas   int                 `json:"desired_replicas,omitempty"`
+	ReadyReplicas     int                 `json:"ready_replicas,omitempty"`
+	ActiveReplicas    int                 `json:"active_replicas,omitempty"`
+	FailedReplicas    int                 `json:"failed_replicas,omitempty"`
+	OwnerKind         string              `json:"owner_kind,omitempty"`
+	OwnerName         string              `json:"owner_name,omitempty"`
+	OwnerUID          string              `json:"owner_uid,omitempty"`
+	Revision          int64               `json:"revision,omitempty"`
+	CreationTimestamp *time.Time          `json:"creation_timestamp,omitempty"`
+	Labels            map[string]string   `json:"labels,omitempty"`
+	Annotations       map[string]string   `json:"annotations,omitempty"`
+	Conditions        []map[string]string `json:"conditions,omitempty"`
 }
 
 type KubernetesPodSnapshot struct {

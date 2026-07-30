@@ -41,6 +41,7 @@ type Service interface {
 	RotateBootstrapToken(ctx context.Context, id uint64) (*biz.ClusterRegistration, error)
 	DeleteCluster(ctx context.Context, in biz.DeleteClusterInput) error
 	Enroll(ctx context.Context, in biz.EnrollInput) (*biz.EnrollResult, error)
+	RefreshTelemetryConfig(ctx context.Context, controllerEdgeID uint64, proof biz.TelemetryCredentialProof) (*biz.TelemetryConfig, error)
 }
 
 type Handler struct {
@@ -117,11 +118,13 @@ func (h *Handler) getClusterHealth(w http.ResponseWriter, r *http.Request) {
 		OOMKilledPods:        out.OOMKilledPods,
 		ImagePullBackOffPods: out.ImagePullBackOffPods,
 		NotReadyNodes:        out.NotReadyNodes,
+		Namespaces:           namespaceSummaryDTOs(out.Namespaces),
 	})
 }
 
 func (h *Handler) RegisterInternal(r chi.Router) {
 	r.Post("/internal/k8s/enroll", h.enroll)
+	r.Post("/internal/k8s/telemetry-config", h.refreshTelemetryConfig)
 }
 
 // @Summary Create Kubernetes cluster enrollment
@@ -270,13 +273,14 @@ func (h *Handler) listWorkloads(w http.ResponseWriter, r *http.Request) {
 	limit := parseListLimit(r.URL.Query().Get("limit"), 100)
 	offset := parseListOffset(r.URL.Query().Get("offset"))
 	filter := biz.ListWorkloadsFilter{
-		ClusterID: id,
-		Namespace: strings.TrimSpace(r.URL.Query().Get("namespace")),
-		Kind:      strings.TrimSpace(r.URL.Query().Get("kind")),
-		Query:     strings.TrimSpace(r.URL.Query().Get("q")),
-		IssueOnly: parseBoolDefault(r.URL.Query().Get("issue_only"), false),
-		Limit:     limit,
-		Offset:    offset,
+		ClusterID:        id,
+		Namespace:        strings.TrimSpace(r.URL.Query().Get("namespace")),
+		Kind:             strings.TrimSpace(r.URL.Query().Get("kind")),
+		Query:            strings.TrimSpace(r.URL.Query().Get("q")),
+		IssueOnly:        parseBoolDefault(r.URL.Query().Get("issue_only"), false),
+		GroupReplicaSets: parseBoolDefault(r.URL.Query().Get("group_replica_sets"), false),
+		Limit:            limit,
+		Offset:           offset,
 	}
 	items, err := h.svc.ListWorkloads(r.Context(), filter)
 	if err != nil {
@@ -481,7 +485,33 @@ func (h *Handler) enroll(w http.ResponseWriter, r *http.Request) {
 		SecretKey:        out.SecretKey,
 		CloudAddr:        out.CloudAddr,
 		ManagerPublicURL: out.ManagerPublicURL,
+		Telemetry:        telemetryConfigDTO(out.Telemetry),
 	})
+}
+
+// @Summary Refresh Kubernetes telemetry data-plane configuration
+// @Router /internal/k8s/telemetry-config [post]
+// @Success 200 {object} telemetryConfigResponse
+func (h *Handler) refreshTelemetryConfig(w http.ResponseWriter, r *http.Request) {
+	edgeID, err := strconv.ParseUint(strings.TrimSpace(r.Header.Get("X-Edge-Id")), 10, 64)
+	if err != nil || edgeID == 0 {
+		writeErr(w, errs.ErrUnauthorized)
+		return
+	}
+	var req telemetryRefreshRequest
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	out, err := h.svc.RefreshTelemetryConfig(r.Context(), edgeID, biz.TelemetryCredentialProof{
+		AccessKey: req.AccessKey,
+		SecretKey: req.SecretKey,
+	})
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, telemetryConfigDTO(out))
 }
 
 func (h *Handler) requireAdmin(next http.Handler) http.Handler {
@@ -511,6 +541,11 @@ type enrollRequest struct {
 	Namespace    string   `json:"namespace,omitempty"`
 	AgentVersion string   `json:"agent_version,omitempty"`
 	Capabilities []string `json:"capabilities,omitempty"`
+}
+
+type telemetryRefreshRequest struct {
+	AccessKey string `json:"access_key,omitempty"`
+	SecretKey string `json:"secret_key,omitempty"`
 }
 
 type clusterDTO struct {
@@ -562,12 +597,37 @@ type clusterRegistrationDTO struct {
 }
 
 type clusterHealthDTO struct {
-	DegradedWorkloads    int64 `json:"degraded_workloads"`
-	PendingPods          int64 `json:"pending_pods"`
-	CrashLoopBackOffPods int64 `json:"crash_loop_back_off_pods"`
-	OOMKilledPods        int64 `json:"oom_killed_pods"`
-	ImagePullBackOffPods int64 `json:"image_pull_back_off_pods"`
-	NotReadyNodes        int64 `json:"not_ready_nodes"`
+	DegradedWorkloads    int64                 `json:"degraded_workloads"`
+	PendingPods          int64                 `json:"pending_pods"`
+	CrashLoopBackOffPods int64                 `json:"crash_loop_back_off_pods"`
+	OOMKilledPods        int64                 `json:"oom_killed_pods"`
+	ImagePullBackOffPods int64                 `json:"image_pull_back_off_pods"`
+	NotReadyNodes        int64                 `json:"not_ready_nodes"`
+	Namespaces           []namespaceSummaryDTO `json:"namespaces"`
+}
+
+type namespaceSummaryDTO struct {
+	Namespace  string     `json:"namespace"`
+	Workloads  int64      `json:"workloads"`
+	Pods       int64      `json:"pods"`
+	Events     int64      `json:"events"`
+	Warnings   int64      `json:"warnings"`
+	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
+}
+
+func namespaceSummaryDTOs(items []biz.NamespaceSummary) []namespaceSummaryDTO {
+	out := make([]namespaceSummaryDTO, 0, len(items))
+	for _, item := range items {
+		out = append(out, namespaceSummaryDTO{
+			Namespace:  item.Namespace,
+			Workloads:  item.Workloads,
+			Pods:       item.Pods,
+			Events:     item.Events,
+			Warnings:   item.Warnings,
+			LastSeenAt: item.LastSeenAt,
+		})
+	}
+	return out
 }
 
 type edgeAttachmentDTO struct {
@@ -602,18 +662,26 @@ type nodeDTO struct {
 }
 
 type workloadDTO struct {
-	ID              uint64          `json:"id"`
-	ClusterID       uint64          `json:"cluster_id"`
-	Namespace       string          `json:"namespace"`
-	Kind            string          `json:"kind"`
-	Name            string          `json:"name"`
-	UID             string          `json:"uid,omitempty"`
-	DesiredReplicas int             `json:"desired_replicas"`
-	ReadyReplicas   int             `json:"ready_replicas"`
-	Labels          json.RawMessage `json:"labels,omitempty"`
-	Annotations     json.RawMessage `json:"annotations,omitempty"`
-	Conditions      json.RawMessage `json:"conditions,omitempty"`
-	LastSeenAt      *time.Time      `json:"last_seen_at,omitempty"`
+	ID                uint64          `json:"id"`
+	ClusterID         uint64          `json:"cluster_id"`
+	Namespace         string          `json:"namespace"`
+	Kind              string          `json:"kind"`
+	Name              string          `json:"name"`
+	UID               string          `json:"uid,omitempty"`
+	DesiredReplicas   int             `json:"desired_replicas"`
+	ReadyReplicas     int             `json:"ready_replicas"`
+	ActiveReplicas    int             `json:"active_replicas"`
+	FailedReplicas    int             `json:"failed_replicas"`
+	OwnerKind         string          `json:"owner_kind,omitempty"`
+	OwnerName         string          `json:"owner_name,omitempty"`
+	OwnerUID          string          `json:"owner_uid,omitempty"`
+	Revision          int64           `json:"revision,omitempty"`
+	CreationTimestamp *time.Time      `json:"creation_timestamp,omitempty"`
+	Labels            json.RawMessage `json:"labels,omitempty"`
+	Annotations       json.RawMessage `json:"annotations,omitempty"`
+	Conditions        json.RawMessage `json:"conditions,omitempty"`
+	LastSeenAt        *time.Time      `json:"last_seen_at,omitempty"`
+	ReplicaSets       []workloadDTO   `json:"replica_sets,omitempty"`
 }
 
 type podDTO struct {
@@ -657,14 +725,66 @@ type eventDTO struct {
 }
 
 type enrollResponse struct {
-	ClusterID        uint64 `json:"cluster_id"`
-	Role             string `json:"role"`
-	Mode             string `json:"mode"`
-	EdgeID           uint64 `json:"edge_id"`
-	AccessKey        string `json:"access_key"`
-	SecretKey        string `json:"secret_key"`
-	CloudAddr        string `json:"cloud_addr,omitempty"`
-	ManagerPublicURL string `json:"manager_public_url,omitempty"`
+	ClusterID        uint64                   `json:"cluster_id"`
+	Role             string                   `json:"role"`
+	Mode             string                   `json:"mode"`
+	EdgeID           uint64                   `json:"edge_id"`
+	AccessKey        string                   `json:"access_key"`
+	SecretKey        string                   `json:"secret_key"`
+	CloudAddr        string                   `json:"cloud_addr,omitempty"`
+	ManagerPublicURL string                   `json:"manager_public_url,omitempty"`
+	Telemetry        *telemetryConfigResponse `json:"telemetry,omitempty"`
+}
+
+type telemetryConfigResponse struct {
+	ClusterID              uint64 `json:"cluster_id"`
+	AccessKey              string `json:"access_key"`
+	SecretKey              string `json:"secret_key"`
+	ManagerPublicURL       string `json:"manager_public_url,omitempty"`
+	TracesEndpoint         string `json:"traces_endpoint,omitempty"`
+	TracesAuthMode         string `json:"traces_auth_mode,omitempty"`
+	TracesBasicUser        string `json:"traces_basic_user,omitempty"`
+	TracesBasicPass        string `json:"traces_basic_pass,omitempty"`
+	TracesTLSInsecure      bool   `json:"traces_tls_insecure,omitempty"`
+	LogsEndpoint           string `json:"logs_endpoint,omitempty"`
+	LogsAuthMode           string `json:"logs_auth_mode,omitempty"`
+	LogsBasicUser          string `json:"logs_basic_user,omitempty"`
+	LogsBasicPass          string `json:"logs_basic_pass,omitempty"`
+	LogsTLSInsecure        bool   `json:"logs_tls_insecure,omitempty"`
+	RemoteWriteEndpoint    string `json:"remote_write_endpoint,omitempty"`
+	RemoteWriteBearer      string `json:"remote_write_bearer,omitempty"`
+	RemoteWriteBasicUser   string `json:"remote_write_basic_user,omitempty"`
+	RemoteWriteBasicPass   string `json:"remote_write_basic_pass,omitempty"`
+	RemoteWriteTLSInsecure bool   `json:"remote_write_tls_insecure,omitempty"`
+	RemoteWriteTLSCAPEM    string `json:"remote_write_tls_ca_pem,omitempty"`
+}
+
+func telemetryConfigDTO(in *biz.TelemetryConfig) *telemetryConfigResponse {
+	if in == nil {
+		return nil
+	}
+	return &telemetryConfigResponse{
+		ClusterID:              in.ClusterID,
+		AccessKey:              in.AccessKey,
+		SecretKey:              in.SecretKey,
+		ManagerPublicURL:       in.ManagerPublicURL,
+		TracesEndpoint:         in.TracesEndpoint,
+		TracesAuthMode:         in.TracesAuthMode,
+		TracesBasicUser:        in.TracesBasicUser,
+		TracesBasicPass:        in.TracesBasicPass,
+		TracesTLSInsecure:      in.TracesTLSInsecure,
+		LogsEndpoint:           in.LogsEndpoint,
+		LogsAuthMode:           in.LogsAuthMode,
+		LogsBasicUser:          in.LogsBasicUser,
+		LogsBasicPass:          in.LogsBasicPass,
+		LogsTLSInsecure:        in.LogsTLSInsecure,
+		RemoteWriteEndpoint:    in.RemoteWriteEndpoint,
+		RemoteWriteBearer:      in.RemoteWriteBearer,
+		RemoteWriteBasicUser:   in.RemoteWriteBasicUser,
+		RemoteWriteBasicPass:   in.RemoteWriteBasicPass,
+		RemoteWriteTLSInsecure: in.RemoteWriteTLSInsecure,
+		RemoteWriteTLSCAPEM:    in.RemoteWriteTLSCAPEM,
+	}
 }
 
 func registrationDTO(in *biz.ClusterRegistration) clusterRegistrationDTO {
@@ -853,20 +973,34 @@ func workloadDTOFromModel(item *model.Workload) workloadDTO {
 	if item == nil {
 		return workloadDTO{}
 	}
-	return workloadDTO{
-		ID:              item.ID,
-		ClusterID:       item.ClusterID,
-		Namespace:       item.Namespace,
-		Kind:            item.Kind,
-		Name:            item.Name,
-		UID:             item.UID,
-		DesiredReplicas: item.DesiredReplicas,
-		ReadyReplicas:   item.ReadyReplicas,
-		Labels:          rawJSON(item.LabelsJSON, "{}"),
-		Annotations:     rawJSON(item.AnnotationsJSON, "{}"),
-		Conditions:      rawJSON(item.ConditionsJSON, "[]"),
-		LastSeenAt:      item.LastSeenAt,
+	dto := workloadDTO{
+		ID:                item.ID,
+		ClusterID:         item.ClusterID,
+		Namespace:         item.Namespace,
+		Kind:              item.Kind,
+		Name:              item.Name,
+		UID:               item.UID,
+		DesiredReplicas:   item.DesiredReplicas,
+		ReadyReplicas:     item.ReadyReplicas,
+		ActiveReplicas:    item.ActiveReplicas,
+		FailedReplicas:    item.FailedReplicas,
+		OwnerKind:         item.OwnerKind,
+		OwnerName:         item.OwnerName,
+		OwnerUID:          item.OwnerUID,
+		Revision:          item.Revision,
+		CreationTimestamp: item.ResourceCreatedAt,
+		Labels:            rawJSON(item.LabelsJSON, "{}"),
+		Annotations:       rawJSON(item.AnnotationsJSON, "{}"),
+		Conditions:        rawJSON(item.ConditionsJSON, "[]"),
+		LastSeenAt:        item.LastSeenAt,
 	}
+	if len(item.ReplicaSets) > 0 {
+		dto.ReplicaSets = make([]workloadDTO, 0, len(item.ReplicaSets))
+		for _, replicaSet := range item.ReplicaSets {
+			dto.ReplicaSets = append(dto.ReplicaSets, workloadDTOFromModel(replicaSet))
+		}
+	}
+	return dto
 }
 
 func podDTOFromModel(item *model.Pod) podDTO {

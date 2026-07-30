@@ -213,6 +213,8 @@ type k8sWorkloadSnapshotRow struct {
 	UID             string     `json:"uid,omitempty"`
 	DesiredReplicas int        `json:"desired_replicas"`
 	ReadyReplicas   int        `json:"ready_replicas"`
+	ActiveReplicas  int        `json:"active_replicas"`
+	FailedReplicas  int        `json:"failed_replicas"`
 	LastSeenAt      *time.Time `json:"last_seen_at,omitempty"`
 }
 
@@ -707,6 +709,8 @@ func workloadSnapshotRow(w *k8smodel.Workload) k8sWorkloadSnapshotRow {
 		UID:             w.UID,
 		DesiredReplicas: w.DesiredReplicas,
 		ReadyReplicas:   w.ReadyReplicas,
+		ActiveReplicas:  w.ActiveReplicas,
+		FailedReplicas:  w.FailedReplicas,
 		LastSeenAt:      w.LastSeenAt,
 	}
 }

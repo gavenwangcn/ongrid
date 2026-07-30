@@ -1,3 +1,4 @@
+{{- $nodeConfigChecksum := printf "%s\n%s\n%s" .Values.mode .Values.manager.publicURL .Values.manager.tunnelAddr | sha256sum -}}
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -14,6 +15,9 @@ spec:
       app.kubernetes.io/component: node
   template:
     metadata:
+      annotations:
+        checksum/config: {{ $nodeConfigChecksum }}
+        checksum/node-bootstrap: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
       labels:
         {{- include "ongrid-edge.labels" . | nindent 8 }}
         app.kubernetes.io/component: node
