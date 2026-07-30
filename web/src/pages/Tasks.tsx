@@ -123,7 +123,6 @@ function TaskList() {
 
   return (
     <main className="anim-fade flex flex-1 flex-col overflow-hidden">
-      <ResourceMgmtPanel />
       <header className="app-header border-b border-zinc-800/60 px-6 py-4">
         <div className="flex items-center justify-between gap-4">
           <div>
@@ -216,7 +215,7 @@ function TaskList() {
                           navigate(`/tasks/${encodeURIComponent(task.id)}`);
                         }
                       }}
-                      className="group cursor-pointer transition-colors hover:bg-zinc-900/60"
+                      className="group cursor-pointer transition-colors hover:bg-zinc-800/20 focus:bg-transparent focus:outline-none focus-visible:bg-transparent focus-visible:outline-none active:bg-transparent"
                     >
                       <td className="px-5 py-3">
                         <div className="flex items-center gap-2">
@@ -267,6 +266,8 @@ function TaskList() {
             </table>
           </div>
         )}
+
+        <ResourceMgmtPanel />
 
         {(creating || editing) && (
           <ScheduleForm
