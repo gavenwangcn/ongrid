@@ -129,6 +129,8 @@ type ContentMeta struct {
 	PeriodEnd   string   `json:"period_end"`
 	DataSources []string `json:"data_sources,omitempty"`
 	Sections    []string `json:"sections,omitempty"`
+	// ResourceMgmt snapshots thresholds used when this report was generated.
+	ResourceMgmt *ResourceMgmtConfig `json:"resource_mgmt,omitempty"`
 }
 
 // ContentVersion is the schema version stamped into freshly generated

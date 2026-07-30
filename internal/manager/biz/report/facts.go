@@ -184,6 +184,8 @@ type DeviceResourceStat struct {
 	NetRxPeakBps float64 `json:"net_rx_peak_bps,omitempty"`
 	NetTxAvgBps  float64 `json:"net_tx_avg_bps,omitempty"`
 	NetTxPeakBps float64 `json:"net_tx_peak_bps,omitempty"`
+	DownsizeSuggest bool   `json:"downsize_suggest,omitempty"`
+	DownsizeHint    string `json:"downsize_hint,omitempty"`
 }
 
 // FleetFacts is the monitoring-coverage snapshot at period end.

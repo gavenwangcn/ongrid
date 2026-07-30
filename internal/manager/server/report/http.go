@@ -29,9 +29,10 @@ const roleViewer = "viewer"
 // Handler serves the report API. uc is required; a nil uc makes every
 // route 503 (binary built without the report stack wired).
 type Handler struct {
-	uc        *bizreport.Usecase
-	modelCfg  *bizreport.ModelConfigService
-	now       func() time.Time // injectable clock for tests
+	uc           *bizreport.Usecase
+	modelCfg     *bizreport.ModelConfigService
+	resourceMgmt *bizreport.ResourceMgmtConfigService
+	now          func() time.Time // injectable clock for tests
 }
 
 func NewHandler(uc *bizreport.Usecase) *Handler {
@@ -41,6 +42,11 @@ func NewHandler(uc *bizreport.Usecase) *Handler {
 // WithModelConfig attaches report LLM model settings (optional).
 func (h *Handler) WithModelConfig(svc *bizreport.ModelConfigService) *Handler {
 	h.modelCfg = svc
+	return h
+}
+
+func (h *Handler) WithResourceMgmtConfig(svc *bizreport.ResourceMgmtConfigService) *Handler {
+	h.resourceMgmt = svc
 	return h
 }
 
@@ -77,6 +83,8 @@ func (h *Handler) Register(r chi.Router) {
 
 	r.Get("/v1/report-settings/model", h.getReportModel)
 	r.With(h.requireWriter).Put("/v1/report-settings/model", h.putReportModel)
+	r.Get("/v1/report-settings/resource-mgmt", h.getResourceMgmt)
+	r.With(h.requireWriter).Put("/v1/report-settings/resource-mgmt", h.putResourceMgmt)
 
 	// HLD-022 Phase 2 — unified 任务 surface (recurring schedules ∪ oneoff tasks).
 	r.Get("/v1/tasks", h.listTasks)
@@ -409,6 +417,43 @@ func (h *Handler) putReportModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := h.modelCfg.Set(r.Context(), req.Provider, req.Model)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) getResourceMgmt(w http.ResponseWriter, r *http.Request) {
+	if !h.authed(w, r) {
+		return
+	}
+	if h.resourceMgmt == nil {
+		writeErr(w, errs.ErrNotWiredYet)
+		return
+	}
+	out, err := h.resourceMgmt.Get(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) putResourceMgmt(w http.ResponseWriter, r *http.Request) {
+	if !h.authed(w, r) {
+		return
+	}
+	if h.resourceMgmt == nil {
+		writeErr(w, errs.ErrNotWiredYet)
+		return
+	}
+	var req bizreport.ResourceMgmtConfig
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, errors.Join(errs.ErrInvalid, err))
+		return
+	}
+	out, err := h.resourceMgmt.Set(r.Context(), req)
 	if err != nil {
 		writeErr(w, err)
 		return

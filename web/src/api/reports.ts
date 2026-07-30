@@ -307,6 +307,8 @@ export type DeviceResourceStat = {
   net_rx_peak_bps?: number;
   net_tx_avg_bps?: number;
   net_tx_peak_bps?: number;
+  downsize_suggest?: boolean;
+  downsize_hint?: string;
 };
 
 export type DeviceResourceFacts = {
@@ -385,6 +387,7 @@ export type ReportContent = {
     period_end?: string;
     data_sources?: string[];
     sections?: ReportSection[];
+    resource_mgmt?: ResourceMgmtConfig;
   };
 };
 
@@ -529,6 +532,14 @@ export function runScheduleNow(id: number) {
 
 // --- report model settings ---
 
+export type ResourceMgmtConfig = {
+  enabled: boolean;
+  cpu_peak_max_pct: number;
+  mem_peak_max_pct: number;
+  min_cpu_count: number;
+  min_mem_gb: number;
+};
+
 export type ReportModelProvider = {
   id: string;
   label: string;
@@ -550,4 +561,12 @@ export function getReportModel() {
 
 export function setReportModel(body: { provider: string; model: string }) {
   return request<ReportModelConfig>('PUT', '/report-settings/model', body);
+}
+
+export function getResourceMgmt() {
+  return request<ResourceMgmtConfig>('GET', '/report-settings/resource-mgmt');
+}
+
+export function setResourceMgmt(body: ResourceMgmtConfig) {
+  return request<ResourceMgmtConfig>('PUT', '/report-settings/resource-mgmt', body);
 }

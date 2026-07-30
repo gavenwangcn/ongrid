@@ -32,7 +32,7 @@ max_turns: 12
 报告分三个主题行：① 集群态势 ② 应用日志（潜在错误）③ 告警与处理。
 ReportFacts 里有这些数据供你叙事：
 - `resource`：CPU / 内存 / 磁盘 / **网络** 的周期 **均值与峰值**（fleet 汇总）。CPU/内存/磁盘为百分比；网络为 `net_rx_*` / `net_tx_*` 吞吐（bytes/s）。
-- `device_resources`：scope 内**每台设备**的 CPU/内存/磁盘/网络 周期均值与峰值（`devices[]`）。**仅用于报告页明细与 AI 引用异常设备**；飞书推送只发 fleet 汇总，不要在 IM 里逐台罗列。
+- `device_resources`：scope 内**每台设备**的 CPU/内存/磁盘/网络 周期均值与峰值（`devices[]`），含规格（`cpu_count` / `mem_total_bytes` / `disk_total_bytes`）。满足降配规则时带 `downsize_suggest=true` 与 `downsize_hint`（阈值在 **任务页 → 资源管理** 配置，生成时快照于 `metadata.resource_mgmt`）。**仅用于报告页明细与 AI 引用异常/可降配设备**；飞书推送只发 fleet 汇总，不要在 IM 里逐台罗列。
 - `network_devices`：（旧字段，已废弃）新报告请读 `device_resources`。
 - `logs`：Loki **潜在错误**统计（与 Logs 页「潜在错误」快捷查询一致：`error|panic|fatal`）。
   `total_errors` / `daily_sparkline` / `top_sources`（按 container/unit/文件/other 每类 Top 3；
@@ -52,7 +52,7 @@ ReportFacts 里有这些数据供你叙事：
    各设备的 unit / 容器 / 文件及 `logql_selector`（lookback 支持 `7d` / `168h`，对齐报告周期）
 3. `query_edges(role=network, status=…)` — 网络角色设备清单、在线状态、IP/名称等（与 `device_resources` 互补，用于接口/连通性定性描述）
 
-叙事层次建议：**系统整体 → 四类资源（CPU/内存/磁盘/网络）fleet 汇总 → 异常/Top 设备（引用 device_resources）→ 日志错误趋势 → 日志源覆盖**。
+叙事层次建议：**系统整体 → 四类资源（CPU/内存/磁盘/网络）fleet 汇总 → 异常/Top 设备（引用 device_resources，含 downsize_suggest 降配建议）→ 日志错误趋势 → 日志源覆盖**。
 scope 带 `system_name` 时优先按该系统展开。
 
 ## 铁律

@@ -1668,6 +1668,7 @@ func main() {
 	// error on generate instead of a route-level 404.
 	reportRepo := managerreportdata.NewRepo(db)
 	reportModelCfg := managerbizreport.NewModelConfigService(settingSvc, llmRouter)
+	reportResourceMgmtCfg := managerbizreport.NewResourceMgmtConfigService(settingSvc)
 	var reportGen managerbizreport.Generator
 	reportSchedulerReady := false
 	if reportRT, ok := aiopsRuntime.(*aiopschatruntime.Runtime); ok && reportRT != nil {
@@ -1694,6 +1695,7 @@ func main() {
 		).
 			WithDeliverer(reportDelivererShim{channels: alertRepo, router: notifyRouter}).
 			WithModelConfig(reportModelCfg).
+			WithResourceMgmtConfig(reportResourceMgmtCfg).
 			WithContentExtractor(managerbizreport.NewContentExtractor(llmRouter, log)).
 			WithReadyCheck(reportLLMReady(llmSettingsResolver, reportModelCfg))
 		reportSchedulerReady = true
@@ -1709,7 +1711,9 @@ func main() {
 		managerbizreport.NewScheduler(reportUC, log).Start(rootCtx)
 		log.Info("report: scheduler wired")
 	}
-	reportHandler := managerserverreport.NewHandler(reportUC).WithModelConfig(reportModelCfg)
+	reportHandler := managerserverreport.NewHandler(reportUC).
+		WithModelConfig(reportModelCfg).
+		WithResourceMgmtConfig(reportResourceMgmtCfg)
 
 	// Flow orchestration (HLD-016): user-authored workflow DAGs executed
 	// over the existing agent / tool / notify subsystems. Routes mount

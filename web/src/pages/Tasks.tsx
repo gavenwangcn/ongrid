@@ -44,6 +44,7 @@ import { createOneoffTask, deleteTask, getTask, listTasks, rerunTask, type Unifi
 import { ReportSectionsPicker, initialSectionsForScope } from '@/components/ReportSectionsPicker';
 import { ReportScheduleTimePicker } from '@/components/ReportScheduleTimePicker';
 import { ReportSystemsPicker } from '@/components/ReportSystemsPicker';
+import { ResourceMgmtPanel } from '@/components/ResourceMgmtPanel';
 
 const KINDS: { key: ReportKind; zh: string; en: string }[] = [
   { key: 'daily', zh: '日报', en: 'Daily' },
@@ -122,6 +123,7 @@ function TaskList() {
 
   return (
     <main className="anim-fade flex flex-1 flex-col overflow-hidden">
+      <ResourceMgmtPanel />
       <header className="app-header border-b border-zinc-800/60 px-6 py-4">
         <div className="flex items-center justify-between gap-4">
           <div>

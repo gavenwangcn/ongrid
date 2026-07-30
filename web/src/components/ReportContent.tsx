@@ -13,6 +13,7 @@ import type {
   ReportContent as ReportContentT,
   ReportSection,
   ResourceFacts,
+  ResourceMgmtConfig,
   SystemContentBlock,
 } from '@/api/reports';
 import { effectiveReportSections } from '@/api/reports';
@@ -274,6 +275,24 @@ function LogSourcesGrouped({ sources, tr }: { sources: LogErrorSource[]; tr: (zh
   );
 }
 
+function ResourceMgmtRuleNote({
+  cfg,
+  tr,
+}: {
+  cfg?: ResourceMgmtConfig;
+  tr: (zh: string, en: string) => string;
+}) {
+  if (!cfg?.enabled) return null;
+  return (
+    <p className="mb-2 text-[11px] text-zinc-500">
+      {tr(
+        `降配规则（生成时）：CPU 峰值 < ${cfg.cpu_peak_max_pct}% 且内存峰值 < ${cfg.mem_peak_max_pct}%，规格 > ${cfg.min_cpu_count} 核且 > ${cfg.min_mem_gb} GB`,
+        `Downsize rule (at generation): CPU peak < ${cfg.cpu_peak_max_pct}% and memory peak < ${cfg.mem_peak_max_pct}%, specs > ${cfg.min_cpu_count} cores and > ${cfg.min_mem_gb} GB`,
+      )}
+    </p>
+  );
+}
+
 function DeviceResourcesTable({
   devices,
   tr,
@@ -293,6 +312,7 @@ function DeviceResourcesTable({
             <th className="px-3 py-2 font-medium">{tr('磁盘', 'Disk')}</th>
             <th className="px-3 py-2 font-medium">{tr('网络入', 'Net rx')}</th>
             <th className="px-3 py-2 font-medium">{tr('网络出', 'Net tx')}</th>
+            <th className="px-3 py-2 font-medium">{tr('资源管理', 'Mgmt')}</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-zinc-800/80 text-zinc-300">
@@ -314,6 +334,18 @@ function DeviceResourcesTable({
               <td className="whitespace-nowrap px-3 py-2 tabular-nums">{memDiskUtilCell(d.disk_total_bytes, d.disk_avg, d.disk_peak)}</td>
               <td className="whitespace-nowrap px-3 py-2 tabular-nums">{netCell(d.net_rx_avg_bps, d.net_rx_peak_bps)}</td>
               <td className="whitespace-nowrap px-3 py-2 tabular-nums">{netCell(d.net_tx_avg_bps, d.net_tx_peak_bps)}</td>
+              <td className="max-w-[220px] px-3 py-2">
+                {d.downsize_suggest ? (
+                  <span
+                    className="inline-flex rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[11px] text-amber-300"
+                    title={d.downsize_hint}
+                  >
+                    {tr('降配建议', 'Downsize')}
+                  </span>
+                ) : (
+                  <span className="text-zinc-600">—</span>
+                )}
+              </td>
             </tr>
           ))}
         </tbody>
@@ -366,7 +398,7 @@ export function ReportContentView({
         {content.systems.map((sys) => (
           <section key={sys.system_name} className="space-y-7">
             <h2 className="border-b border-zinc-800 pb-2 text-lg font-semibold text-zinc-100">{sys.system_name}</h2>
-            <ReportSystemBody sys={sys} sections={sections} tr={tr} />
+            <ReportSystemBody sys={sys} sections={sections} tr={tr} resourceMgmt={content.metadata?.resource_mgmt} />
           </section>
         ))}
         {sections.includes('alerts') && changes.length > 0 && (
@@ -404,6 +436,7 @@ export function ReportContentView({
       sections={sections}
       tr={tr}
       globalChanges={content.changes}
+      resourceMgmt={content.metadata?.resource_mgmt}
     />
   );
 }
@@ -413,11 +446,13 @@ function ReportSystemBody({
   sections,
   tr,
   globalChanges,
+  resourceMgmt,
 }: {
   sys: SystemContentBlock;
   sections: ReportSection[];
   tr: (zh: string, en: string) => string;
   globalChanges?: ChangeFact[];
+  resourceMgmt?: ResourceMgmtConfig;
 }) {
   const showCluster = sections.includes('cluster');
   const showLogs = sections.includes('logs');
@@ -474,6 +509,7 @@ function ReportSystemBody({
         </div>
         {deviceResources && deviceResources.length > 0 && (
           <div className="mt-1">
+            <ResourceMgmtRuleNote cfg={resourceMgmt} tr={tr} />
             <div className="mb-2 text-[11px] text-zinc-500">{tr('设备资源明细（周期 均 / 峰）', 'Per-device resources (period avg / peak)')}</div>
             <DeviceResourcesTable devices={deviceResources as DeviceResourceStat[]} tr={tr} />
           </div>

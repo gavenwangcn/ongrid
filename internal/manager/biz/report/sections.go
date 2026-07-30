@@ -127,13 +127,12 @@ func clusterResourceDirective(sections []string, en bool) string {
 	return mtr(
 		"集群态势写作要求：narrative 必须对 CPU、内存、磁盘、网络四类资源做总体分析（fleet 汇总）。"+
 			"引用 facts.resource 中的 cpu/mem/disk 周期均值与峰值（百分比），以及 net_rx/net_tx 吞吐均值与峰值（bytes/s，物理网卡）。"+
-			"逐台明细在 facts.device_resources[]（cpu_count / mem_total_bytes / disk_total_bytes 容量 + 周期利用率）—— narrative 只点出异常或 Top 设备，不要逐台罗列全表；"+
-			"需要接口/连通性等定性信息时可只读调用 query_edges(role=network)。"+
-			"禁止只写三类资源而忽略网络。\n",
+			"逐台明细在 facts.device_resources[]（容量 + 周期利用率 + downsize_suggest/downsize_hint 降配建议）—— narrative 只点出异常或 Top 设备，不要逐台罗列全表；"+
+			"有 downsize_suggest 的设备须在 advice 中给出可执行的降配建议。\n",
 		"CLUSTER POSTURE: In narrative, synthesize ALL four resource dimensions at fleet level — CPU, memory, disk, and network. "+
 			"Cite facts.resource cpu/mem/disk period avg/peak (percent) and net_rx/net_tx avg/peak throughput (bytes/s, physical NICs). "+
-			"Per-host detail lives in facts.device_resources[] — call out outliers or top devices only, do NOT paste the full table into prose; "+
-			"use query_edges(role=network) read-only for qualitative interface/connectivity context. "+
+			"Per-host detail lives in facts.device_resources[] (capacity, utilization, downsize_suggest/downsize_hint) — call out outliers or top devices only, do NOT paste the full table into prose; "+
+			"devices with downsize_suggest=true must appear in advice with actionable right-sizing recommendations. "+
 			"Do NOT omit network when discussing resource posture.\n",
 	)
 }

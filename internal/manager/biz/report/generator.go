@@ -59,6 +59,7 @@ type workerGenerator struct {
 	extractor *ContentExtractor
 	deliverer Deliverer // nil = in-app only
 	modelCfg  *ModelConfigService
+	resourceMgmt *ResourceMgmtConfigService
 	ready     func(context.Context) error
 	cfg       GeneratorConfig
 	log       *slog.Logger
@@ -90,6 +91,11 @@ func NewWorkerGenerator(repo Repo, facts FactsCollector, spawner WorkerSpawner, 
 // platform default routing behaviour.
 func (g *workerGenerator) WithModelConfig(svc *ModelConfigService) *workerGenerator {
 	g.modelCfg = svc
+	return g
+}
+
+func (g *workerGenerator) WithResourceMgmtConfig(svc *ResourceMgmtConfigService) *workerGenerator {
+	g.resourceMgmt = svc
 	return g
 }
 
@@ -184,15 +190,23 @@ func (g *workerGenerator) generate(ctx context.Context, rpt *model.Report) error
 	if err != nil {
 		return fmt.Errorf("collect facts: %w", err)
 	}
-	g.log.Info("report pipeline facts done",
-		slog.String("report_id", rpt.ID),
-		slog.Duration("duration", time.Since(factsStart)),
-		slog.Bool("resource_available", facts.Resource.Available),
-		slog.Int("fleet_total", facts.Fleet.Total),
-		slog.Int("incidents", len(facts.Incidents)),
-	)
+		g.log.Info("report pipeline facts done",
+			slog.String("report_id", rpt.ID),
+			slog.Duration("duration", time.Since(factsStart)),
+			slog.Bool("resource_available", facts.Resource.Available),
+			slog.Int("fleet_total", facts.Fleet.Total),
+			slog.Int("incidents", len(facts.Incidents)),
+		)
 
-	prompt := g.buildPrompt(rpt, facts)
+		mgmtCfg := DefaultResourceMgmtConfig()
+		if g.resourceMgmt != nil {
+			if c, err := g.resourceMgmt.Get(ctx); err == nil {
+				mgmtCfg = c
+			}
+		}
+		ApplyResourceMgmt(facts, mgmtCfg)
+
+		prompt := g.buildPrompt(rpt, facts)
 
 	workerStart := time.Now()
 	spawnReq := chatruntime.SpawnRequest{
@@ -321,12 +335,17 @@ func (g *workerGenerator) generate(ctx context.Context, rpt *model.Report) error
 	}
 	TrimContentForSections(content, sections)
 	content.Version = ContentVersion
-	content.Metadata = ContentMeta{
+	meta := ContentMeta{
 		PeriodStart: period.Start.Format(time.RFC3339),
 		PeriodEnd:   period.End.Format(time.RFC3339),
 		DataSources: dataSourcesForSections(sections),
 		Sections:    sections,
 	}
+	if mgmtCfg.Enabled {
+		snap := mgmtCfg
+		meta.ResourceMgmt = &snap
+	}
+	content.Metadata = meta
 
 	rpt.ContentJSON = content.MustJSON()
 	rpt.ContentMD = content.RenderMarkdown(rpt.Title, g.localeFor(rpt))

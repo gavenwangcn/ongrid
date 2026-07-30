@@ -40,6 +40,9 @@ func renderDeviceResourcesMarkdown(b *strings.Builder, dr DeviceResourceFacts, m
 				formatBytesPerSec(d.NetRxAvgBps), formatBytesPerSec(d.NetRxPeakBps),
 				formatBytesPerSec(d.NetTxAvgBps), formatBytesPerSec(d.NetTxPeakBps))
 		}
+		if d.DownsizeSuggest && d.DownsizeHint != "" {
+			line += " · **" + mtr("降配建议", "Downsize") + "**: " + d.DownsizeHint
+		}
 		b.WriteString(line + "\n")
 	}
 	b.WriteString("\n")

@@ -135,6 +135,8 @@ const (
 const (
 	KeyReportLLMProvider = "llm_provider"
 	KeyReportLLMModel    = "llm_model"
+	// KeyReportResourceMgmt stores JSON ResourceMgmtConfig for downsize hints.
+	KeyReportResourceMgmt = "resource_mgmt"
 )
 
 // Per-system notification channel bindings (CategoryAlert). JSON map:
