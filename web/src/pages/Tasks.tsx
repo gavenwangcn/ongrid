@@ -30,7 +30,6 @@ import {
   runScheduleNow,
   toggleSchedule,
   updateSchedule,
-  initialSectionsForKind,
   parseReportScope,
   parseReportScopeSystems,
   type ReportKind,
