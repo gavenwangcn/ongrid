@@ -93,6 +93,74 @@ func TestMarkdownSummaryClusterPosture(t *testing.T) {
 	}
 }
 
+func TestDeliveryIMFactsFromContent_MultiSystemPerSystemBlocks(t *testing.T) {
+	c := Content{
+		Metadata: ContentMeta{Sections: allReportSections},
+		Systems: []SystemContentBlock{
+			{
+				SystemName: "物流执行",
+				Resource: ResourceFacts{
+					Available: true, CPUAvg: 2, CPUPeak: 80, MemAvg: 40, MemPeak: 50,
+					DiskAvg: 10, DiskPeak: 20,
+				},
+				Fleet: FleetFacts{Total: 12, Online: 12},
+				Logs:  LogFacts{Available: true, TotalErrors: 10, DeltaPct: ptrFloat64(5)},
+				KeyIncidents: []KeyIncident{
+					{ID: 1, Status: "resolved", DurationMin: 20},
+				},
+				Actions: ActionsSummary{SafeTotal: 2},
+			},
+			{
+				SystemName: "采购管理平台",
+				Resource: ResourceFacts{
+					Available: true, CPUAvg: 4, CPUPeak: 60, MemAvg: 30, MemPeak: 40,
+					DiskAvg: 20, DiskPeak: 30,
+				},
+				Fleet: FleetFacts{Total: 5, Online: 5},
+				Logs:  LogFacts{Available: true, TotalErrors: 3},
+				KeyIncidents: []KeyIncident{
+					{ID: 2, Status: "open", DurationMin: 5},
+				},
+				Actions: ActionsSummary{MutatingTotal: 1},
+			},
+		},
+	}
+	im := deliveryIMFactsFromContent(c)
+	if len(im.systems) != 2 {
+		t.Fatalf("systems = %d, want 2", len(im.systems))
+	}
+	if im.resource.Available {
+		t.Error("multi-system should not populate rolled-up resource")
+	}
+	s := DeliverySummary{
+		Headline: "multi-system headline",
+		Sections: im.sections,
+		Systems:  im.systems,
+	}
+	md := s.MarkdownSummary()
+	for _, want := range []string{
+		"**物流执行**",
+		"CPU · 均 2% / 峰 80%",
+		"在线设备 · 12 / 共 12 台",
+		"**采购管理平台**",
+		"CPU · 均 4% / 峰 60%",
+		"在线设备 · 5 / 共 5 台",
+		"**应用日志**",
+		"潜在错误 · 10",
+		"潜在错误 · 3",
+		"**告警与处理**",
+		"告警 · 1 · 已解决 1 · MTTR 20 min",
+		"告警 · 1 · 已解决 0 · MTTR 0 min",
+	} {
+		if !strings.Contains(md, want) {
+			t.Errorf("missing %q in:\n%s", want, md)
+		}
+	}
+	if strings.Contains(md, "在线设备 · 17 / 共 17 台") {
+		t.Errorf("should not roll up fleet across systems:\n%s", md)
+	}
+}
+
 func TestMarkdownSummaryRespectsSections(t *testing.T) {
 	s := DeliverySummary{
 		Headline: "仅集群",

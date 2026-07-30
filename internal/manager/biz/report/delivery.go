@@ -24,6 +24,16 @@ type Deliverer interface {
 	Deliver(ctx context.Context, summary DeliverySummary, channelIDs []uint64) []DeliveryRecord
 }
 
+// DeliverySystemSummary is one business system's fleet-level IM stats.
+type DeliverySystemSummary struct {
+	Name      string
+	Resource  ResourceFacts
+	Fleet     FleetFacts
+	Logs      LogFacts
+	Incidents []KeyIncident
+	Actions   ActionsSummary
+}
+
 // DeliverySummary is the channel-agnostic payload. The concrete
 // Deliverer renders it into each channel's native format (markdown
 // text for v1; a Feishu interactive card is a future enhancement). The
@@ -38,6 +48,7 @@ type DeliverySummary struct {
 	Logs      LogFacts
 	Incidents []KeyIncident
 	Actions   ActionsSummary
+	Systems   []DeliverySystemSummary // multi-system reports: per-system IM blocks
 	Sections  []string
 	DeepLink  string // public share URL (/r/{token}); absolute when PublicURL set
 	ReportID  string
@@ -92,8 +103,14 @@ func (s DeliverySummary) MarkdownSummary() string {
 	if len(sections) == 0 {
 		sections = allReportSections
 	}
+	multiSystem := len(s.Systems) > 1
 	if SectionEnabled(sections, SectionCluster) {
-		if s.Resource.Available || s.Fleet.Total > 0 {
+		if multiSystem {
+			if b.Len() > 0 {
+				b.WriteString("\n")
+			}
+			writeMultiSystemClusterPosture(&b, s.Systems)
+		} else if s.Resource.Available || s.Fleet.Total > 0 {
 			if b.Len() > 0 {
 				b.WriteString("\n")
 			}
@@ -123,13 +140,21 @@ func (s DeliverySummary) MarkdownSummary() string {
 		if b.Len() > 0 {
 			b.WriteString("\n")
 		}
-		writeLogsPosture(&b, s.Logs)
+		if multiSystem {
+			writeMultiSystemLogsPosture(&b, s.Systems)
+		} else {
+			writeLogsPosture(&b, s.Logs)
+		}
 	}
 	if SectionEnabled(sections, SectionAlerts) {
 		if b.Len() > 0 {
 			b.WriteString("\n")
 		}
-		writeAlertsPosture(&b, s.Incidents, s.Actions)
+		if multiSystem {
+			writeMultiSystemAlertsPosture(&b, s.Systems)
+		} else {
+			writeAlertsPosture(&b, s.Incidents, s.Actions)
+		}
 	}
 	if s.DeepLink != "" {
 		if b.Len() > 0 {
@@ -143,6 +168,28 @@ func (s DeliverySummary) MarkdownSummary() string {
 func writeClusterPosture(b *strings.Builder, res ResourceFacts, fleet FleetFacts) {
 	b.WriteString("\n**集群态势**\n")
 	b.WriteString("CPU / 内存 / 磁盘 / 网络 · 监控覆盖\n")
+	writeSystemResourceLines(b, res, fleet)
+}
+
+func writeMultiSystemClusterPosture(b *strings.Builder, systems []DeliverySystemSummary) {
+	b.WriteString("\n**集群态势**")
+	for i, sys := range systems {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		name := strings.TrimSpace(sys.Name)
+		if name == "" {
+			name = "未命名系统"
+		}
+		b.WriteString("\n\n**")
+		b.WriteString(name)
+		b.WriteString("**\n")
+		b.WriteString("CPU / 内存 / 磁盘 / 网络 · 监控覆盖\n")
+		writeSystemResourceLines(b, sys.Resource, sys.Fleet)
+	}
+}
+
+func writeSystemResourceLines(b *strings.Builder, res ResourceFacts, fleet FleetFacts) {
 	if res.Available {
 		b.WriteString(fmt.Sprintf("CPU · 均 %s%% / 峰 %s%%\n",
 			formatNum(res.CPUAvg), formatNum(res.CPUPeak)))
@@ -167,6 +214,28 @@ func writeClusterPosture(b *strings.Builder, res ResourceFacts, fleet FleetFacts
 func writeLogsPosture(b *strings.Builder, logs LogFacts) {
 	b.WriteString("\n**应用日志**\n")
 	b.WriteString("潜在错误（error / panic / fatal）\n")
+	writeSystemLogsLine(b, logs)
+}
+
+func writeMultiSystemLogsPosture(b *strings.Builder, systems []DeliverySystemSummary) {
+	b.WriteString("\n**应用日志**")
+	for i, sys := range systems {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		name := strings.TrimSpace(sys.Name)
+		if name == "" {
+			name = "未命名系统"
+		}
+		b.WriteString("\n\n**")
+		b.WriteString(name)
+		b.WriteString("**\n")
+		b.WriteString("潜在错误（error / panic / fatal）\n")
+		writeSystemLogsLine(b, sys.Logs)
+	}
+}
+
+func writeSystemLogsLine(b *strings.Builder, logs LogFacts) {
 	if !logs.Available {
 		b.WriteString("本周期日志指标暂无数据")
 		return
@@ -187,6 +256,28 @@ func writeLogsPosture(b *strings.Builder, logs LogFacts) {
 func writeAlertsPosture(b *strings.Builder, incidents []KeyIncident, actions ActionsSummary) {
 	b.WriteString("\n**告警与处理**\n")
 	b.WriteString("事件、处置与 agent 动作\n")
+	writeSystemAlertsLine(b, incidents, actions)
+}
+
+func writeMultiSystemAlertsPosture(b *strings.Builder, systems []DeliverySystemSummary) {
+	b.WriteString("\n**告警与处理**")
+	for i, sys := range systems {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		name := strings.TrimSpace(sys.Name)
+		if name == "" {
+			name = "未命名系统"
+		}
+		b.WriteString("\n\n**")
+		b.WriteString(name)
+		b.WriteString("**\n")
+		b.WriteString("事件、处置与 agent 动作\n")
+		writeSystemAlertsLine(b, sys.Incidents, sys.Actions)
+	}
+}
+
+func writeSystemAlertsLine(b *strings.Builder, incidents []KeyIncident, actions ActionsSummary) {
 	resolved := 0
 	for _, inc := range incidents {
 		if inc.Status == "resolved" {
@@ -235,6 +326,7 @@ func deliveryFor(rpt *model.Report, deepLink string) DeliverySummary {
 			s.Hero = c.Hero
 			im := deliveryIMFactsFromContent(*c)
 			s.Sections = im.sections
+			s.Systems = im.systems
 			s.Resource = im.resource
 			s.Fleet = im.fleet
 			s.Logs = im.logs
@@ -250,6 +342,7 @@ func deliveryFor(rpt *model.Report, deepLink string) DeliverySummary {
 
 type deliveryIMFacts struct {
 	sections  []string
+	systems   []DeliverySystemSummary
 	resource  ResourceFacts
 	fleet     FleetFacts
 	logs      LogFacts
@@ -259,7 +352,7 @@ type deliveryIMFacts struct {
 
 // deliveryIMFactsFromContent picks fleet-level stats for IM delivery.
 // Scoped reports store metrics under systems[]; legacy reports use top-level
-// fields. Multi-system reports aggregate logs/incidents/actions counts.
+// fields. Multi-system reports keep per-system blocks (no fleet rollup).
 func deliveryIMFactsFromContent(c Content) deliveryIMFacts {
 	out := deliveryIMFacts{
 		sections: EffectiveSections(Scope{Sections: c.Metadata.Sections}),
@@ -282,17 +375,14 @@ func deliveryIMFactsFromContent(c Content) deliveryIMFacts {
 		return out
 	}
 	for _, sys := range c.Systems {
-		out.fleet.Total += sys.Fleet.Total
-		out.fleet.Online += sys.Fleet.Online
-		if sys.Logs.Available {
-			out.logs.Available = true
-			out.logs.TotalErrors += sys.Logs.TotalErrors
-			out.logs.PrevTotalErrors += sys.Logs.PrevTotalErrors
-		}
-		out.incidents = append(out.incidents, sys.KeyIncidents...)
-		out.actions.MutatingTotal += sys.Actions.MutatingTotal
-		out.actions.MutatingApproved += sys.Actions.MutatingApproved
-		out.actions.SafeTotal += sys.Actions.SafeTotal
+		out.systems = append(out.systems, DeliverySystemSummary{
+			Name:      sys.SystemName,
+			Resource:  sys.Resource,
+			Fleet:     sys.Fleet,
+			Logs:      sys.Logs,
+			Incidents: sys.KeyIncidents,
+			Actions:   sys.Actions,
+		})
 	}
 	return out
 }
