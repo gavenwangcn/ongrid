@@ -60,6 +60,19 @@ func (d *recordingDeliverer) Deliver(_ context.Context, s DeliverySummary, ids [
 	return recs
 }
 
+func TestDeliverySummaryExcludesDeviceDetail(t *testing.T) {
+	s := DeliverySummary{
+		Title:    "周报",
+		Headline: "本周资源平稳",
+		Hero:     []HeroStat{{Key: "cpu_avg", Label: "CPU 均值", Value: 12, Unit: "%"}},
+		DeepLink: "https://h/r/tok",
+	}
+	md := s.MarkdownSummary()
+	if strings.Contains(md, "device_resources") || strings.Contains(md, "设备资源明细") {
+		t.Errorf("IM summary must not include per-device detail:\n%s", md)
+	}
+}
+
 func TestGenerator_DeliversReadyReportToChannels(t *testing.T) {
 	rpt := pendingReport()
 	sid := uint64(1)

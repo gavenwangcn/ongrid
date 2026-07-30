@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -116,10 +117,11 @@ func (c *FactsCollector) collectFlat(ctx context.Context, period, prev bizreport
 		facts.Changes = c.collectChanges(ctx, period)
 		prevIncidents = c.countIncidents(ctx, prev, scope)
 	}
-	if wantCluster {
-		facts.Fleet = c.collectFleet(ctx, scope)
-		facts.Resource = c.collectResource(ctx, period, scope)
-	}
+		if wantCluster {
+			facts.Fleet = c.collectFleet(ctx, scope)
+			facts.Resource = c.collectResource(ctx, period, scope)
+			facts.DeviceResources = c.collectDeviceResources(ctx, period, scope)
+		}
 	if wantLogs {
 		facts.Logs = c.collectLogs(ctx, period, prev, scope)
 	}
@@ -171,10 +173,11 @@ func (c *FactsCollector) collectPerSystem(
 			block.AlertCounts = c.collectAlertCounts(ctx, period, sysScope)
 			prevIncidents = c.countIncidents(ctx, prev, sysScope)
 		}
-		if wantCluster {
-			block.Fleet = c.collectFleet(ctx, sysScope)
-			block.Resource = c.collectResource(ctx, period, sysScope)
-		}
+			if wantCluster {
+				block.Fleet = c.collectFleet(ctx, sysScope)
+				block.Resource = c.collectResource(ctx, period, sysScope)
+				block.DeviceResources = c.collectDeviceResources(ctx, period, sysScope)
+			}
 		if wantLogs {
 			block.Logs = c.collectLogs(ctx, period, prev, sysScope)
 			block.Logs.SystemName = sysName
@@ -234,12 +237,16 @@ type resourceMetricExprs struct {
 	peakExpr string
 }
 
+const networkIfaceFilter = `device!~"lo|veth.*|docker.*"`
+
 func buildResourceExprs(durStr string, deviceIDs []uint64) map[string]resourceMetricExprs {
 	devSel := promDeviceIDSelector(deviceIDs)
 	devLabels := promDeviceIDLabels(deviceIDs)
 	cpu := `(100 * (1 - avg by (device_id) (rate(node_cpu_seconds_total{mode="idle"` + devSel + `}[5m]))))`
 	mem := `(100 * (1 - (sum by (device_id) (node_memory_MemAvailable_bytes{` + devLabels + `}) / sum by (device_id) (node_memory_MemTotal_bytes{` + devLabels + `}))))`
 	disk := `(100 - 100 * (sum by (device_id) (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"` + devSel + `}) / sum by (device_id) (node_filesystem_size_bytes{fstype!~"tmpfs|overlay"` + devSel + `})))`
+	netRx := `(sum by (device_id) (rate(node_network_receive_bytes_total{` + networkIfaceFilter + devSel + `}[5m])))`
+	netTx := `(sum by (device_id) (rate(node_network_transmit_bytes_total{` + networkIfaceFilter + devSel + `}[5m])))`
 	mk := func(inner string) resourceMetricExprs {
 		return resourceMetricExprs{
 			inner:    inner,
@@ -248,9 +255,11 @@ func buildResourceExprs(durStr string, deviceIDs []uint64) map[string]resourceMe
 		}
 	}
 	return map[string]resourceMetricExprs{
-		"cpu":  mk(cpu),
-		"mem":  mk(mem),
-		"disk": mk(disk),
+		"cpu":    mk(cpu),
+		"mem":    mk(mem),
+		"disk":   mk(disk),
+		"net_rx": mk(netRx),
+		"net_tx": mk(netTx),
 	}
 }
 
@@ -332,6 +341,20 @@ func (c *FactsCollector) collectResource(ctx context.Context, p bizreport.Period
 			if pok {
 				r.DiskPeak = pk
 			}
+		case "net_rx":
+			if aok {
+				r.NetRxAvgBps = a
+			}
+			if pok {
+				r.NetRxPeakBps = pk
+			}
+		case "net_tx":
+			if aok {
+				r.NetTxAvgBps = a
+			}
+			if pok {
+				r.NetTxPeakBps = pk
+			}
 		}
 		c.log.Info("report resource metric",
 			slog.String("metric", key),
@@ -350,6 +373,210 @@ func (c *FactsCollector) collectResource(ctx context.Context, p bizreport.Period
 		slog.Duration("duration", time.Since(start)),
 	)
 	return r
+}
+
+type deviceResourceRow struct {
+	ID             uint64
+	Name           string
+	Online         bool
+	CPUCount       int
+	MemTotalBytes  uint64
+	DiskTotalBytes uint64
+}
+
+func (c *FactsCollector) listScopedDevices(ctx context.Context, scope bizreport.Scope) []deviceResourceRow {
+	if scopedEmpty(scope) {
+		return nil
+	}
+	var rows []deviceResourceRow
+	q := c.db.WithContext(ctx).Table("devices").
+		Select("id, name, online, cpu_count, mem_total_bytes, disk_total_bytes").
+		Where("deleted_at IS NULL")
+	if ids := scopedDeviceIDs(scope); len(ids) > 0 {
+		q = q.Where("id IN ?", ids)
+	}
+	if err := q.Order("name ASC, id ASC").Find(&rows).Error; err != nil {
+		return nil
+	}
+	for i := range rows {
+		if strings.TrimSpace(rows[i].Name) == "" {
+			rows[i].Name = fmt.Sprintf("device-%d", rows[i].ID)
+		} else {
+			rows[i].Name = strings.TrimSpace(rows[i].Name)
+		}
+	}
+	return rows
+}
+
+func (c *FactsCollector) collectDeviceResources(ctx context.Context, p bizreport.Period, scope bizreport.Scope) bizreport.DeviceResourceFacts {
+	var out bizreport.DeviceResourceFacts
+	rows := c.listScopedDevices(ctx, scope)
+	if len(rows) == 0 || c.prom == nil {
+		return out
+	}
+
+	deviceIDs := make([]uint64, len(rows))
+	byID := make(map[uint64]*bizreport.DeviceResourceStat, len(rows))
+	out.Devices = make([]bizreport.DeviceResourceStat, 0, len(rows))
+	for i, row := range rows {
+		deviceIDs[i] = row.ID
+		stat := bizreport.DeviceResourceStat{
+			DeviceID:       row.ID,
+			Name:           row.Name,
+			Online:         row.Online,
+			CPUCount:       row.CPUCount,
+			MemTotalBytes:  row.MemTotalBytes,
+			DiskTotalBytes: row.DiskTotalBytes,
+		}
+		out.Devices = append(out.Devices, stat)
+		byID[row.ID] = &out.Devices[i]
+	}
+
+	dur := p.End.Sub(p.Start)
+	if dur <= 0 || dur > 30*24*time.Hour {
+		dur = 7 * 24 * time.Hour
+	}
+	durStr := strconv.FormatInt(int64(dur.Hours()), 10) + "h"
+	exprs := buildResourceExprs(durStr, deviceIDs)
+
+	applyPerDevice := func(key string, apply func(stat *bizreport.DeviceResourceStat, avg, peak float64)) {
+		e := exprs[key]
+		avgExpr := "avg_over_time(" + e.inner + "[" + durStr + ":5m])"
+		peakExpr := "max_over_time(" + e.inner + "[" + durStr + ":5m])"
+		avgByDev, avgOK := c.vectorInstantPerDevice(ctx, key, "avg_per_device", avgExpr, p.End)
+		peakByDev, peakOK := c.vectorInstantPerDevice(ctx, key, "peak_per_device", peakExpr, p.End)
+		if !avgOK && !peakOK {
+			rangeAvg, rangePeak, rangeOK := c.perDeviceAvgPeakFromRange(ctx, key, e.inner, p.Start, p.End)
+			if rangeOK {
+				avgByDev, peakByDev, avgOK, peakOK = rangeAvg, rangePeak, true, true
+			}
+		}
+		if !avgOK && !peakOK {
+			return
+		}
+		out.Available = true
+		for id, stat := range byID {
+			var a, pk float64
+			var hasAvg, hasPeak bool
+			if avgOK {
+				if v, ok := avgByDev[id]; ok {
+					a, hasAvg = v, true
+				}
+			}
+			if peakOK {
+				if v, ok := peakByDev[id]; ok {
+					pk, hasPeak = v, true
+				}
+			}
+			if hasAvg || hasPeak {
+				apply(stat, a, pk)
+			}
+		}
+	}
+
+	applyPerDevice("cpu", func(s *bizreport.DeviceResourceStat, avg, peak float64) {
+		s.CPUAvg, s.CPUPeak = avg, peak
+	})
+	applyPerDevice("mem", func(s *bizreport.DeviceResourceStat, avg, peak float64) {
+		s.MemAvg, s.MemPeak = avg, peak
+	})
+	applyPerDevice("disk", func(s *bizreport.DeviceResourceStat, avg, peak float64) {
+		s.DiskAvg, s.DiskPeak = avg, peak
+	})
+	applyPerDevice("net_rx", func(s *bizreport.DeviceResourceStat, avg, peak float64) {
+		s.NetRxAvgBps, s.NetRxPeakBps = avg, peak
+	})
+	applyPerDevice("net_tx", func(s *bizreport.DeviceResourceStat, avg, peak float64) {
+		s.NetTxAvgBps, s.NetTxPeakBps = avg, peak
+	})
+
+	return out
+}
+
+// vectorInstantPerDevice runs an instant query expected to return a
+// vector with device_id labels (one series per host).
+func (c *FactsCollector) vectorInstantPerDevice(ctx context.Context, metric, kind, expr string, ts time.Time) (map[uint64]float64, bool) {
+	res, err := c.prom.Query(ctx, expr, ts)
+	if err != nil || res == nil || res.ResultType != "vector" {
+		return nil, false
+	}
+	var vec []struct {
+		Metric map[string]string   `json:"metric"`
+		Value  []json.RawMessage   `json:"value"`
+	}
+	if err := json.Unmarshal(res.Result, &vec); err != nil || len(vec) == 0 {
+		return nil, false
+	}
+	out := make(map[uint64]float64, len(vec))
+	for _, s := range vec {
+		rawID := strings.TrimSpace(s.Metric["device_id"])
+		if rawID == "" {
+			continue
+		}
+		id, err := strconv.ParseUint(rawID, 10, 64)
+		if err != nil || len(s.Value) != 2 {
+			continue
+		}
+		if f, ok := parseQuotedFloat(s.Value[1]); ok {
+			out[id] = f
+		}
+	}
+	if len(out) == 0 {
+		return nil, false
+	}
+	return out, true
+}
+
+// perDeviceAvgPeakFromRange computes avg/peak per device_id series from
+// a range query on an inner per-device expression.
+func (c *FactsCollector) perDeviceAvgPeakFromRange(ctx context.Context, metric, innerExpr string, start, end time.Time) (avgByDev, peakByDev map[uint64]float64, ok bool) {
+	step := 5 * time.Minute
+	res, err := c.prom.QueryRange(ctx, innerExpr, start, end, step)
+	if err != nil || res == nil || res.ResultType != "matrix" {
+		return nil, nil, false
+	}
+	var series []struct {
+		Metric map[string]string   `json:"metric"`
+		Values [][]json.RawMessage `json:"values"`
+	}
+	if err := json.Unmarshal(res.Result, &series); err != nil || len(series) == 0 {
+		return nil, nil, false
+	}
+	avgByDev = make(map[uint64]float64)
+	peakByDev = make(map[uint64]float64)
+	for _, s := range series {
+		rawID := strings.TrimSpace(s.Metric["device_id"])
+		if rawID == "" {
+			continue
+		}
+		id, err := strconv.ParseUint(rawID, 10, 64)
+		if err != nil {
+			continue
+		}
+		var sum float64
+		var count int
+		var maxV float64
+		for _, v := range s.Values {
+			f, parsed := decodePromSampleValue(v)
+			if !parsed {
+				continue
+			}
+			sum += f
+			count++
+			if count == 1 || f > maxV {
+				maxV = f
+			}
+		}
+		if count == 0 {
+			continue
+		}
+		avgByDev[id] = sum / float64(count)
+		peakByDev[id] = maxV
+	}
+	if len(avgByDev) == 0 {
+		return nil, nil, false
+	}
+	return avgByDev, peakByDev, true
 }
 
 // fleetAvgPeakFromRange mirrors avg(avg_over_time(...)) / max(max_over_time(...))
@@ -744,10 +971,12 @@ func (c *FactsCollector) buildHero(p, prev bizreport.Period, scope bizreport.Sco
 		{Key: "devices", Label: "监控设备", Value: float64(fleet.Total)},
 	}
 	if res.Available {
+		netPeakMBps := (res.NetRxPeakBps + res.NetTxPeakBps) / (1024 * 1024)
 		hero = append(hero,
 			bizreport.HeroStat{Key: "cpu_avg", Label: "CPU 均值", Value: round1(res.CPUAvg), Unit: "%"},
 			bizreport.HeroStat{Key: "mem_avg", Label: "内存 均值", Value: round1(res.MemAvg), Unit: "%"},
 			bizreport.HeroStat{Key: "disk_peak", Label: "磁盘 峰值", Value: round1(res.DiskPeak), Unit: "%"},
+			bizreport.HeroStat{Key: "net_peak", Label: "网络 峰值", Value: round1(netPeakMBps), Unit: "MB/s"},
 		)
 	} else if logs.Available {
 		hero = append(hero,

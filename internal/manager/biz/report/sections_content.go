@@ -11,6 +11,8 @@ func TrimContentForSections(c *Content, sections []string) {
 		if !SectionEnabled(sections, SectionCluster) {
 			b.Resource = ResourceFacts{}
 			b.Fleet = FleetFacts{}
+			b.DeviceResources = DeviceResourceFacts{}
+			b.NetworkDevices = NetworkDeviceFacts{}
 		}
 		if !SectionEnabled(sections, SectionLogs) {
 			b.Logs = LogFacts{}
@@ -26,6 +28,8 @@ func TrimContentForSections(c *Content, sections []string) {
 	if !SectionEnabled(sections, SectionCluster) {
 		c.Resource = ResourceFacts{}
 		c.Fleet = FleetFacts{}
+		c.DeviceResources = DeviceResourceFacts{}
+		c.NetworkDevices = NetworkDeviceFacts{}
 	}
 	if !SectionEnabled(sections, SectionLogs) {
 		c.Logs = LogFacts{}

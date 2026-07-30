@@ -37,7 +37,7 @@ func newFactsDB(t *testing.T) *gorm.DB {
 			id INTEGER PRIMARY KEY, occurred_at DATETIME, status TEXT,
 			action TEXT, resource_type TEXT, resource_name TEXT, user_email TEXT)`,
 		// Fleet now reads the devices table (online + roles bit field).
-		`CREATE TABLE devices (id INTEGER PRIMARY KEY, online BOOLEAN, roles INTEGER, system_name TEXT, environment_tag TEXT, deleted_at DATETIME)`,
+		`CREATE TABLE devices (id INTEGER PRIMARY KEY, online BOOLEAN, roles INTEGER, system_name TEXT, environment_tag TEXT, name TEXT, cpu_count INTEGER, mem_total_bytes INTEGER, disk_total_bytes INTEGER, deleted_at DATETIME)`,
 	}
 	for _, s := range stmts {
 		if err := db.Exec(s).Error; err != nil {
@@ -91,7 +91,7 @@ func TestFactsCollector_Collect(t *testing.T) {
 		(4,'2026-06-04T00:00:00Z','failure','rule_delete','alert_rule','旧规则','ops@x')`)
 
 	// devices: 2 online (server, server+database) + 1 offline (storage).
-	db.Exec(`INSERT INTO devices VALUES (1,1,1,NULL,NULL,NULL),(2,1,9,NULL,NULL,NULL),(3,0,2,NULL,NULL,NULL)`)
+	db.Exec(`INSERT INTO devices VALUES (1,1,1,NULL,NULL,'',NULL),(2,1,9,NULL,NULL,'',NULL),(3,0,2,NULL,NULL,'',NULL)`)
 
 	// prom=nil → Resource.Available=false → hero falls back to
 	// devices/incidents/actions/online.
@@ -165,7 +165,7 @@ func TestFactsCollector_SystemScopeFilter(t *testing.T) {
 		Start: mustParse(t, "2026-06-01T00:00:00Z"),
 		End:   mustParse(t, "2026-06-08T00:00:00Z"),
 	}
-	db.Exec(`INSERT INTO devices VALUES (7, true, 1, 'prod-a', 'prod', NULL), (9, false, 2, 'prod-b', 'test', NULL)`)
+	db.Exec(`INSERT INTO devices VALUES (7, true, 1, 'prod-a', 'prod', '', NULL), (9, false, 2, 'prod-b', 'test', '', NULL)`)
 	db.Exec(`INSERT INTO alert_incidents VALUES
 		(1,'A','warning','resolved',7,'2026-06-02T10:00:00Z','2026-06-02T10:30:00Z',NULL),
 		(2,'B','warning','resolved',9,'2026-06-03T10:00:00Z','2026-06-03T10:30:00Z',NULL)`)
@@ -191,9 +191,9 @@ func TestFactsCollector_SystemEnvironmentScopeFilter(t *testing.T) {
 		End:   mustParse(t, "2026-06-08T00:00:00Z"),
 	}
 	db.Exec(`INSERT INTO devices VALUES
-		(7, true, 1, 'prod-a', 'prod', NULL),
-		(8, true, 1, 'prod-a', 'test', NULL),
-		(9, false, 2, 'prod-b', 'prod', NULL)`)
+		(7, true, 1, 'prod-a', 'prod', '', NULL),
+		(8, true, 1, 'prod-a', 'test', '', NULL),
+		(9, false, 2, 'prod-b', 'prod', '', NULL)`)
 	db.Exec(`INSERT INTO alert_incidents VALUES
 		(1,'A','warning','resolved',7,'2026-06-02T10:00:00Z','2026-06-02T10:30:00Z',NULL),
 		(2,'B','warning','resolved',8,'2026-06-03T10:00:00Z','2026-06-03T10:30:00Z',NULL),
@@ -299,7 +299,7 @@ func (f *fakeReportProm) QueryRange(ctx context.Context, expr string, start, end
 func TestFactsCollector_ResourceQueryRangeFallback(t *testing.T) {
 	db := newFactsDB(t)
 	ctx := context.Background()
-	db.Exec(`INSERT INTO devices VALUES (1,1,1,'人力资源-EHR系统',NULL,NULL)`)
+	db.Exec(`INSERT INTO devices VALUES (1,1,1,'人力资源-EHR系统',NULL,'',NULL)`)
 
 	period := bizreport.Period{
 		Start: mustParse(t, "2026-06-08T00:00:00Z"),

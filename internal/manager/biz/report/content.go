@@ -36,7 +36,9 @@ type Content struct {
 	// Legacy fields — no longer collected or rendered in new reports.
 	Assets       AssetFacts     `json:"assets,omitempty"`
 	Usage        UsageFacts     `json:"usage,omitempty"`
-	Logs         LogFacts       `json:"logs"`
+	Logs            LogFacts            `json:"logs"`
+	DeviceResources DeviceResourceFacts `json:"device_resources,omitempty"`
+	NetworkDevices  NetworkDeviceFacts  `json:"network_devices,omitempty"` // legacy reports
 	Advice       []Advice       `json:"advice"`
 	Metadata     ContentMeta    `json:"metadata"`
 	// Systems holds per-business-system report sections. When present,
@@ -51,7 +53,9 @@ type SystemContentBlock struct {
 	Narrative    Narrative      `json:"narrative"`
 	Resource     ResourceFacts  `json:"resource"`
 	Fleet        FleetFacts     `json:"fleet"`
-	Logs         LogFacts       `json:"logs"`
+	Logs            LogFacts            `json:"logs"`
+	DeviceResources DeviceResourceFacts `json:"device_resources,omitempty"`
+	NetworkDevices  NetworkDeviceFacts  `json:"network_devices,omitempty"` // legacy
 	KeyIncidents []KeyIncident  `json:"key_incidents,omitempty"`
 	Actions      ActionsSummary `json:"actions_summary,omitempty"`
 	Advice       []Advice       `json:"advice,omitempty"`
@@ -770,6 +774,7 @@ func heroKeyFromLabel(label string, index int) string {
 		"CPU 均值":  "cpu_avg",
 		"内存 均值":   "mem_avg",
 		"磁盘 峰值":   "disk_peak",
+		"网络 峰值":   "net_peak",
 		"潜在错误":    "log_errors",
 		"Incidents": "incidents",
 		"Agent 动作":  "actions",
@@ -969,7 +974,16 @@ func (c *Content) RenderMarkdown(title, locale string) string {
 		avg, peak := mtr("均", "avg"), mtr("峰", "peak")
 		b.WriteString(fmt.Sprintf("- CPU: %s %.1f%% · %s %.1f%%\n", avg, c.Resource.CPUAvg, peak, c.Resource.CPUPeak))
 		b.WriteString(fmt.Sprintf("- %s: %s %.1f%% · %s %.1f%%\n", mtr("内存", "Memory"), avg, c.Resource.MemAvg, peak, c.Resource.MemPeak))
-		b.WriteString(fmt.Sprintf("- %s: %s %.1f%% · %s %.1f%%\n\n", mtr("磁盘", "Disk"), avg, c.Resource.DiskAvg, peak, c.Resource.DiskPeak))
+		b.WriteString(fmt.Sprintf("- %s: %s %.1f%% · %s %.1f%%\n", mtr("磁盘", "Disk"), avg, c.Resource.DiskAvg, peak, c.Resource.DiskPeak))
+		if c.Resource.NetRxPeakBps > 0 || c.Resource.NetTxPeakBps > 0 || c.Resource.NetRxAvgBps > 0 || c.Resource.NetTxAvgBps > 0 {
+			b.WriteString(fmt.Sprintf("- %s: %s %s · %s %s · %s %s · %s %s\n",
+				mtr("网络", "Network"),
+				mtr("入均", "rx avg"), formatBytesPerSec(c.Resource.NetRxAvgBps),
+				mtr("入峰", "rx peak"), formatBytesPerSec(c.Resource.NetRxPeakBps),
+				mtr("出均", "tx avg"), formatBytesPerSec(c.Resource.NetTxAvgBps),
+				mtr("出峰", "tx peak"), formatBytesPerSec(c.Resource.NetTxPeakBps)))
+		}
+		b.WriteString("\n")
 	}
 
 	b.WriteString("## " + mtr("监控覆盖", "Monitoring coverage") + "\n\n")
@@ -984,6 +998,8 @@ func (c *Content) RenderMarkdown(title, locale string) string {
 		b.WriteString("- " + mtr("角色", "Roles") + ": " + strings.Join(roles, " · ") + "\n")
 	}
 	b.WriteString("\n")
+
+	renderDeviceResourcesMarkdown(&b, c.DeviceResources, mtr)
 
 	if c.Logs.Available {
 		b.WriteString("## " + mtr("应用日志（潜在错误）", "Application logs (potential errors)") + "\n\n")
@@ -1081,6 +1097,42 @@ func formatNum(v float64) string {
 		return fmt.Sprintf("%d", int64(v))
 	}
 	return fmt.Sprintf("%.1f", v)
+}
+
+// formatBytesSize renders byte counts (memory/disk capacity).
+func formatBytesSize(v float64) string {
+	if v <= 0 || v != v {
+		return "0 B"
+	}
+	units := []string{"B", "KB", "MB", "GB", "TB", "PB"}
+	n := v
+	i := 0
+	for n >= 1024 && i < len(units)-1 {
+		n /= 1024
+		i++
+	}
+	if n < 10 {
+		return fmt.Sprintf("%.2f %s", n, units[i])
+	}
+	return fmt.Sprintf("%.1f %s", n, units[i])
+}
+
+// formatBytesPerSec renders a bytes/s gauge for markdown export.
+func formatBytesPerSec(v float64) string {
+	if v <= 0 || v != v {
+		return "0 B/s"
+	}
+	units := []string{"B/s", "KB/s", "MB/s", "GB/s"}
+	n := v
+	i := 0
+	for n >= 1024 && i < len(units)-1 {
+		n /= 1024
+		i++
+	}
+	if n < 10 {
+		return fmt.Sprintf("%.2f %s", n, units[i])
+	}
+	return fmt.Sprintf("%.1f %s", n, units[i])
 }
 
 // flattenEntities rewrites `{{entity:kind:id|name}}` → `name` for the

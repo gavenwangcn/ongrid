@@ -316,6 +316,7 @@ func (g *workerGenerator) generate(ctx context.Context, rpt *model.Report) error
 		content.Actions = facts.Actions
 		content.Changes = facts.Changes
 		content.Logs = facts.Logs
+		content.DeviceResources = facts.DeviceResources
 		content.KeyIncidents = mergeIncidents(facts.Incidents, content.KeyIncidents)
 	}
 	TrimContentForSections(content, sections)
@@ -461,6 +462,9 @@ func (g *workerGenerator) buildPrompt(rpt *model.Report, facts *ReportFacts) str
 	if d := sectionDirective(EffectiveSections(ParseScope(rpt.ScopeJSON)), en); d != "" {
 		b.WriteString(d)
 	}
+	if d := clusterResourceDirective(EffectiveSections(ParseScope(rpt.ScopeJSON)), en); d != "" {
+		b.WriteString(d)
+	}
 	if d := systemDimensionDirective(facts, en); d != "" {
 		b.WriteString(d)
 	}
@@ -513,6 +517,7 @@ func mergeSystemFactsIntoContent(content *Content, facts *ReportFacts) {
 		blk.Resource = sf.Resource
 		blk.Fleet = sf.Fleet
 		blk.Logs = sf.Logs
+		blk.DeviceResources = sf.DeviceResources
 		blk.KeyIncidents = mergeIncidents(sf.Incidents, blk.KeyIncidents)
 		merged = append(merged, blk)
 	}

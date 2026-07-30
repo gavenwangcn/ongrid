@@ -269,6 +269,49 @@ export type ResourceFacts = {
   mem_peak: number;
   disk_avg: number;
   disk_peak: number;
+  net_rx_avg_bps?: number;
+  net_rx_peak_bps?: number;
+  net_tx_avg_bps?: number;
+  net_tx_peak_bps?: number;
+};
+
+export type NetworkDeviceStat = {
+  device_id: number;
+  name?: string;
+  online: boolean;
+  net_rx_avg_bps?: number;
+  net_rx_peak_bps?: number;
+  net_tx_avg_bps?: number;
+  net_tx_peak_bps?: number;
+};
+
+export type NetworkDeviceFacts = {
+  available: boolean;
+  devices?: NetworkDeviceStat[];
+};
+
+export type DeviceResourceStat = {
+  device_id: number;
+  name?: string;
+  online: boolean;
+  cpu_count?: number;
+  mem_total_bytes?: number;
+  disk_total_bytes?: number;
+  cpu_avg?: number;
+  cpu_peak?: number;
+  mem_avg?: number;
+  mem_peak?: number;
+  disk_avg?: number;
+  disk_peak?: number;
+  net_rx_avg_bps?: number;
+  net_rx_peak_bps?: number;
+  net_tx_avg_bps?: number;
+  net_tx_peak_bps?: number;
+};
+
+export type DeviceResourceFacts = {
+  available: boolean;
+  devices?: DeviceResourceStat[];
 };
 
 export type FleetFacts = {
@@ -333,6 +376,8 @@ export type ReportContent = {
   /** @deprecated no longer collected or displayed in new reports */
   usage?: UsageFacts;
   logs: LogFacts;
+  device_resources?: DeviceResourceFacts;
+  network_devices?: NetworkDeviceFacts;
   advice?: Advice[];
   systems?: SystemContentBlock[];
   metadata?: {
@@ -349,6 +394,8 @@ export type SystemContentBlock = {
   resource: ResourceFacts;
   fleet: FleetFacts;
   logs: LogFacts;
+  device_resources?: DeviceResourceFacts;
+  network_devices?: NetworkDeviceFacts;
   key_incidents?: KeyIncident[];
   actions_summary?: ActionsSummary;
   advice?: Advice[];

@@ -1,12 +1,14 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { cn } from '@/lib/cn';
+import { formatBytes } from '@/lib/format';
 import { useI18n } from '@/i18n/locale';
 import type {
   ChangeFact,
   HeroStat,
   KeyIncident,
   LogErrorSource,
+  DeviceResourceStat,
   Paragraph,
   ReportContent as ReportContentT,
   ReportSection,
@@ -42,6 +44,22 @@ function useCountUp(target: number, durationMs = 800): number {
 
 function fmtNum(v: number): string {
   return Number.isInteger(v) ? String(v) : v.toFixed(1);
+}
+
+function formatBytesPerSec(v: number): string {
+  if (!Number.isFinite(v) || v <= 0) return '0 B/s';
+  const units = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
+  let n = v;
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) {
+    n /= 1024;
+    i++;
+  }
+  return `${n.toFixed(n < 10 ? 2 : 1)} ${units[i]}`;
+}
+
+function netPeakMBps(res: ResourceFacts): number {
+  return ((res.net_rx_peak_bps ?? 0) + (res.net_tx_peak_bps ?? 0)) / (1024 * 1024);
 }
 
 function Sparkline({ points, className }: { points: number[]; className?: string }) {
@@ -256,6 +274,78 @@ function LogSourcesGrouped({ sources, tr }: { sources: LogErrorSource[]; tr: (zh
   );
 }
 
+function DeviceResourcesTable({
+  devices,
+  tr,
+}: {
+  devices: DeviceResourceStat[];
+  tr: (zh: string, en: string) => string;
+}) {
+  return (
+    <div className="mt-3 overflow-x-auto rounded-lg border border-zinc-800 bg-zinc-900/30">
+      <table className="min-w-full text-left text-xs">
+        <thead>
+          <tr className="border-b border-zinc-800 text-zinc-500">
+            <th className="px-3 py-2 font-medium">{tr('设备', 'Device')}</th>
+            <th className="px-3 py-2 font-medium">{tr('状态', 'Status')}</th>
+            <th className="px-3 py-2 font-medium">CPU</th>
+            <th className="px-3 py-2 font-medium">{tr('内存', 'Memory')}</th>
+            <th className="px-3 py-2 font-medium">{tr('磁盘', 'Disk')}</th>
+            <th className="px-3 py-2 font-medium">{tr('网络入', 'Net rx')}</th>
+            <th className="px-3 py-2 font-medium">{tr('网络出', 'Net tx')}</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-zinc-800/80 text-zinc-300">
+          {devices.map((d) => (
+            <tr key={d.device_id} className="hover:bg-zinc-900/50">
+              <td className="whitespace-nowrap px-3 py-2">
+                <Link to={`/devices/${d.device_id}`} className="font-medium text-indigo-300 hover:text-indigo-200">
+                  {d.name || `#${d.device_id}`}
+                </Link>
+              </td>
+              <td className="whitespace-nowrap px-3 py-2">
+                <span className="inline-flex items-center gap-1.5 text-zinc-400">
+                  <span className={cn('h-1.5 w-1.5 rounded-full', d.online ? 'bg-emerald-500' : 'bg-zinc-600')} />
+                  {d.online ? tr('在线', 'Online') : tr('离线', 'Offline')}
+                </span>
+              </td>
+              <td className="whitespace-nowrap px-3 py-2 tabular-nums">{cpuUtilCell(d, tr)}</td>
+              <td className="whitespace-nowrap px-3 py-2 tabular-nums">{memDiskUtilCell(d.mem_total_bytes, d.mem_avg, d.mem_peak)}</td>
+              <td className="whitespace-nowrap px-3 py-2 tabular-nums">{memDiskUtilCell(d.disk_total_bytes, d.disk_avg, d.disk_peak)}</td>
+              <td className="whitespace-nowrap px-3 py-2 tabular-nums">{netCell(d.net_rx_avg_bps, d.net_rx_peak_bps)}</td>
+              <td className="whitespace-nowrap px-3 py-2 tabular-nums">{netCell(d.net_tx_avg_bps, d.net_tx_peak_bps)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function cpuUtilCell(d: DeviceResourceStat, tr: (zh: string, en: string) => string): string {
+  const cores = d.cpu_count && d.cpu_count > 0 ? `${d.cpu_count}${tr('核', 'C')}` : '';
+  const util = pctCell(d.cpu_avg, d.cpu_peak);
+  if (util === '—') return cores || '—';
+  return cores ? `${cores} · ${util}` : util;
+}
+
+function memDiskUtilCell(totalBytes: number | undefined, avg?: number, peak?: number): string {
+  const cap = totalBytes && totalBytes > 0 ? formatBytes(totalBytes) : '';
+  const util = pctCell(avg, peak);
+  if (util === '—') return cap || '—';
+  return cap ? `${cap} · ${util}` : util;
+}
+
+function pctCell(avg?: number, peak?: number): string {
+  if ((avg ?? 0) <= 0 && (peak ?? 0) <= 0) return '—';
+  return `${(avg ?? 0).toFixed(1)}% / ${(peak ?? 0).toFixed(1)}%`;
+}
+
+function netCell(avg?: number, peak?: number): string {
+  if ((avg ?? 0) <= 0 && (peak ?? 0) <= 0) return '—';
+  return `${formatBytesPerSec(avg ?? 0)} / ${formatBytesPerSec(peak ?? 0)}`;
+}
+
 export function ReportContentView({
   content,
   sections: sectionsProp,
@@ -306,6 +396,7 @@ export function ReportContentView({
         resource: content.resource,
         fleet: content.fleet,
         logs: content.logs,
+        device_resources: content.device_resources,
         key_incidents: content.key_incidents,
         actions_summary: content.actions_summary,
         advice: content.advice,
@@ -339,6 +430,7 @@ function ReportSystemBody({
   const fleet = sys.fleet ?? { total: 0, online: 0 };
   const a = sys.actions_summary ?? { mutating_total: 0, mutating_approved: 0, safe_total: 0 };
   const logs = sys.logs ?? { available: false, total_errors: 0 };
+  const deviceResources = sys.device_resources?.devices ?? sys.network_devices?.devices;
   const onlinePct = fleet.total > 0 ? Math.round((fleet.online / fleet.total) * 100) : 0;
   const resolved = incidents.filter((i) => i.status === 'resolved').length;
   const mttr = (() => {
@@ -351,25 +443,41 @@ function ReportSystemBody({
     <div className="space-y-7">
       {/* ROW 1 — 集群态势 */}
       {showCluster && (
-      <Row tone="indigo" title={tr('集群态势', 'Cluster posture')} desc={tr('资源水位与监控覆盖', 'resource & coverage')}>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <Row tone="indigo" title={tr('集群态势', 'Cluster posture')} desc={tr('CPU/内存/磁盘/网络与监控覆盖', 'CPU/memory/disk/network & coverage')}>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
           {res?.available ? (
             <>
               <StatCard tone="indigo" label="CPU" value={round1(res.cpu_avg)} unit={tr('% 均', '% avg')} sub={tr(`峰 ${res.cpu_peak.toFixed(1)}%`, `peak ${res.cpu_peak.toFixed(1)}%`)} bar={res.cpu_peak} />
               <StatCard tone="indigo" label={tr('内存', 'Memory')} value={round1(res.mem_avg)} unit={tr('% 均', '% avg')} sub={tr(`峰 ${res.mem_peak.toFixed(1)}%`, `peak ${res.mem_peak.toFixed(1)}%`)} bar={res.mem_peak} />
               <StatCard tone="indigo" label={tr('磁盘', 'Disk')} value={round1(res.disk_avg)} unit={tr('% 均', '% avg')} sub={tr(`峰 ${res.disk_peak.toFixed(1)}%`, `peak ${res.disk_peak.toFixed(1)}%`)} bar={res.disk_peak} />
+              <StatCard
+                tone="cyan"
+                label={tr('网络', 'Network')}
+                value={round1(netPeakMBps(res))}
+                unit="MB/s"
+                sub={tr(
+                  `入 ${formatBytesPerSec(res.net_rx_avg_bps ?? 0)} · 出 ${formatBytesPerSec(res.net_tx_avg_bps ?? 0)}`,
+                  `rx ${formatBytesPerSec(res.net_rx_avg_bps ?? 0)} · tx ${formatBytesPerSec(res.net_tx_avg_bps ?? 0)}`,
+                )}
+              />
               <StatCard tone="indigo" label={tr('在线设备', 'Online')} value={fleet.online} sub={tr(`共 ${fleet.total} 台 · ${onlinePct}%`, `of ${fleet.total} · ${onlinePct}%`)} />
             </>
           ) : (
             <>
               <StatCard tone="indigo" label={tr('监控设备', 'Devices')} value={fleet.total} />
               <StatCard tone="indigo" label={tr('在线', 'Online')} value={fleet.online} sub={`${onlinePct}%`} />
-              <div className="col-span-2 flex items-center rounded-lg border border-dashed border-zinc-800 px-3 text-xs text-zinc-600">
+              <div className="col-span-2 flex items-center rounded-lg border border-dashed border-zinc-800 px-3 text-xs text-zinc-600 sm:col-span-3 lg:col-span-3">
                 {tr('本周期资源指标暂无数据（监控刚接入或超出保留期）', 'No resource metrics for this period (recently onboarded or past retention)')}
               </div>
             </>
           )}
         </div>
+        {deviceResources && deviceResources.length > 0 && (
+          <div className="mt-1">
+            <div className="mb-2 text-[11px] text-zinc-500">{tr('设备资源明细（周期 均 / 峰）', 'Per-device resources (period avg / peak)')}</div>
+            <DeviceResourcesTable devices={deviceResources as DeviceResourceStat[]} tr={tr} />
+          </div>
+        )}
       </Row>
       )}
 

@@ -74,7 +74,8 @@ func encodeChannelIDsJSON(ids []uint64) string {
 
 // MarkdownSummary renders the channel-agnostic markdown body senders
 // use. Hero numbers as a compact line, headline, then the deep link.
-// Channels that don't render markdown still show readable plain text.
+// IM channels (Feishu etc.) receive this summary only — per-device
+// resource detail stays in the in-app report, not in the push body.
 func (s DeliverySummary) MarkdownSummary() string {
 	var b strings.Builder
 	b.WriteString("**" + s.Title + "**\n")

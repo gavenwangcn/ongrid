@@ -24,7 +24,8 @@ type ReportFacts struct {
 
 	// Resource is the fleet-aggregate resource trend over the period
 	// (avg + peak), from Prometheus. Aggregated across devices — not
-	// per-device (per-device reads as noise; review decision).
+	// per-device (per-device reads as noise; review decision). Covers
+	// CPU / memory / disk utilization and network rx/tx throughput.
 	Resource ResourceFacts `json:"resource"`
 
 	// Fleet is the monitoring-coverage snapshot: how many devices, how
@@ -51,6 +52,15 @@ type ReportFacts struct {
 	// same devices as the report (system_name / edge_ids).
 	Logs LogFacts `json:"logs"`
 
+	// DeviceResources holds per-host CPU / memory / disk / network
+	// utilization for the report scope. In-app only — IM delivery stays
+	// fleet-summary (hero + headline).
+	DeviceResources DeviceResourceFacts `json:"device_resources,omitempty"`
+
+	// NetworkDevices is deprecated; kept for older reports. New reports
+	// use device_resources.
+	NetworkDevices NetworkDeviceFacts `json:"network_devices,omitempty"`
+
 	// Systems holds per-business-system facts when the report is scoped
 	// to one or more systems (or all systems discovered from devices).
 	// When populated, top-level Resource/Fleet/Logs are empty — render
@@ -67,7 +77,9 @@ type SystemFactsBlock struct {
 	Incidents   []IncidentFact `json:"incidents,omitempty"`
 	Actions     ActionsSummary `json:"actions,omitempty"`
 	AlertCounts map[string]int `json:"alert_counts,omitempty"`
-	Logs        LogFacts       `json:"logs"`
+	Logs            LogFacts            `json:"logs"`
+	DeviceResources DeviceResourceFacts `json:"device_resources,omitempty"`
+	NetworkDevices  NetworkDeviceFacts  `json:"network_devices,omitempty"`
 }
 
 // LogFacts aggregates potential application errors from Loki over the
@@ -122,6 +134,56 @@ type ResourceFacts struct {
 	MemPeak   float64 `json:"mem_peak"`
 	DiskAvg   float64 `json:"disk_avg"`
 	DiskPeak  float64 `json:"disk_peak"`
+	// Network throughput (bytes/s, physical interfaces only — excludes
+	// lo / veth / docker). Fleet-aggregate avg/peak across scoped devices.
+	NetRxAvgBps  float64 `json:"net_rx_avg_bps,omitempty"`
+	NetRxPeakBps float64 `json:"net_rx_peak_bps,omitempty"`
+	NetTxAvgBps  float64 `json:"net_tx_avg_bps,omitempty"`
+	NetTxPeakBps float64 `json:"net_tx_peak_bps,omitempty"`
+}
+
+// NetworkDeviceFacts summarizes network-role hosts in scope.
+type NetworkDeviceFacts struct {
+	Available bool                `json:"available"`
+	Devices   []NetworkDeviceStat `json:"devices,omitempty"`
+}
+
+// NetworkDeviceStat is one network-role host's period throughput.
+type NetworkDeviceStat struct {
+	DeviceID     uint64  `json:"device_id"`
+	Name         string  `json:"name,omitempty"`
+	Online       bool    `json:"online"`
+	NetRxAvgBps  float64 `json:"net_rx_avg_bps,omitempty"`
+	NetRxPeakBps float64 `json:"net_rx_peak_bps,omitempty"`
+	NetTxAvgBps  float64 `json:"net_tx_avg_bps,omitempty"`
+	NetTxPeakBps float64 `json:"net_tx_peak_bps,omitempty"`
+}
+
+// DeviceResourceFacts is per-host resource utilization in scope.
+type DeviceResourceFacts struct {
+	Available bool                `json:"available"`
+	Devices   []DeviceResourceStat `json:"devices,omitempty"`
+}
+
+// DeviceResourceStat is one host's capacity plus period avg/peak for CPU,
+// memory, disk (%), and network throughput (bytes/s).
+type DeviceResourceStat struct {
+	DeviceID     uint64  `json:"device_id"`
+	Name         string  `json:"name,omitempty"`
+	Online       bool    `json:"online"`
+	CPUCount     int     `json:"cpu_count,omitempty"`
+	MemTotalBytes  uint64 `json:"mem_total_bytes,omitempty"`
+	DiskTotalBytes uint64 `json:"disk_total_bytes,omitempty"`
+	CPUAvg       float64 `json:"cpu_avg,omitempty"`
+	CPUPeak      float64 `json:"cpu_peak,omitempty"`
+	MemAvg       float64 `json:"mem_avg,omitempty"`
+	MemPeak      float64 `json:"mem_peak,omitempty"`
+	DiskAvg      float64 `json:"disk_avg,omitempty"`
+	DiskPeak     float64 `json:"disk_peak,omitempty"`
+	NetRxAvgBps  float64 `json:"net_rx_avg_bps,omitempty"`
+	NetRxPeakBps float64 `json:"net_rx_peak_bps,omitempty"`
+	NetTxAvgBps  float64 `json:"net_tx_avg_bps,omitempty"`
+	NetTxPeakBps float64 `json:"net_tx_peak_bps,omitempty"`
 }
 
 // FleetFacts is the monitoring-coverage snapshot at period end.

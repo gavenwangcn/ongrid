@@ -18,12 +18,22 @@ func renderSystemMarkdownBlock(b *strings.Builder, sys SystemContentBlock, mtr f
 		avg, peak := mtr("均", "avg"), mtr("峰", "peak")
 		b.WriteString(fmt.Sprintf("- CPU: %s %.1f%% · %s %.1f%%\n", avg, sys.Resource.CPUAvg, peak, sys.Resource.CPUPeak))
 		b.WriteString(fmt.Sprintf("- %s: %s %.1f%% · %s %.1f%%\n", mtr("内存", "Memory"), avg, sys.Resource.MemAvg, peak, sys.Resource.MemPeak))
-		b.WriteString(fmt.Sprintf("- %s: %s %.1f%% · %s %.1f%%\n\n", mtr("磁盘", "Disk"), avg, sys.Resource.DiskAvg, peak, sys.Resource.DiskPeak))
+		b.WriteString(fmt.Sprintf("- %s: %s %.1f%% · %s %.1f%%\n", mtr("磁盘", "Disk"), avg, sys.Resource.DiskAvg, peak, sys.Resource.DiskPeak))
+		if sys.Resource.NetRxPeakBps > 0 || sys.Resource.NetTxPeakBps > 0 || sys.Resource.NetRxAvgBps > 0 || sys.Resource.NetTxAvgBps > 0 {
+			b.WriteString(fmt.Sprintf("- %s: %s %s · %s %s · %s %s · %s %s\n",
+				mtr("网络", "Network"),
+				mtr("入均", "rx avg"), formatBytesPerSec(sys.Resource.NetRxAvgBps),
+				mtr("入峰", "rx peak"), formatBytesPerSec(sys.Resource.NetRxPeakBps),
+				mtr("出均", "tx avg"), formatBytesPerSec(sys.Resource.NetTxAvgBps),
+				mtr("出峰", "tx peak"), formatBytesPerSec(sys.Resource.NetTxPeakBps)))
+		}
+		b.WriteString("\n")
 	}
 	b.WriteString(fmt.Sprintf("- %s\n\n", mtr(
 		fmt.Sprintf("监控设备 %d 台 · 在线 %d 台", sys.Fleet.Total, sys.Fleet.Online),
 		fmt.Sprintf("%d devices · %d online", sys.Fleet.Total, sys.Fleet.Online),
 	)))
+	renderDeviceResourcesMarkdown(b, sys.DeviceResources, mtr)
 	if sys.Logs.Available {
 		b.WriteString(fmt.Sprintf("- %s\n\n", mtr(
 			fmt.Sprintf("潜在错误 %d 条", sys.Logs.TotalErrors),
