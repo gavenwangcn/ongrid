@@ -25,6 +25,9 @@ import {
   listSchedules,
   parseReportScope,
   parseReportScopeSystems,
+  parseScheduleTime,
+  buildScheduleCron,
+  defaultScheduleTime,
   runScheduleNow,
   toggleSchedule,
   updateSchedule,
@@ -34,6 +37,7 @@ import {
   type ScheduleInput,
 } from '@/api/reports';
 import { ReportSectionsPicker, initialSectionsForScope } from '@/components/ReportSectionsPicker';
+import { ReportScheduleTimePicker } from '@/components/ReportScheduleTimePicker';
 import { ReportSystemsPicker } from '@/components/ReportSystemsPicker';
 
 const KINDS: { key: ReportKind; zh: string; en: string }[] = [
@@ -281,6 +285,9 @@ function ScheduleForm({
   const [name, setName] = useState(initial?.name ?? '');
   const [kind, setKind] = useState<ReportKind>(initial?.kind ?? 'weekly');
   const [cron, setCron] = useState(initial?.cron_spec ?? '');
+  const [timeConfig, setTimeConfig] = useState(() =>
+    parseScheduleTime(initial?.kind ?? 'weekly', initial?.cron_spec),
+  );
   const [tz, setTz] = useState(initial?.timezone ?? DEFAULT_TZ);
   const [chanIDs, setChanIDs] = useState<number[]>(initial?.channel_ids ?? []);
   const [promptOverride, setPromptOverride] = useState(initial?.prompt_override ?? '');
@@ -333,9 +340,7 @@ function ScheduleForm({
       ),
       channel_ids: chanIDs,
       prompt_override: promptOverride || undefined,
-      // For custom kind the cron is required; for presets it's optional
-      // (backend fills the default) but we pass it through if set.
-      cron_spec: kind === 'custom' ? cron : cron || undefined,
+      cron_spec: kind === 'custom' ? cron : buildScheduleCron(kind, timeConfig),
     };
     try {
       if (initial) await updateSchedule(initial.id, body);
@@ -346,7 +351,7 @@ function ScheduleForm({
     } finally {
       setSaving(false);
     }
-  }, [name, kind, tz, cron, chanIDs, promptOverride, systemNamesSelected, environmentTag, sections, initial, onSaved, tr]);
+  }, [name, kind, tz, cron, timeConfig, chanIDs, promptOverride, systemNamesSelected, environmentTag, sections, initial, onSaved, tr]);
 
   return (
     <Modal
@@ -390,7 +395,10 @@ function ScheduleForm({
               <button
                 key={k.key}
                 type="button"
-                onClick={() => setKind(k.key)}
+                onClick={() => {
+                  setKind(k.key);
+                  if (k.key !== 'custom') setTimeConfig(defaultScheduleTime(k.key));
+                }}
                 className={cn(
                   'rounded-md border px-2.5 py-1 text-xs',
                   kind === k.key
@@ -404,16 +412,15 @@ function ScheduleForm({
           </div>
         </Field>
 
-        {kind === 'custom' && (
-          <Field label={tr('Cron 表达式（5 段）', 'Cron (5-field)')}>
-            <input
-              value={cron}
-              onChange={(e) => setCron(e.target.value)}
-              placeholder="0 9 * * 1"
-              className={cn(inputCls, 'font-mono')}
-            />
-          </Field>
-        )}
+        <Field label={tr('任务时间', 'Schedule time')}>
+          <ReportScheduleTimePicker
+            kind={kind}
+            value={timeConfig}
+            onChange={setTimeConfig}
+            customCron={cron}
+            onCustomCronChange={setCron}
+          />
+        </Field>
 
         <Field label={tr('时区', 'Timezone')}>
           <input value={tz} onChange={(e) => setTz(e.target.value)} className={cn(inputCls, 'font-mono')} />

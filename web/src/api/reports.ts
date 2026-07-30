@@ -45,6 +45,64 @@ export const ALL_REPORT_SECTIONS: ReportSection[] = REPORT_SECTION_DEFS.map((d) 
 
 export const DEFAULT_DAILY_SECTIONS: ReportSection[] = ['cluster'];
 
+/** Parsed fire time for preset report schedules (daily / weekly / monthly). */
+export type ScheduleTimeConfig = {
+  hour: number;
+  minute: number;
+  /** Cron weekday 0–6 (0 = Sunday). Used when kind = weekly. */
+  weekday: number;
+  /** Day of month 1–28. Used when kind = monthly. */
+  dayOfMonth: number;
+};
+
+export const DEFAULT_SCHEDULE_TIME: ScheduleTimeConfig = {
+  hour: 9,
+  minute: 0,
+  weekday: 1,
+  dayOfMonth: 1,
+};
+
+export function defaultScheduleTime(_kind: ReportKind): ScheduleTimeConfig {
+  return { ...DEFAULT_SCHEDULE_TIME };
+}
+
+/** Parse a 5-field cron into UI fields; falls back to 09:00 defaults. */
+export function parseScheduleTime(kind: ReportKind, cronSpec?: string): ScheduleTimeConfig {
+  const cfg = defaultScheduleTime(kind);
+  if (!cronSpec?.trim()) return cfg;
+  const parts = cronSpec.trim().split(/\s+/);
+  if (parts.length < 5) return cfg;
+  const minute = Number(parts[0]);
+  const hour = Number(parts[1]);
+  if (Number.isFinite(minute) && minute >= 0 && minute <= 59) cfg.minute = minute;
+  if (Number.isFinite(hour) && hour >= 0 && hour <= 23) cfg.hour = hour;
+  if (kind === 'weekly') {
+    const wd = Number(parts[4]);
+    if (Number.isFinite(wd) && wd >= 0 && wd <= 6) cfg.weekday = wd;
+  }
+  if (kind === 'monthly') {
+    const dom = Number(parts[2]);
+    if (Number.isFinite(dom) && dom >= 1 && dom <= 28) cfg.dayOfMonth = dom;
+  }
+  return cfg;
+}
+
+/** Build cron from preset kind + UI time fields. */
+export function buildScheduleCron(kind: ReportKind, cfg: ScheduleTimeConfig): string {
+  const minute = Math.min(59, Math.max(0, cfg.minute));
+  const hour = Math.min(23, Math.max(0, cfg.hour));
+  switch (kind) {
+    case 'daily':
+      return `${minute} ${hour} * * *`;
+    case 'weekly':
+      return `${minute} ${hour} * * ${cfg.weekday}`;
+    case 'monthly':
+      return `${minute} ${hour} ${cfg.dayOfMonth} * *`;
+    default:
+      return '';
+  }
+}
+
 export type ReportScope = {
   /** @deprecated use system_names */
   system_name?: string;
@@ -374,6 +432,22 @@ export function generateNow(body: { kind?: ReportKind; timezone?: string; scope_
 
 export function shareReport(id: string) {
   return request<{ share_token: string; path: string }>('POST', `/reports/${id}/share`, {});
+}
+
+/** Public read of a shared report (no login). */
+export async function getSharedReport(token: string): Promise<ReportDetail> {
+  const resp = await fetch(`/api/r/${encodeURIComponent(token)}`, {
+    headers: { Accept: 'application/json' },
+  });
+  const parsed = (await resp.json().catch(() => null)) as ReportDetail | { error?: string; code?: string } | null;
+  if (!resp.ok) {
+    const msg =
+      parsed && typeof parsed === 'object' && 'error' in parsed && typeof parsed.error === 'string'
+        ? parsed.error
+        : `HTTP ${resp.status}`;
+    throw new Error(msg);
+  }
+  return parsed as ReportDetail;
 }
 
 // --- schedules ---

@@ -2316,6 +2316,9 @@ func main() {
 		// can't carry our manager JWT. Auth comes from the platform
 		// signature scheme inside the handler.
 		imbridgeHandler.RegisterPublic(api)
+		// Public report share JSON (login-free, 30d TTL). Human-facing URL is
+		// /r/{token} (SPA); data is fetched from here so nginx /api proxy works.
+		reportHandler.RegisterPublic(api)
 		// serve_page: public read of an assistant-hosted HTML page (under /api
 		// so nginx proxies it to the manager). The random token IS the
 		// capability; id is validated to block path traversal.

@@ -83,11 +83,17 @@ func TestGenerator_DeliversReadyReportToChannels(t *testing.T) {
 	if len(deliverer.gotChannels) != 2 || deliverer.gotChannels[0] != 12 {
 		t.Errorf("channels = %v, want [12 7]", deliverer.gotChannels)
 	}
-	if deliverer.gotSummary.DeepLink != "https://h/reports/"+rpt.ID {
-		t.Errorf("deep link = %q", deliverer.gotSummary.DeepLink)
+	if !strings.HasPrefix(deliverer.gotSummary.DeepLink, "https://h/r/") {
+		t.Errorf("deep link = %q, want public share link under /r/", deliverer.gotSummary.DeepLink)
 	}
 	// Delivery records persisted.
 	got, _ := repo.GetReport(context.Background(), rpt.ID)
+	if got.ShareToken == nil || *got.ShareToken == "" {
+		t.Fatal("share token should be minted for delivery")
+	}
+	if deliverer.gotSummary.DeepLink != "https://h/r/"+*got.ShareToken {
+		t.Errorf("deep link = %q, want token %q", deliverer.gotSummary.DeepLink, *got.ShareToken)
+	}
 	if got.DeliveryJSON == "" || !strings.Contains(got.DeliveryJSON, `"status":"sent"`) {
 		t.Errorf("delivery_json not persisted: %q", got.DeliveryJSON)
 	}
@@ -111,7 +117,7 @@ func TestGenerator_NoDeliveryWhenNoChannels(t *testing.T) {
 }
 
 func TestGenerator_NoDeliveryForManualReport(t *testing.T) {
-	rpt := pendingReport() // ScheduleID nil = manual
+	rpt := pendingReport() // ScheduleID nil, no oneoff task ref
 	repo := newGenTestRepo(rpt)
 	deliverer := &recordingDeliverer{}
 	gen := NewWorkerGenerator(repo, fakeFacts{facts: sampleFacts()},
@@ -120,7 +126,52 @@ func TestGenerator_NoDeliveryForManualReport(t *testing.T) {
 
 	gen.Generate(context.Background(), rpt.ID)
 	if deliverer.called {
-		t.Error("manual report (nil schedule) should not deliver")
+		t.Error("ad-hoc report without oneoff task should not deliver")
+	}
+}
+
+func TestGenerator_DeliversOneoffTaskReport(t *testing.T) {
+	rpt := pendingReport()
+	rpt.TaskID = "oneoff:task-1"
+	repo := newGenTestRepo(rpt)
+	repo.tasks["task-1"] = &model.Task{
+		ID:             "task-1",
+		Kind:           model.TaskKindOneoff,
+		ChannelIDsJSON: "[12,7]",
+	}
+	deliverer := &recordingDeliverer{}
+	gen := NewWorkerGenerator(repo, fakeFacts{facts: sampleFacts()},
+		&fakeSpawner{result: `{"version":"1","narrative":{"headline":"ok"}}`}, GeneratorConfig{PublicURL: "https://h"}, nil).
+		WithDeliverer(deliverer)
+
+	gen.Generate(context.Background(), rpt.ID)
+	if !deliverer.called {
+		t.Fatal("oneoff task report with channels should deliver")
+	}
+	if len(deliverer.gotChannels) != 2 || deliverer.gotChannels[0] != 12 {
+		t.Errorf("channels = %v, want [12 7]", deliverer.gotChannels)
+	}
+}
+
+func TestGenerator_DeliversRunNowScheduleReport(t *testing.T) {
+	rpt := pendingReport()
+	rpt.TaskID = "report-schedule:1" // run-now: schedule_id nil, task_id stamped
+	repo := newGenTestRepo(rpt)
+	repo.schedules[1] = &model.ReportSchedule{
+		ID: 1, CreatedBy: 42, Kind: model.KindWeekly, Timezone: "UTC",
+		ChannelIDsJSON: "[12]",
+	}
+	deliverer := &recordingDeliverer{}
+	gen := NewWorkerGenerator(repo, fakeFacts{facts: sampleFacts()},
+		&fakeSpawner{result: `{"version":"1","narrative":{"headline":"ok"}}`}, GeneratorConfig{}, nil).
+		WithDeliverer(deliverer)
+
+	gen.Generate(context.Background(), rpt.ID)
+	if !deliverer.called {
+		t.Fatal("run-now schedule report should deliver via task_id back-ref")
+	}
+	if len(deliverer.gotChannels) != 1 || deliverer.gotChannels[0] != 12 {
+		t.Errorf("channels = %v, want [12]", deliverer.gotChannels)
 	}
 }
 

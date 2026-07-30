@@ -32,6 +32,7 @@ type Repo interface {
 	CreateSchedule(ctx context.Context, s *model.ReportSchedule) error
 	GetSchedule(ctx context.Context, id uint64) (*model.ReportSchedule, error)
 	UpdateSchedule(ctx context.Context, s *model.ReportSchedule) error
+	GetTask(ctx context.Context, id string) (*model.Task, error)
 	// DueSchedules returns enabled schedules whose next_fire_at <= now.
 	// The evaluator (PR-3) drives generation off this.
 	DueSchedules(ctx context.Context, now time.Time) ([]*model.ReportSchedule, error)

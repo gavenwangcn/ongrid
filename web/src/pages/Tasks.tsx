@@ -32,6 +32,9 @@ import {
   updateSchedule,
   parseReportScope,
   parseReportScopeSystems,
+  parseScheduleTime,
+  buildScheduleCron,
+  defaultScheduleTime,
   type ReportKind,
   type ReportSchedule,
   type ReportSection,
@@ -39,6 +42,7 @@ import {
 } from '@/api/reports';
 import { createOneoffTask, deleteTask, getTask, listTasks, rerunTask, type UnifiedTask } from '@/api/tasks';
 import { ReportSectionsPicker, initialSectionsForScope } from '@/components/ReportSectionsPicker';
+import { ReportScheduleTimePicker } from '@/components/ReportScheduleTimePicker';
 import { ReportSystemsPicker } from '@/components/ReportSystemsPicker';
 
 const KINDS: { key: ReportKind; zh: string; en: string }[] = [
@@ -279,6 +283,7 @@ function TaskList() {
         )}
         {oneoffOpen && (
           <OneoffForm
+            channels={channels}
             onClose={() => setOneoffOpen(false)}
             onCreated={(task) => {
               setOneoffOpen(false);
@@ -420,10 +425,19 @@ function IconBtn({ children, title, onClick, danger }: { children: ReactNode; ti
 
 // ---- one-shot task form (task-side "立即生成") ----
 
-function OneoffForm({ onClose, onCreated }: { onClose(): void; onCreated(task: UnifiedTask): void }) {
+function OneoffForm({
+  channels,
+  onClose,
+  onCreated,
+}: {
+  channels: Channel[];
+  onClose(): void;
+  onCreated(task: UnifiedTask): void;
+}) {
   const { tr } = useI18n();
   const [kind, setKind] = useState<ReportKind>('weekly');
   const [title, setTitle] = useState('');
+  const [chanIDs, setChanIDs] = useState<number[]>([]);
   const [systemNamesSelected, setSystemNamesSelected] = useState<string[]>([]);
   const [environmentTag, setEnvironmentTag] = useState<EnvironmentTag | ''>('');
   const [systemNameOptions, setSystemNameOptions] = useState<string[]>([]);
@@ -465,19 +479,20 @@ function OneoffForm({ onClose, onCreated }: { onClose(): void; onCreated(task: U
           },
           kind,
         ),
+        channel_ids: chanIDs,
       });
       onCreated(task);
     } catch (e) {
       setErr(reportActionError(e, tr));
       setCreating(false);
     }
-  }, [kind, title, systemNamesSelected, environmentTag, sections, onCreated, tr]);
+  }, [kind, title, systemNamesSelected, environmentTag, sections, chanIDs, onCreated, tr]);
 
   return (
     <Modal
       open
       onClose={onClose}
-      size="sm"
+      size="md"
       title={tr('立即生成（一次性）', 'Run now (one-shot)')}
       footer={
         <>
@@ -549,6 +564,9 @@ function OneoffForm({ onClose, onCreated }: { onClose(): void; onCreated(task: U
         <Field label={tr('报告内容', 'Report sections')}>
           <ReportSectionsPicker value={sections} onChange={setSections} />
         </Field>
+        <Field label={tr('投递渠道', 'Delivery channels')}>
+          <DeliveryChannelsField channels={channels} value={chanIDs} onChange={setChanIDs} />
+        </Field>
         {err && <div className="rounded border border-red-700/40 bg-red-900/20 px-2 py-1 text-[11px] text-red-200">{err}</div>}
       </div>
     </Modal>
@@ -569,6 +587,45 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+function DeliveryChannelsField({
+  channels,
+  value,
+  onChange,
+}: {
+  channels: Channel[];
+  value: number[];
+  onChange(next: number[]): void;
+}) {
+  const { tr } = useI18n();
+  if (channels.length === 0) {
+    return (
+      <p className="text-xs text-zinc-600">
+        {tr('暂无渠道，先到「设置 → 通知」配置。', 'No channels — configure under Settings → Notifications.')}
+      </p>
+    );
+  }
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {channels.map((c) => {
+        const on = value.includes(c.id);
+        return (
+          <button
+            key={c.id}
+            type="button"
+            onClick={() => onChange(on ? value.filter((x) => x !== c.id) : [...value, c.id])}
+            className={cn(
+              'rounded-md border px-2 py-1 text-xs',
+              on ? 'border-indigo-500 bg-indigo-500/15 text-indigo-200' : 'border-zinc-700 text-zinc-400 hover:border-zinc-500',
+            )}
+          >
+            {c.name} <span className="text-zinc-600">({c.type})</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function ScheduleForm({
   channels,
   initial,
@@ -584,6 +641,9 @@ function ScheduleForm({
   const [name, setName] = useState(initial?.name ?? '');
   const [kind, setKind] = useState<ReportKind>(initial?.kind ?? 'weekly');
   const [cron, setCron] = useState(initial?.cron_spec ?? '');
+  const [timeConfig, setTimeConfig] = useState(() =>
+    parseScheduleTime(initial?.kind ?? 'weekly', initial?.cron_spec),
+  );
   const [tz, setTz] = useState(initial?.timezone ?? DEFAULT_TZ);
   const [chanIDs, setChanIDs] = useState<number[]>(initial?.channel_ids ?? []);
   const [promptOverride, setPromptOverride] = useState(initial?.prompt_override ?? '');
@@ -636,7 +696,7 @@ function ScheduleForm({
       ),
       channel_ids: chanIDs,
       prompt_override: promptOverride || undefined,
-      cron_spec: kind === 'custom' ? cron : cron || undefined,
+      cron_spec: kind === 'custom' ? cron : buildScheduleCron(kind, timeConfig),
     };
     try {
       if (initial) await updateSchedule(initial.id, body);
@@ -647,7 +707,7 @@ function ScheduleForm({
     } finally {
       setSaving(false);
     }
-  }, [name, kind, tz, cron, chanIDs, promptOverride, systemNamesSelected, environmentTag, sections, initial, onSaved, tr]);
+  }, [name, kind, tz, cron, timeConfig, chanIDs, promptOverride, systemNamesSelected, environmentTag, sections, initial, onSaved, tr]);
 
   return (
     <Modal
@@ -682,7 +742,10 @@ function ScheduleForm({
               <button
                 key={k.key}
                 type="button"
-                onClick={() => setKind(k.key)}
+                onClick={() => {
+                  setKind(k.key);
+                  if (k.key !== 'custom') setTimeConfig(defaultScheduleTime(k.key));
+                }}
                 className={cn(
                   'rounded-md border px-2.5 py-1 text-xs',
                   kind === k.key ? 'border-indigo-500 bg-indigo-500/15 text-indigo-200' : 'border-zinc-700 text-zinc-300 hover:border-zinc-500',
@@ -694,11 +757,15 @@ function ScheduleForm({
           </div>
         </Field>
 
-        {kind === 'custom' && (
-          <Field label={tr('Cron 表达式（5 段）', 'Cron (5-field)')}>
-            <input value={cron} onChange={(e) => setCron(e.target.value)} placeholder="0 9 * * 1" className={cn(inputCls, 'font-mono')} />
-          </Field>
-        )}
+        <Field label={tr('任务时间', 'Schedule time')}>
+          <ReportScheduleTimePicker
+            kind={kind}
+            value={timeConfig}
+            onChange={setTimeConfig}
+            customCron={cron}
+            onCustomCronChange={setCron}
+          />
+        </Field>
 
         <Field label={tr('时区', 'Timezone')}>
           <input value={tz} onChange={(e) => setTz(e.target.value)} className={cn(inputCls, 'font-mono')} />
@@ -732,28 +799,7 @@ function ScheduleForm({
         </Field>
 
         <Field label={tr('投递渠道', 'Delivery channels')}>
-          {channels.length === 0 ? (
-            <p className="text-xs text-zinc-600">{tr('暂无渠道，先到「设置 → 渠道」配置。', 'No channels — configure under Settings → Channels.')}</p>
-          ) : (
-            <div className="flex flex-wrap gap-1.5">
-              {channels.map((c) => {
-                const on = chanIDs.includes(c.id);
-                return (
-                  <button
-                    key={c.id}
-                    type="button"
-                    onClick={() => setChanIDs((prev) => (on ? prev.filter((x) => x !== c.id) : [...prev, c.id]))}
-                    className={cn(
-                      'rounded-md border px-2 py-1 text-xs',
-                      on ? 'border-indigo-500 bg-indigo-500/15 text-indigo-200' : 'border-zinc-700 text-zinc-400 hover:border-zinc-500',
-                    )}
-                  >
-                    {c.name} <span className="text-zinc-600">({c.type})</span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
+          <DeliveryChannelsField channels={channels} value={chanIDs} onChange={setChanIDs} />
         </Field>
 
         <Field label={tr('额外要求（可选）', 'Extra instructions (optional)')}>

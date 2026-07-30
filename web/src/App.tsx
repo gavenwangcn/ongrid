@@ -21,6 +21,7 @@ const AlertsPage = lazy(() => import('@/pages/Alerts'));
 const AlertRulesPage = lazy(() => import('@/pages/AlertRules'));
 const IncidentDetailPage = lazy(() => import('@/pages/IncidentDetail'));
 const ReportDetailPage = lazy(() => import('@/pages/ReportDetail'));
+const SharedReportPage = lazy(() => import('@/pages/SharedReport'));
 const ReportsPage = lazy(() => import('@/pages/Reports'));
 const ReportSchedulesPage = lazy(() => import('@/pages/ReportSchedules'));
 const ReportModelSettingsPage = lazy(() => import('@/pages/ReportModelSettings'));
@@ -206,6 +207,8 @@ export default function App() {
           </RequireAuth>
         }
       />
+      {/* Public report share — /r/{token} opens without login (30d TTL). */}
+      <Route path="/r/:token" element={<SharedReportPage />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

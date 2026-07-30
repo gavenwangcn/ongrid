@@ -26,7 +26,13 @@ export function getTask(id: string) {
 }
 
 // createOneoffTask creates a one-shot task and immediately generates its report.
-export function createOneoffTask(body: { kind?: string; title?: string; timezone?: string; scope_json?: string }) {
+export function createOneoffTask(body: {
+  kind?: string;
+  title?: string;
+  timezone?: string;
+  scope_json?: string;
+  channel_ids?: number[];
+}) {
   return request<UnifiedTask>('POST', '/tasks/oneoff', body);
 }
 

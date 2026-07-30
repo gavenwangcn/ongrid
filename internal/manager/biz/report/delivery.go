@@ -33,7 +33,7 @@ type DeliverySummary struct {
 	Title    string
 	Headline string
 	Hero     []HeroStat
-	DeepLink string // absolute or path; resolved by the impl from PublicURL
+	DeepLink string // public share URL (/r/{token}); absolute when PublicURL set
 	ReportID string
 }
 
@@ -46,6 +46,30 @@ type DeliveryRecord struct {
 	SentAt       time.Time `json:"sent_at"`
 	Error        string    `json:"error,omitempty"`
 	FallbackUsed bool      `json:"fallback_used,omitempty"`
+}
+
+// parseChannelIDsJSON decodes a schedule/task channel_ids_json column.
+func parseChannelIDsJSON(raw string) []uint64 {
+	if raw == "" {
+		return nil
+	}
+	var ids []uint64
+	if err := json.Unmarshal([]byte(raw), &ids); err != nil {
+		return nil
+	}
+	return ids
+}
+
+// encodeChannelIDsJSON encodes channel ids for persistence.
+func encodeChannelIDsJSON(ids []uint64) string {
+	if len(ids) == 0 {
+		return "[]"
+	}
+	b, err := json.Marshal(ids)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
 }
 
 // MarkdownSummary renders the channel-agnostic markdown body senders

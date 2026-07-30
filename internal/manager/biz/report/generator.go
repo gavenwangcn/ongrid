@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -350,25 +351,18 @@ func (g *workerGenerator) generate(ctx context.Context, rpt *model.Report) error
 	return nil
 }
 
-// deliver pushes a ready report to the schedule's channels and records
-// the per-channel outcome. No-op when there's no deliverer, no owning
-// schedule, or no channels configured (in-app-only reports).
+// deliver pushes a ready report to configured channels and records the
+// per-channel outcome. No-op when there's no deliverer or no channels
+// configured (in-app-only reports).
 func (g *workerGenerator) deliver(ctx context.Context, rpt *model.Report) {
-	if g.deliverer == nil || rpt.ScheduleID == nil {
+	if g.deliverer == nil {
 		return
 	}
-	s, err := g.repo.GetSchedule(ctx, *rpt.ScheduleID)
-	if err != nil {
-		return
-	}
-	var channelIDs []uint64
-	if s.ChannelIDsJSON != "" {
-		_ = json.Unmarshal([]byte(s.ChannelIDsJSON), &channelIDs)
-	}
+	channelIDs := g.deliveryChannelIDs(ctx, rpt)
 	if len(channelIDs) == 0 {
 		return
 	}
-	summary := deliveryFor(rpt, g.deepLink(rpt.ID))
+	summary := deliveryFor(rpt, g.reportShareLink(ctx, rpt))
 	records := g.deliverer.Deliver(ctx, summary, channelIDs)
 	recordDelivery(rpt, records)
 	if err := g.repo.UpdateReport(ctx, rpt); err != nil {
@@ -376,11 +370,54 @@ func (g *workerGenerator) deliver(ctx context.Context, rpt *model.Report) {
 	}
 }
 
-// deepLink builds the "view full report" URL. Absolute when PublicURL is
-// configured, else a relative path.
-func (g *workerGenerator) deepLink(id string) string {
+func (g *workerGenerator) deliveryChannelIDs(ctx context.Context, rpt *model.Report) []uint64 {
+	if rpt.ScheduleID != nil {
+		s, err := g.repo.GetSchedule(ctx, *rpt.ScheduleID)
+		if err != nil {
+			return nil
+		}
+		return parseChannelIDsJSON(s.ChannelIDsJSON)
+	}
+	// Run-now/manual reports keep schedule_id NULL (dedup) but stamp
+	// task_id="report-schedule:<id>" — resolve channels from the schedule.
+	const schedTaskPrefix = "report-schedule:"
+	if strings.HasPrefix(rpt.TaskID, schedTaskPrefix) {
+		raw := strings.TrimPrefix(rpt.TaskID, schedTaskPrefix)
+		sid, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil || sid == 0 {
+			return nil
+		}
+		s, err := g.repo.GetSchedule(ctx, sid)
+		if err != nil {
+			return nil
+		}
+		return parseChannelIDsJSON(s.ChannelIDsJSON)
+	}
+	const oneoffPrefix = "oneoff:"
+	if !strings.HasPrefix(rpt.TaskID, oneoffPrefix) {
+		return nil
+	}
+	taskID := strings.TrimPrefix(rpt.TaskID, oneoffPrefix)
+	if taskID == "" {
+		return nil
+	}
+	t, err := g.repo.GetTask(ctx, taskID)
+	if err != nil {
+		return nil
+	}
+	return parseChannelIDsJSON(t.ChannelIDsJSON)
+}
+
+// reportShareLink builds the public share URL pushed to IM channels.
+// Uses /r/{token} so recipients can read without logging in.
+func (g *workerGenerator) reportShareLink(ctx context.Context, rpt *model.Report) string {
+	token, err := ensureShareTokenForDelivery(ctx, g.repo, rpt, time.Now().UTC())
+	if err != nil {
+		g.log.Warn("mint share token for delivery failed", slog.String("report_id", rpt.ID), slog.Any("err", err))
+		return ""
+	}
 	base := strings.TrimRight(g.cfg.PublicURL, "/")
-	return base + "/reports/" + id
+	return base + "/r/" + token
 }
 
 func (g *workerGenerator) fail(ctx context.Context, rpt *model.Report, reason string) {

@@ -88,7 +88,10 @@ func (h *Handler) Register(r chi.Router) {
 
 // RegisterPublic mounts the unauthenticated share route.
 //
-//	GET /r/{token}  shared report (read-only, 30d TTL)
+//	GET /r/{token}  shared report JSON (read-only, 30d TTL)
+//
+// Mount on the /api router so nginx proxies it; the SPA route /r/{token}
+// serves index.html for human visitors.
 func (h *Handler) RegisterPublic(r chi.Router) {
 	r.Get("/r/{token}", h.sharedReport)
 }

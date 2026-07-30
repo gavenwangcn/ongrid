@@ -113,10 +113,11 @@ func (h *Handler) createOneoffTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Title     string `json:"title"`
-		Kind      string `json:"kind"` // daily/weekly/monthly
-		Timezone  string `json:"timezone"`
-		ScopeJSON string `json:"scope_json"`
+		Title      string   `json:"title"`
+		Kind       string   `json:"kind"` // daily/weekly/monthly
+		Timezone   string   `json:"timezone"`
+		ScopeJSON  string   `json:"scope_json"`
+		ChannelIDs []uint64 `json:"channel_ids"`
 	}
 	// Best-effort decode: an empty body is fine (defaults below apply).
 	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<10)).Decode(&in)
@@ -127,7 +128,7 @@ func (h *Handler) createOneoffTask(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(scope) == "" {
 		scope = "{}"
 	}
-	task, err := h.uc.CreateOneoffTaskAndRun(r.Context(), t.UserID, in.Title, in.Kind, in.Timezone, scope, localeFromRequest(r), h.now())
+	task, err := h.uc.CreateOneoffTaskAndRun(r.Context(), t.UserID, in.Title, in.Kind, in.Timezone, scope, localeFromRequest(r), in.ChannelIDs, h.now())
 	if err != nil && task == nil {
 		writeErr(w, err)
 		return

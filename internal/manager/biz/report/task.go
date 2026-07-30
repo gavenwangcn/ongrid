@@ -16,7 +16,7 @@ import (
 // CreateOneoffTaskAndRun creates a oneoff task and immediately generates its
 // report, attributing the artifact back to the task via task_id="oneoff:<id>".
 // This is the task-side replacement for the old products-side "立即生成".
-func (u *Usecase) CreateOneoffTaskAndRun(ctx context.Context, createdBy uint64, title, kind, tz, scopeJSON, locale string, now time.Time) (*model.Task, error) {
+func (u *Usecase) CreateOneoffTaskAndRun(ctx context.Context, createdBy uint64, title, kind, tz, scopeJSON, locale string, channelIDs []uint64, now time.Time) (*model.Task, error) {
 	if u.read == nil {
 		return nil, fmt.Errorf("task store not wired")
 	}
@@ -35,13 +35,14 @@ func (u *Usecase) CreateOneoffTaskAndRun(ctx context.Context, createdBy uint64, 
 		title = TitleFor(kind, period, locale)
 	}
 	t := &model.Task{
-		ID:         u.idGen(),
-		Kind:       model.TaskKindOneoff,
-		Title:      strings.TrimSpace(title),
-		ReportKind: kind,
-		ScopeJSON:  scopeJSON,
-		Status:     "active",
-		CreatedBy:  createdBy,
+		ID:               u.idGen(),
+		Kind:             model.TaskKindOneoff,
+		Title:            strings.TrimSpace(title),
+		ReportKind:       kind,
+		ScopeJSON:        scopeJSON,
+		ChannelIDsJSON:   encodeChannelIDsJSON(channelIDs),
+		Status:           "active",
+		CreatedBy:        createdBy,
 	}
 	if err := u.read.CreateTask(ctx, t); err != nil {
 		return nil, err

@@ -19,6 +19,7 @@ type fakeRepo struct {
 	mu         sync.Mutex
 	reports    map[string]*model.Report
 	schedules  map[uint64]*model.ReportSchedule
+	tasks      map[string]*model.Task
 	seenWindow map[string]bool // "schedID|periodStart" → exists
 
 	failCreate error
@@ -29,6 +30,7 @@ func newFakeRepo() *fakeRepo {
 	return &fakeRepo{
 		reports:    map[string]*model.Report{},
 		schedules:  map[uint64]*model.ReportSchedule{},
+		tasks:      map[string]*model.Task{},
 		seenWindow: map[string]bool{},
 	}
 }
@@ -112,6 +114,16 @@ func (r *fakeRepo) DueSchedules(_ context.Context, now time.Time) ([]*model.Repo
 		}
 	}
 	return out, nil
+}
+
+func (r *fakeRepo) GetTask(_ context.Context, id string) (*model.Task, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	t, ok := r.tasks[id]
+	if !ok {
+		return nil, errs.ErrNotFound
+	}
+	return t, nil
 }
 
 // seqIDGen returns deterministic ids r1, r2, ...

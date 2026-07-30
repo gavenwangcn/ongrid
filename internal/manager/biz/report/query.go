@@ -181,6 +181,23 @@ func (u *Usecase) ShareReport(ctx context.Context, id string, now time.Time) (st
 	return token, nil
 }
 
+// ensureShareTokenForDelivery returns a valid share token for IM deep
+// links. Reuses an unexpired token when present; otherwise mints a new
+// one and persists it on the report row.
+func ensureShareTokenForDelivery(ctx context.Context, repo Repo, rpt *model.Report, now time.Time) (string, error) {
+	if rpt.ShareToken != nil && rpt.ShareExpiresAt != nil && now.Before(*rpt.ShareExpiresAt) {
+		return *rpt.ShareToken, nil
+	}
+	token := randomToken()
+	exp := now.Add(ShareTTL)
+	rpt.ShareToken = &token
+	rpt.ShareExpiresAt = &exp
+	if err := repo.UpdateReport(ctx, rpt); err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
 // GetSharedReport resolves a report by share token, enforcing the TTL.
 // Used by the public /r/{token} route.
 func (u *Usecase) GetSharedReport(ctx context.Context, token string, now time.Time) (*model.Report, error) {
