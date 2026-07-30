@@ -16,7 +16,7 @@ import {
   type EnvironmentTag,
 } from '@/api/environment';
 import {
-  DEFAULT_DAILY_SECTIONS,
+  initialSectionsForKind,
   formatReportScope,
   generateNow,
   listReports,
@@ -162,7 +162,7 @@ export default function ReportsPage() {
             {
               system_names: systemNames,
               environment_tag: environmentTag,
-              sections: kind === 'daily' ? sections : undefined,
+              sections,
             },
             kind,
           ),
@@ -358,9 +358,13 @@ function GenerateReportModal({
   const [kind, setKind] = useState<ReportKind>('weekly');
   const [systemNamesSelected, setSystemNamesSelected] = useState<string[]>([]);
   const [environmentTag, setEnvironmentTag] = useState<EnvironmentTag | ''>('');
-  const [sections, setSections] = useState<ReportSection[]>([...DEFAULT_DAILY_SECTIONS]);
+  const [sections, setSections] = useState<ReportSection[]>(() => initialSectionsForKind('weekly'));
   const hint = GENERATE_KIND_HINT[kind];
   const action = GENERATE_KIND_ACTION[kind];
+
+  useEffect(() => {
+    setSections(initialSectionsForKind(kind));
+  }, [kind]);
 
   return (
     <Modal
@@ -438,14 +442,12 @@ function GenerateReportModal({
             ))}
           </select>
         </label>
-        {kind === 'daily' && (
-          <div>
-            <span className="text-xs text-zinc-400">{tr('报告内容', 'Report sections')}</span>
-            <div className="mt-1.5">
-              <ReportSectionsPicker value={sections} onChange={setSections} />
-            </div>
+        <div>
+          <span className="text-xs text-zinc-400">{tr('报告内容', 'Report sections')}</span>
+          <div className="mt-1.5">
+            <ReportSectionsPicker value={sections} onChange={setSections} />
           </div>
-        )}
+        </div>
         {systemNames.length === 0 && (
           <p className="text-[11px] text-zinc-600">
             {tr('未找到已填系统名称的设备；将统计全部设备。可在设备元数据中填写系统名称。', 'No devices with a system name yet — report will cover all devices. Set system name on device metadata.')}

@@ -26,10 +26,11 @@ import {
   deleteSchedule,
   formatReportScope,
   getSchedule,
+  initialSectionsForKind,
   runScheduleNow,
   toggleSchedule,
   updateSchedule,
-  DEFAULT_DAILY_SECTIONS,
+  initialSectionsForKind,
   parseReportScope,
   parseReportScopeSystems,
   type ReportKind,
@@ -38,7 +39,7 @@ import {
   type ScheduleInput,
 } from '@/api/reports';
 import { createOneoffTask, deleteTask, getTask, listTasks, rerunTask, type UnifiedTask } from '@/api/tasks';
-import { ReportSectionsPicker, initialDailySections } from '@/components/ReportSectionsPicker';
+import { ReportSectionsPicker, initialSectionsForScope } from '@/components/ReportSectionsPicker';
 import { ReportSystemsPicker } from '@/components/ReportSystemsPicker';
 
 const KINDS: { key: ReportKind; zh: string; en: string }[] = [
@@ -427,9 +428,13 @@ function OneoffForm({ onClose, onCreated }: { onClose(): void; onCreated(task: U
   const [systemNamesSelected, setSystemNamesSelected] = useState<string[]>([]);
   const [environmentTag, setEnvironmentTag] = useState<EnvironmentTag | ''>('');
   const [systemNameOptions, setSystemNameOptions] = useState<string[]>([]);
-  const [sections, setSections] = useState<ReportSection[]>([...DEFAULT_DAILY_SECTIONS]);
+  const [sections, setSections] = useState<ReportSection[]>(() => initialSectionsForKind('weekly'));
   const [creating, setCreating] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    setSections(initialSectionsForKind(kind));
+  }, [kind]);
 
   useEffect(() => {
     let cancelled = false;
@@ -457,7 +462,7 @@ function OneoffForm({ onClose, onCreated }: { onClose(): void; onCreated(task: U
           {
             system_names: systemNamesSelected,
             environment_tag: environmentTag,
-            sections: kind === 'daily' ? sections : undefined,
+            sections,
           },
           kind,
         ),
@@ -542,11 +547,9 @@ function OneoffForm({ onClose, onCreated }: { onClose(): void; onCreated(task: U
             ))}
           </select>
         </Field>
-        {kind === 'daily' && (
-          <Field label={tr('报告内容', 'Report sections')}>
-            <ReportSectionsPicker value={sections} onChange={setSections} />
-          </Field>
-        )}
+        <Field label={tr('报告内容', 'Report sections')}>
+          <ReportSectionsPicker value={sections} onChange={setSections} />
+        </Field>
         {err && <div className="rounded border border-red-700/40 bg-red-900/20 px-2 py-1 text-[11px] text-red-200">{err}</div>}
       </div>
     </Modal>
@@ -591,7 +594,9 @@ function ScheduleForm({
   const [environmentTag, setEnvironmentTag] = useState<EnvironmentTag | ''>(
     parseReportScope(initial?.scope_json).environment_tag ?? '',
   );
-  const [sections, setSections] = useState<ReportSection[]>(initialDailySections(initial?.scope_json));
+  const [sections, setSections] = useState<ReportSection[]>(() =>
+    initialSectionsForScope(initial?.scope_json, initial?.kind ?? 'weekly'),
+  );
   const [systemNameOptions, setSystemNameOptions] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -610,6 +615,11 @@ function ScheduleForm({
     };
   }, []);
 
+  useEffect(() => {
+    if (initial?.scope_json) return;
+    setSections(initialSectionsForKind(kind));
+  }, [kind, initial?.scope_json]);
+
   const save = useCallback(async () => {
     setSaving(true);
     setErr(null);
@@ -621,7 +631,7 @@ function ScheduleForm({
         {
           system_names: systemNamesSelected,
           environment_tag: environmentTag,
-          sections: kind === 'daily' ? sections : undefined,
+          sections,
         },
         kind,
       ),
@@ -718,11 +728,9 @@ function ScheduleForm({
           </select>
         </Field>
 
-        {kind === 'daily' && (
-          <Field label={tr('报告内容', 'Report sections')}>
-            <ReportSectionsPicker value={sections} onChange={setSections} />
-          </Field>
-        )}
+        <Field label={tr('报告内容', 'Report sections')}>
+          <ReportSectionsPicker value={sections} onChange={setSections} />
+        </Field>
 
         <Field label={tr('投递渠道', 'Delivery channels')}>
           {channels.length === 0 ? (

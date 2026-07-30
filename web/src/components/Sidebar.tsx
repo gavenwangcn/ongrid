@@ -400,10 +400,18 @@ export function Sidebar() {
           <SidebarNavItem to="/knowledge/repos" icon={GitBranch} label={tr('代码仓库', 'Repos')} />
         </NavSection>
 
-        <CollapsibleSection storageKey="resources" title={tr('基础设施', 'Infrastructure')} defaultOpen>
-          <CollapsibleSection storageKey="devices-nav" title={tr('设备', 'Devices')} defaultOpen>
+        <CollapsibleSection
+          storageKey="resources"
+          title={tr('基础设施', 'Infrastructure')}
+          defaultOpen
+          openWhenPathPrefix="/devices"
+        >
+          <div className="space-y-0.5">
+            <div className="px-2 pb-0.5 pt-1 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+              {tr('设备', 'Devices')}
+            </div>
             <DeviceSystemNav />
-          </CollapsibleSection>
+          </div>
           <SidebarNavItem to="/kubernetes" icon={ShipWheel} label="Kubernetes" />
           <SidebarNavItem to="/topology" icon={Share2} label={tr('拓扑', 'Topology')} />
         </CollapsibleSection>
@@ -684,13 +692,17 @@ function CollapsibleSection({
   storageKey,
   title,
   defaultOpen = false,
+  openWhenPathPrefix,
   children,
 }: {
   storageKey: string;
   title: string;
   defaultOpen?: boolean;
+  /** Auto-expand when the current route starts with this prefix (e.g. /devices). */
+  openWhenPathPrefix?: string;
   children: React.ReactNode;
 }) {
+  const location = useLocation();
   const [open, setOpen] = useState(() => {
     try {
       const raw = localStorage.getItem(`sidebar.section.${storageKey}`);
@@ -701,6 +713,15 @@ function CollapsibleSection({
     }
     return defaultOpen;
   });
+  useEffect(() => {
+    if (!openWhenPathPrefix || !location.pathname.startsWith(openWhenPathPrefix)) return;
+    setOpen(true);
+    try {
+      localStorage.setItem(`sidebar.section.${storageKey}`, 'open');
+    } catch {
+      /* ignore */
+    }
+  }, [location.pathname, openWhenPathPrefix, storageKey]);
   const toggle = () => {
     setOpen((prev) => {
       const next = !prev;

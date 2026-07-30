@@ -3,8 +3,10 @@ import { useI18n } from '@/i18n/locale';
 import {
   ALL_REPORT_SECTIONS,
   DEFAULT_DAILY_SECTIONS,
+  initialSectionsForKind,
   parseReportScope,
   REPORT_SECTION_DEFS,
+  type ReportKind,
   type ReportSection,
 } from '@/api/reports';
 
@@ -27,36 +29,32 @@ export function ReportSectionsPicker({ value, onChange }: Props) {
   };
 
   return (
-    <div className="space-y-1.5">
-      {REPORT_SECTION_DEFS.map((def) => {
-        const on = selected.has(def.key);
-        return (
-          <label
-            key={def.key}
-            className={cn(
-              'flex cursor-pointer items-start gap-2 rounded-md border px-2.5 py-2 transition-colors',
-              on ? 'border-indigo-500/50 bg-indigo-500/10' : 'border-zinc-800 bg-zinc-950/40 hover:border-zinc-700',
-            )}
-          >
-            <input
-              type="checkbox"
-              className="mt-0.5 accent-indigo-500"
-              checked={on}
-              onChange={() => toggle(def.key)}
-            />
-            <span className="min-w-0">
-              <span className="block text-xs font-medium text-zinc-200">
-                {tr(def.zh, def.en)}
-              </span>
-              <span className="block text-[11px] text-zinc-500">
-                {tr(def.descZh, def.descEn)}
-              </span>
-            </span>
-          </label>
-        );
-      })}
+    <div>
+      <div className="flex flex-wrap gap-2">
+        {REPORT_SECTION_DEFS.map((def) => {
+          const on = selected.has(def.key);
+          return (
+            <label
+              key={def.key}
+              title={tr(def.descZh, def.descEn)}
+              className={cn(
+                'inline-flex cursor-pointer items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs transition-colors',
+                on ? 'border-indigo-500/50 bg-indigo-500/10 text-indigo-200' : 'border-zinc-800 bg-zinc-950/40 text-zinc-300 hover:border-zinc-700',
+              )}
+            >
+              <input
+                type="checkbox"
+                className="accent-indigo-500"
+                checked={on}
+                onChange={() => toggle(def.key)}
+              />
+              <span className="whitespace-nowrap font-medium">{tr(def.zh, def.en)}</span>
+            </label>
+          );
+        })}
+      </div>
       {value.length < ALL_REPORT_SECTIONS.length && (
-        <p className="text-[11px] text-zinc-600">
+        <p className="mt-1.5 text-[11px] text-zinc-600">
           {tr('未选模块不会采集数据、也不会出现在报告中。', 'Unselected modules are skipped during generation and hidden in the report.')}
         </p>
       )}
@@ -68,4 +66,10 @@ export function initialDailySections(scopeJson?: string): ReportSection[] {
   const parsed = parseReportScope(scopeJson);
   if (parsed.sections?.length) return parsed.sections;
   return [...DEFAULT_DAILY_SECTIONS];
+}
+
+export function initialSectionsForScope(scopeJson?: string, kind: ReportKind = 'daily'): ReportSection[] {
+  const parsed = parseReportScope(scopeJson);
+  if (parsed.sections?.length) return parsed.sections;
+  return initialSectionsForKind(kind);
 }

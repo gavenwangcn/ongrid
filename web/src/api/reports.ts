@@ -91,9 +91,13 @@ export function effectiveReportSections(scope: ReportScope): ReportSection[] {
   return ALL_REPORT_SECTIONS;
 }
 
-export function defaultSectionsForKind(kind: ReportKind): ReportSection[] | undefined {
+export function initialSectionsForKind(kind: ReportKind): ReportSection[] {
   if (kind === 'daily') return [...DEFAULT_DAILY_SECTIONS];
-  return undefined;
+  return [...ALL_REPORT_SECTIONS];
+}
+
+export function defaultSectionsForKind(kind: ReportKind): ReportSection[] {
+  return initialSectionsForKind(kind);
 }
 
 export function parseReportScope(json?: string): ReportScope {

@@ -19,6 +19,7 @@ import {
 import {
   createSchedule,
   deleteSchedule,
+  initialSectionsForKind,
   formatReportScope,
   formatReportScopeSystemsLabel,
   listSchedules,
@@ -32,7 +33,7 @@ import {
   type ReportSection,
   type ScheduleInput,
 } from '@/api/reports';
-import { ReportSectionsPicker, initialDailySections } from '@/components/ReportSectionsPicker';
+import { ReportSectionsPicker, initialSectionsForScope } from '@/components/ReportSectionsPicker';
 import { ReportSystemsPicker } from '@/components/ReportSystemsPicker';
 
 const KINDS: { key: ReportKind; zh: string; en: string }[] = [
@@ -289,7 +290,9 @@ function ScheduleForm({
   const [environmentTag, setEnvironmentTag] = useState<EnvironmentTag | ''>(
     parseReportScope(initial?.scope_json).environment_tag ?? '',
   );
-  const [sections, setSections] = useState<ReportSection[]>(initialDailySections(initial?.scope_json));
+  const [sections, setSections] = useState<ReportSection[]>(() =>
+    initialSectionsForScope(initial?.scope_json, initial?.kind ?? 'weekly'),
+  );
   const [systemNameOptions, setSystemNameOptions] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -308,6 +311,11 @@ function ScheduleForm({
     };
   }, []);
 
+  useEffect(() => {
+    if (initial?.scope_json) return;
+    setSections(initialSectionsForKind(kind));
+  }, [kind, initial?.scope_json]);
+
   const save = useCallback(async () => {
     setSaving(true);
     setErr(null);
@@ -319,7 +327,7 @@ function ScheduleForm({
         {
           system_names: systemNamesSelected,
           environment_tag: environmentTag,
-          sections: kind === 'daily' ? sections : undefined,
+          sections,
         },
         kind,
       ),
@@ -439,11 +447,9 @@ function ScheduleForm({
           </select>
         </Field>
 
-        {kind === 'daily' && (
-          <Field label={tr('报告内容', 'Report sections')}>
-            <ReportSectionsPicker value={sections} onChange={setSections} />
-          </Field>
-        )}
+        <Field label={tr('报告内容', 'Report sections')}>
+          <ReportSectionsPicker value={sections} onChange={setSections} />
+        </Field>
 
         <Field label={tr('投递渠道', 'Delivery channels')}>
           {channels.length === 0 ? (
