@@ -233,14 +233,14 @@ func deliveryFor(rpt *model.Report, deepLink string) DeliverySummary {
 	if rpt.ContentJSON != "" {
 		if c, err := ParseContent(rpt.ContentJSON, nil); err == nil {
 			s.Hero = c.Hero
-			im := deliveryIMFactsFromContent(c)
+			im := deliveryIMFactsFromContent(*c)
 			s.Sections = im.sections
 			s.Resource = im.resource
 			s.Fleet = im.fleet
 			s.Logs = im.logs
 			s.Incidents = im.incidents
 			s.Actions = im.actions
-			if h := summaryHeadline(&c); h != "" {
+			if h := summaryHeadline(c); h != "" {
 				s.Headline = h
 			}
 		}
