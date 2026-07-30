@@ -40,11 +40,19 @@ export type DeviceEdgeLink = {
   created_at: string;
 };
 
-export function listDevices(params?: { roles?: string }) {
-  const qs = params?.roles
-    ? `?${new URLSearchParams({ roles: params.roles }).toString()}`
-    : '';
-  return request<{ items: Device[]; total: number }>('GET', `/devices${qs}`);
+export function listDevices(params?: { roles?: string; system_name?: string }) {
+  const search = new URLSearchParams();
+  if (params?.roles) search.set('roles', params.roles);
+  if (params?.system_name) search.set('system_name', params.system_name);
+  const qs = search.toString();
+  return request<{ items: Device[]; total: number }>(
+    'GET',
+    `/devices${qs ? `?${qs}` : ''}`,
+  );
+}
+
+export function listDeviceSystemNames() {
+  return request<{ items: string[]; total: number }>('GET', '/devices/system-names');
 }
 
 export function getDevice(id: string | number) {

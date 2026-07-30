@@ -39,6 +39,22 @@ type Content struct {
 	Logs         LogFacts       `json:"logs"`
 	Advice       []Advice       `json:"advice"`
 	Metadata     ContentMeta    `json:"metadata"`
+	// Systems holds per-business-system report sections. When present,
+	// narrative/resource/fleet/logs/incidents are scoped per block — not
+	// fleet-aggregated. Legacy reports omit this field.
+	Systems []SystemContentBlock `json:"systems,omitempty"`
+}
+
+// SystemContentBlock is one business system's rendered report body.
+type SystemContentBlock struct {
+	SystemName   string         `json:"system_name"`
+	Narrative    Narrative      `json:"narrative"`
+	Resource     ResourceFacts  `json:"resource"`
+	Fleet        FleetFacts     `json:"fleet"`
+	Logs         LogFacts       `json:"logs"`
+	KeyIncidents []KeyIncident  `json:"key_incidents,omitempty"`
+	Actions      ActionsSummary `json:"actions_summary,omitempty"`
+	Advice       []Advice       `json:"advice,omitempty"`
 }
 
 // HeroStat is one big-number card. Value/DeltaPct/Sparkline are SQL-
@@ -108,6 +124,7 @@ type ContentMeta struct {
 	PeriodStart string   `json:"period_start"`
 	PeriodEnd   string   `json:"period_end"`
 	DataSources []string `json:"data_sources,omitempty"`
+	Sections    []string `json:"sections,omitempty"`
 }
 
 // ContentVersion is the schema version stamped into freshly generated
@@ -873,6 +890,17 @@ func extractJSONField(raw, key string) string {
 // but strict on the spine: a headline must exist and hero cards must
 // each carry a key + label so the grid renders.
 func (c *Content) Validate() error {
+	if len(c.Systems) > 0 {
+		for i, sys := range c.Systems {
+			if strings.TrimSpace(sys.SystemName) == "" {
+				return fmt.Errorf("report: systems[%d] missing system_name", i)
+			}
+			if strings.TrimSpace(sys.Narrative.Headline) == "" {
+				return fmt.Errorf("report: systems[%d] missing narrative.headline", i)
+			}
+		}
+		return nil
+	}
 	if strings.TrimSpace(c.Narrative.Headline) == "" {
 		return fmt.Errorf("report: content missing narrative.headline")
 	}
@@ -907,6 +935,27 @@ func (c *Content) RenderMarkdown(title, locale string) string {
 	}
 	var b strings.Builder
 	b.WriteString("# " + title + "\n\n")
+
+	if len(c.Systems) > 0 {
+		for _, sys := range c.Systems {
+			renderSystemMarkdownBlock(&b, sys, mtr)
+		}
+		if len(c.Changes) > 0 {
+			b.WriteString("## " + mtr("变更记录", "Changes") + "\n\n")
+			for _, ch := range c.Changes {
+				b.WriteString(fmt.Sprintf("- %s %s %s\n", ch.At.Format("01-02 15:04"), ch.Action, ch.ResourceName))
+			}
+			b.WriteString("\n")
+		}
+		if c.Actions.MutatingTotal+c.Actions.SafeTotal > 0 {
+			b.WriteString("## " + mtr("Agent 动作（全局）", "Agent actions (global)") + "\n\n")
+			b.WriteString(fmt.Sprintf("- %s\n\n", mtr(
+				fmt.Sprintf("变更 %d（批准 %d）· 只读 %d", c.Actions.MutatingTotal, c.Actions.MutatingApproved, c.Actions.SafeTotal),
+				fmt.Sprintf("mutating %d (approved %d) · read-only %d", c.Actions.MutatingTotal, c.Actions.MutatingApproved, c.Actions.SafeTotal),
+			)))
+		}
+		return b.String()
+	}
 
 	if c.Narrative.Headline != "" {
 		b.WriteString("## " + c.Narrative.Headline + "\n\n")

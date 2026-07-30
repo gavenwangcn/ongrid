@@ -9,29 +9,134 @@ import type { EnvironmentTag } from './environment';
 export type ReportStatus = 'pending' | 'generating' | 'ready' | 'failed';
 export type ReportKind = 'daily' | 'weekly' | 'monthly' | 'custom';
 
+export type ReportSection = 'cluster' | 'logs' | 'alerts';
+
+export const REPORT_SECTION_DEFS: {
+  key: ReportSection;
+  zh: string;
+  en: string;
+  descZh: string;
+  descEn: string;
+}[] = [
+  {
+    key: 'cluster',
+    zh: '集群态势',
+    en: 'Cluster posture',
+    descZh: '资源水位与监控覆盖',
+    descEn: 'Resource & coverage',
+  },
+  {
+    key: 'logs',
+    zh: '应用日志',
+    en: 'Application logs',
+    descZh: '潜在错误',
+    descEn: 'Potential errors',
+  },
+  {
+    key: 'alerts',
+    zh: '告警与处理',
+    en: 'Alerts & response',
+    descZh: '事件、处置与 agent 动作',
+    descEn: 'Incidents & agent actions',
+  },
+];
+
+export const ALL_REPORT_SECTIONS: ReportSection[] = REPORT_SECTION_DEFS.map((d) => d.key);
+
+export const DEFAULT_DAILY_SECTIONS: ReportSection[] = ['cluster'];
+
 export type ReportScope = {
+  /** @deprecated use system_names */
   system_name?: string;
+  system_names?: string[];
   environment_tag?: EnvironmentTag | '';
+  sections?: ReportSection[];
 };
+
+export function normalizeSystemNames(values: string[] | undefined): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of values ?? []) {
+    const s = raw.trim();
+    if (!s || seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+  }
+  return out.sort((a, b) => a.localeCompare(b));
+}
+
+export function parseReportScopeSystems(scope: ReportScope): string[] {
+  const fromList = normalizeSystemNames(scope.system_names);
+  if (fromList.length > 0) return fromList;
+  const legacy = scope.system_name?.trim();
+  return legacy ? [legacy] : [];
+}
+
+export function normalizeReportSections(values: string[] | undefined): ReportSection[] {
+  const out: ReportSection[] = [];
+  const seen = new Set<string>();
+  for (const raw of values ?? []) {
+    const s = raw.trim() as ReportSection;
+    if (!ALL_REPORT_SECTIONS.includes(s) || seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+  }
+  return out;
+}
+
+/** Legacy reports without sections → all modules. */
+export function effectiveReportSections(scope: ReportScope): ReportSection[] {
+  const normalized = normalizeReportSections(scope.sections);
+  if (normalized.length > 0) return normalized;
+  return ALL_REPORT_SECTIONS;
+}
+
+export function defaultSectionsForKind(kind: ReportKind): ReportSection[] | undefined {
+  if (kind === 'daily') return [...DEFAULT_DAILY_SECTIONS];
+  return undefined;
+}
 
 export function parseReportScope(json?: string): ReportScope {
   if (!json?.trim() || json.trim() === '{}') return {};
   try {
     const v = JSON.parse(json) as ReportScope;
-    return v && typeof v === 'object' ? v : {};
+    if (!v || typeof v !== 'object') return {};
+    const system_names = parseReportScopeSystems(v);
+    return {
+      ...v,
+      system_names: system_names.length ? system_names : undefined,
+      system_name: undefined,
+      sections: normalizeReportSections(v.sections),
+    };
   } catch {
     return {};
   }
 }
 
-export function formatReportScope(scope: ReportScope): string {
+export function formatReportScope(scope: ReportScope, kind?: ReportKind): string {
   const out: ReportScope = {};
-  const name = scope.system_name?.trim();
+  const names = parseReportScopeSystems(scope);
   const env = scope.environment_tag?.trim();
-  if (name) out.system_name = name;
+  if (names.length) out.system_names = names;
   if (env) out.environment_tag = env as EnvironmentTag;
-  if (!out.system_name && !out.environment_tag) return '{}';
+  const sections =
+    scope.sections && scope.sections.length > 0
+      ? scope.sections
+      : defaultSectionsForKind(kind ?? 'daily');
+  if (sections?.length) out.sections = sections;
+  if (!out.system_names?.length && !out.environment_tag && !out.sections?.length) return '{}';
   return JSON.stringify(out);
+}
+
+export function formatReportScopeSystemsLabel(
+  scope: ReportScope,
+  tr: (zh: string, en: string) => string,
+): string {
+  const names = parseReportScopeSystems(scope);
+  if (names.length === 0) return '';
+  if (names.length === 1) return names[0];
+  if (names.length === 2) return `${names[0]}、${names[1]}`;
+  return tr(`${names[0]}等${names.length}系统`, `${names[0]} +${names.length - 1} systems`);
 }
 
 export function uniqueSystemNames(items: { system_name?: string }[]): string[] {
@@ -166,6 +271,24 @@ export type ReportContent = {
   /** @deprecated no longer collected or displayed in new reports */
   usage?: UsageFacts;
   logs: LogFacts;
+  advice?: Advice[];
+  systems?: SystemContentBlock[];
+  metadata?: {
+    period_start?: string;
+    period_end?: string;
+    data_sources?: string[];
+    sections?: ReportSection[];
+  };
+};
+
+export type SystemContentBlock = {
+  system_name: string;
+  narrative: Narrative;
+  resource: ResourceFacts;
+  fleet: FleetFacts;
+  logs: LogFacts;
+  key_incidents?: KeyIncident[];
+  actions_summary?: ActionsSummary;
   advice?: Advice[];
 };
 

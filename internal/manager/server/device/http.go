@@ -40,6 +40,7 @@ func NewHandler(uc *devicebiz.Usecase) *Handler { return &Handler{uc: uc} }
 // Routes:
 //
 //	GET /v1/devices (any authed)
+//	GET /v1/devices/system-names (any authed)
 //	GET /v1/devices/{id} (any authed)
 //	PATCH /v1/devices/{id} (admin) — name / description
 //	PATCH /v1/devices/{id}/roles (admin)
@@ -47,6 +48,7 @@ func NewHandler(uc *devicebiz.Usecase) *Handler { return &Handler{uc: uc} }
 //	GET /v1/devices/{id}/edges (any authed) — junction edges
 func (h *Handler) Register(r chi.Router) {
 	r.Get("/v1/devices", h.list)
+	r.Get("/v1/devices/system-names", h.listSystemNames)
 	r.Get("/v1/devices/{id}", h.get)
 	r.With(h.requireAdmin).Patch("/v1/devices/{id}", h.update)
 	r.With(h.requireAdmin).Patch("/v1/devices/{id}/roles", h.updateRoles)
@@ -105,6 +107,11 @@ type deviceItem struct {
 type listResp struct {
 	Items []deviceItem `json:"items"`
 	Total int          `json:"total"`
+}
+
+type systemNamesResp struct {
+	Items []string `json:"items"`
+	Total int      `json:"total"`
 }
 
 type updateReq struct {
@@ -195,6 +202,29 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		out = append(out, devToItem(d))
 	}
 	writeJSON(w, http.StatusOK, listResp{Items: out, Total: len(out)})
+}
+
+// listSystemNames godoc
+//
+//	@Summary		List distinct device system names
+//	@Description	Returns sorted non-empty operator-assigned system_name values for sidebar navigation.
+//	@Tags			devices
+//	@Success		200	{object}	systemNamesResp
+//	@Router			/v1/devices/system-names [get]
+func (h *Handler) listSystemNames(w http.ResponseWriter, r *http.Request) {
+	if _, ok := tenantctx.From(r.Context()); !ok {
+		writeErr(w, errs.ErrUnauthorized)
+		return
+	}
+	names, err := h.uc.ListSystemNames(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if names == nil {
+		names = []string{}
+	}
+	writeJSON(w, http.StatusOK, systemNamesResp{Items: names, Total: len(names)})
 }
 
 func (h *Handler) get(w http.ResponseWriter, r *http.Request) {

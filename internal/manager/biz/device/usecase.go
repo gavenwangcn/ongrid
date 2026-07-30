@@ -79,6 +79,15 @@ func (u *Usecase) List(ctx context.Context, f ListFilter) ([]*model.Device, erro
 	return u.repo.List(ctx, f)
 }
 
+// ListSystemNames returns sorted non-empty operator-assigned system_name
+// values for sidebar grouping and scope pickers.
+func (u *Usecase) ListSystemNames(ctx context.Context) ([]string, error) {
+	if u.repo == nil {
+		return nil, errs.ErrNotWiredYet
+	}
+	return u.repo.ListDistinctSystemNames(ctx)
+}
+
 // UpdateRoles assigns the device-roles bit set used for sidebar grouping
 // and AI prompt routing. Names is the canonical wire shape ("server" /
 // "storage" / "network" / "database"); the special "unknown" name (or

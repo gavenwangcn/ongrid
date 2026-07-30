@@ -110,8 +110,14 @@ func TitleFor(kind string, p Period, locale string) string {
 func TitleWithScope(base, scopeJSON string) string {
 	s := ParseScope(scopeJSON)
 	var parts []string
-	if sys := strings.TrimSpace(s.SystemName); sys != "" {
-		parts = append(parts, sys)
+	if names := ExplicitSystemNames(s); len(names) > 0 {
+		if len(names) == 1 {
+			parts = append(parts, names[0])
+		} else if len(names) == 2 {
+			parts = append(parts, names[0]+"、"+names[1])
+		} else {
+			parts = append(parts, fmt.Sprintf("%s等%d系统", names[0], len(names)))
+		}
 	}
 	if env := strings.TrimSpace(s.EnvironmentTag); env != "" {
 		parts = append(parts, environmentScopeLabel(env))

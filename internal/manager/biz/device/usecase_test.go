@@ -131,6 +131,20 @@ func (r *fakeRepo) List(context.Context, ListFilter) ([]*devicemodel.Device, err
 
 func (r *fakeRepo) Count(context.Context) (int64, error) { return 0, nil }
 
+func (r *fakeRepo) ListDistinctSystemNames(context.Context) ([]string, error) {
+	return nil, nil
+}
+
+func (r *fakeRepo) ListSystemEnvironmentPairs(context.Context) ([]SystemEnvironment, error) {
+	return nil, nil
+}
+
+func (r *fakeRepo) UpdateOperatorMeta(context.Context, uint64, string, string, string) error {
+	return nil
+}
+
+func (r *fakeRepo) UpdateHostname(context.Context, uint64, string) error { return nil }
+
 func (r *fakeRepo) Delete(_ context.Context, id uint64) error {
 	if r.deleted == nil {
 		r.deleted = map[uint64]bool{}

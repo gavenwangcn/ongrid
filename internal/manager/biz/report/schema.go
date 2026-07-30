@@ -47,6 +47,19 @@ var llmOutputJSONSchema = json.RawMessage(`{
 // reporter worker must emit (narrative + advice only). Embedded in prompts
 // and schema-retry messages so every model sees the same contract.
 func RequiredLLMOutputSchema() string {
+	return requiredLLMOutputSchemaFlat()
+}
+
+// RequiredLLMOutputSchemaForFacts picks flat vs per-system schema based on
+// collected facts shape.
+func RequiredLLMOutputSchemaForFacts(facts *ReportFacts) string {
+	if facts != nil && len(facts.Systems) > 0 {
+		return requiredLLMOutputSchemaPerSystem()
+	}
+	return requiredLLMOutputSchemaFlat()
+}
+
+func requiredLLMOutputSchemaFlat() string {
 	return `{
   "version": "1",
   "narrative": {
@@ -57,6 +70,26 @@ func RequiredLLMOutputSchema() string {
   },
   "advice": [
     {"text": "<actionable recommendation>"}
+  ]
+}`
+}
+
+func requiredLLMOutputSchemaPerSystem() string {
+	return `{
+  "version": "1",
+  "systems": [
+    {
+      "system_name": "<exact system_name from facts.systems[].system_name — do NOT invent>",
+      "narrative": {
+        "headline": "<one sentence summarizing THIS system only>",
+        "paragraphs": [
+          {"text": "<prose for THIS system; may embed {{entity:kind:id|name}} tokens>"}
+        ]
+      },
+      "advice": [
+        {"text": "<actionable recommendation for THIS system>"}
+      ]
+    }
   ]
 }`
 }
@@ -72,4 +105,6 @@ Rules:
 - narrative.paragraphs is an array of {"text":"..."} objects (2–4 paragraphs when the draft has enough material).
 - advice is an array of {"text":"..."}; use [] when there is nothing actionable.
 - Do NOT include hero, resource, fleet, logs, or other numeric sections — the system injects those from SQL facts.
+- When the draft has a systems[] array, output systems[] with one entry per business system — do NOT merge systems into one narrative.
+- Each systems[].system_name must match the draft facts exactly; never aggregate cross-system prose.
 - Preserve {{entity:kind:id|display}} tokens verbatim when present.`

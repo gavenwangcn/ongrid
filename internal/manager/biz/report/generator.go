@@ -164,6 +164,7 @@ func (g *workerGenerator) generate(ctx context.Context, rpt *model.Report) error
 	period := Period{Start: rpt.PeriodStart, End: rpt.PeriodEnd}
 	prev := previousPeriod(period)
 	scope := ParseScope(rpt.ScopeJSON)
+	sections := EffectiveSections(scope)
 
 	g.log.Info("report pipeline facts",
 		slog.String("report_id", rpt.ID),
@@ -172,6 +173,7 @@ func (g *workerGenerator) generate(ctx context.Context, rpt *model.Report) error
 		slog.Time("period_start", period.Start),
 		slog.Time("period_end", period.End),
 		slog.String("scope_system", strings.TrimSpace(scope.SystemName)),
+		slog.Any("sections", sections),
 		slog.String("locale", g.localeFor(rpt)),
 		slog.Duration("timeout", g.cfg.Timeout),
 	)
@@ -302,23 +304,31 @@ func (g *workerGenerator) generate(ctx context.Context, rpt *model.Report) error
 	// Defense-in-depth: overwrite every fact-derived field from facts so
 	// the LLM owns only prose (narrative + advice). Resource / Fleet /
 	// Changes / Hero / Actions are all data-true and injected here.
-	content.Hero = facts.Hero
-	content.Resource = facts.Resource
-	content.Fleet = facts.Fleet
-	content.Actions = facts.Actions
-	content.Changes = facts.Changes
-	content.Logs = facts.Logs
-	content.KeyIncidents = mergeIncidents(facts.Incidents, content.KeyIncidents)
+	if len(facts.Systems) > 0 {
+		mergeSystemFactsIntoContent(content, facts)
+		content.Actions = facts.Actions
+		content.Changes = facts.Changes
+	} else {
+		content.Hero = facts.Hero
+		content.Resource = facts.Resource
+		content.Fleet = facts.Fleet
+		content.Actions = facts.Actions
+		content.Changes = facts.Changes
+		content.Logs = facts.Logs
+		content.KeyIncidents = mergeIncidents(facts.Incidents, content.KeyIncidents)
+	}
+	TrimContentForSections(content, sections)
 	content.Version = ContentVersion
 	content.Metadata = ContentMeta{
 		PeriodStart: period.Start.Format(time.RFC3339),
 		PeriodEnd:   period.End.Format(time.RFC3339),
-		DataSources: []string{"prometheus", "loki", "incidents", "audit_log", "proposals", "devices"},
+		DataSources: dataSourcesForSections(sections),
+		Sections:    sections,
 	}
 
 	rpt.ContentJSON = content.MustJSON()
 	rpt.ContentMD = content.RenderMarkdown(rpt.Title, g.localeFor(rpt))
-	rpt.SummaryText = truncate(content.Narrative.Headline, 510)
+	rpt.SummaryText = truncate(summaryHeadline(content), 510)
 	rpt.Status = model.StatusReady
 	rpt.ErrorMsg = ""
 	now := time.Now().UTC()
@@ -411,11 +421,14 @@ func (g *workerGenerator) buildPrompt(rpt *model.Report, facts *ReportFacts) str
 		b.WriteString(d)
 		b.WriteString("\n")
 	}
-	if sys := strings.TrimSpace(ParseScope(rpt.ScopeJSON).SystemName); sys != "" {
-		b.WriteString(mtr(
-			fmt.Sprintf("报告范围：系统「%s」（仅统计该系统下设备）。\n", sys),
-			fmt.Sprintf("Report scope: system \"%s\" (devices in this system only).\n", sys),
-		))
+	if d := sectionDirective(EffectiveSections(ParseScope(rpt.ScopeJSON)), en); d != "" {
+		b.WriteString(d)
+	}
+	if d := systemDimensionDirective(facts, en); d != "" {
+		b.WriteString(d)
+	}
+	if d := scopeSystemsDirective(ParseScope(rpt.ScopeJSON), facts, en); d != "" {
+		b.WriteString(d)
 	}
 	if override := g.scheduleOverride(rpt); override != "" {
 		b.WriteString(mtr("\n额外要求：\n", "\nAdditional requirements:\n"))
@@ -433,9 +446,94 @@ func (g *workerGenerator) buildPrompt(rpt *model.Report, facts *ReportFacts) str
 		"\n严格按以下 ContentJSON schema 输出，只输出 JSON，不要其他字段或嵌套结构：",
 		"\nOutput EXACTLY this ContentJSON schema — JSON only, no extra keys or nested report sections:"))
 	b.WriteString("\n\n```json\n")
-	b.WriteString(RequiredLLMOutputSchema())
+	b.WriteString(RequiredLLMOutputSchemaForFacts(facts))
 	b.WriteString("\n```\n")
 	return b.String()
+}
+
+func summaryHeadline(c *Content) string {
+	if len(c.Systems) == 1 {
+		return c.Systems[0].Narrative.Headline
+	}
+	if len(c.Systems) > 1 {
+		return c.Systems[0].Narrative.Headline
+	}
+	return c.Narrative.Headline
+}
+
+func mergeSystemFactsIntoContent(content *Content, facts *ReportFacts) {
+	byName := make(map[string]SystemContentBlock, len(content.Systems))
+	for _, blk := range content.Systems {
+		byName[blk.SystemName] = blk
+	}
+	merged := make([]SystemContentBlock, 0, len(facts.Systems))
+	for _, sf := range facts.Systems {
+		blk := byName[sf.SystemName]
+		blk.SystemName = sf.SystemName
+		if strings.TrimSpace(blk.Narrative.Headline) == "" {
+			blk.Narrative.Headline = sf.SystemName
+		}
+		blk.Resource = sf.Resource
+		blk.Fleet = sf.Fleet
+		blk.Logs = sf.Logs
+		blk.KeyIncidents = mergeIncidents(sf.Incidents, blk.KeyIncidents)
+		merged = append(merged, blk)
+	}
+	content.Systems = merged
+}
+
+func systemDimensionDirective(facts *ReportFacts, en bool) string {
+	if facts == nil || len(facts.Systems) == 0 {
+		return ""
+	}
+	mtr := func(zh, eng string) string {
+		if en {
+			return eng
+		}
+		return zh
+	}
+	if len(facts.Systems) == 1 {
+		return mtr(
+			fmt.Sprintf("本报告按业务系统维度输出：仅系统「%s」。叙述、建议必须只覆盖该系统 facts，禁止汇总其他系统或按单台设备分段。\n", facts.Systems[0].SystemName),
+			fmt.Sprintf("This report is organized by business system: only \"%s\". Narrate that system's facts only — do NOT merge other systems or write per-device sections.\n", facts.Systems[0].SystemName),
+		)
+	}
+	names := make([]string, len(facts.Systems))
+	for i, s := range facts.Systems {
+		names[i] = s.SystemName
+	}
+	return mtr(
+		fmt.Sprintf("本报告按业务系统维度分段输出，共 %d 个系统：%s。必须为每个系统单独写 narrative/advice（systems[] 一项对应一个系统），禁止跨系统汇总成一段，禁止按单台设备分段。\n", len(names), strings.Join(names, "、")),
+		fmt.Sprintf("This report has %d business-system sections: %s. Write one systems[] entry per system with its own narrative/advice — never merge systems into one block or write per-device sections.\n", len(names), strings.Join(names, ", ")),
+	)
+}
+
+func scopeSystemsDirective(scope Scope, facts *ReportFacts, en bool) string {
+	mtr := func(zh, eng string) string {
+		if en {
+			return eng
+		}
+		return zh
+	}
+	if names := ExplicitSystemNames(scope); len(names) > 0 {
+		if len(names) == 1 {
+			return mtr(
+				fmt.Sprintf("报告范围：系统「%s」。\n", names[0]),
+				fmt.Sprintf("Report scope: system \"%s\".\n", names[0]),
+			)
+		}
+		return mtr(
+			fmt.Sprintf("报告范围：系统 %s（共 %d 个）。\n", strings.Join(names, "、"), len(names)),
+			fmt.Sprintf("Report scope: systems %s (%d total).\n", strings.Join(names, ", "), len(names)),
+		)
+	}
+	if facts != nil && len(facts.Systems) > 0 {
+		return mtr(
+			fmt.Sprintf("报告范围：全部系统（已发现 %d 个业务系统）。\n", len(facts.Systems)),
+			fmt.Sprintf("Report scope: all systems (%d business systems discovered).\n", len(facts.Systems)),
+		)
+	}
+	return ""
 }
 
 // reportIntro is the opening line of the reporter user message, keyed by

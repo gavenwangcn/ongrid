@@ -114,14 +114,18 @@ export default function EdgesPage() {
   const location = useLocation();
   const { tr } = useI18n();
   const { canMutate } = usePermissions();
-  // Sidebar sub-items navigate by appending ?roles=server|storage|network|unknown.
-  // No param = "全部". We forward the param to the backend so filtering uses the
-  // sargable IN-list path (see internal/manager/biz/edge.ListFilter).
+  // Sidebar sub-items navigate by ?system_name= (business system) or legacy
+  // ?roles= filters. No param = "全部".
   const rolesFilter = useMemo(() => {
     const v = new URLSearchParams(location.search).get("roles")?.trim() ?? "";
     return v;
   }, [location.search]);
+  const systemFilter = useMemo(() => {
+    const v = new URLSearchParams(location.search).get("system_name")?.trim() ?? "";
+    return v;
+  }, [location.search]);
   const headerTitle = (() => {
+    if (systemFilter) return systemFilter;
     const pair = ROLE_FILTER_TITLES[rolesFilter];
     return pair ? tr(pair[0], pair[1]) : tr("设备", "Devices");
   })();
@@ -169,8 +173,11 @@ export default function EdgesPage() {
 
   const refresh = useCallback(async () => {
     try {
+      const deviceListParams: { roles?: string; system_name?: string } = {};
+      if (rolesFilter) deviceListParams.roles = rolesFilter;
+      if (systemFilter) deviceListParams.system_name = systemFilter;
       const [deviceResp, edgeResp, attachments] = await Promise.all([
-        listDevices(rolesFilter ? { roles: rolesFilter } : undefined),
+        listDevices(Object.keys(deviceListParams).length ? deviceListParams : undefined),
         listEdges(),
         loadK8sEdgeAttachments(),
       ]);
@@ -215,7 +222,7 @@ export default function EdgesPage() {
     } finally {
       setLoading(false);
     }
-  }, [rolesFilter, tr]);
+  }, [rolesFilter, systemFilter, tr]);
 
   useEffect(() => {
     void refresh();
@@ -234,6 +241,7 @@ export default function EdgesPage() {
       accessKey: created.access_key_id,
       secretKey: created.secret_key,
     });
+    notifyDevicesChanged();
     void refresh();
   }
 

@@ -8,7 +8,7 @@ import { usePermissions } from '@/store/me';
 import { useI18n } from '@/i18n/locale';
 import { ApiError } from '@/api/client';
 import { listChannels, type Channel } from '@/api/alerts';
-import { listDevices } from '@/api/devices';
+import { listDeviceSystemNames } from '@/api/devices';
 import {
   ENVIRONMENT_TAGS,
   ENVIRONMENT_TAG_LABELS,
@@ -20,16 +20,20 @@ import {
   createSchedule,
   deleteSchedule,
   formatReportScope,
+  formatReportScopeSystemsLabel,
   listSchedules,
   parseReportScope,
+  parseReportScopeSystems,
   runScheduleNow,
   toggleSchedule,
   updateSchedule,
-  uniqueSystemNames,
   type ReportKind,
   type ReportSchedule,
+  type ReportSection,
   type ScheduleInput,
 } from '@/api/reports';
+import { ReportSectionsPicker, initialDailySections } from '@/components/ReportSectionsPicker';
+import { ReportSystemsPicker } from '@/components/ReportSystemsPicker';
 
 const KINDS: { key: ReportKind; zh: string; en: string }[] = [
   { key: 'daily', zh: '日报', en: 'Daily' },
@@ -174,23 +178,28 @@ export default function ReportSchedulesPage() {
                 <div className="mt-1 font-mono text-xs text-zinc-500">
                   {s.cron_spec} · {s.timezone}
                 </div>
-                {(parseReportScope(s.scope_json).system_name || parseReportScope(s.scope_json).environment_tag) && (
+                {(() => {
+                  const scope = parseReportScope(s.scope_json);
+                  const sysLabel = formatReportScopeSystemsLabel(scope, tr);
+                  if (!sysLabel && !scope.environment_tag) return null;
+                  return (
                   <div className="mt-0.5 text-xs text-zinc-500">
-                    {parseReportScope(s.scope_json).system_name && (
+                    {sysLabel && (
                       <>
                         {tr('系统：', 'System: ')}
-                        {parseReportScope(s.scope_json).system_name}
+                        {sysLabel}
                       </>
                     )}
-                    {parseReportScope(s.scope_json).system_name && parseReportScope(s.scope_json).environment_tag && ' · '}
-                    {parseReportScope(s.scope_json).environment_tag && (
+                    {sysLabel && scope.environment_tag && ' · '}
+                    {scope.environment_tag && (
                       <>
                         {tr('环境：', 'Environment: ')}
-                        {environmentTagLabel(parseReportScope(s.scope_json).environment_tag, tr)}
+                        {environmentTagLabel(scope.environment_tag, tr)}
                       </>
                     )}
                   </div>
-                )}
+                  );
+                })()}
                 {s.next_fire_at && (
                   <div className="mt-0.5 text-xs text-zinc-600">
                     {tr('下次：', 'Next: ')}
@@ -274,22 +283,25 @@ function ScheduleForm({
   const [tz, setTz] = useState(initial?.timezone ?? DEFAULT_TZ);
   const [chanIDs, setChanIDs] = useState<number[]>(initial?.channel_ids ?? []);
   const [promptOverride, setPromptOverride] = useState(initial?.prompt_override ?? '');
-  const [systemName, setSystemName] = useState(parseReportScope(initial?.scope_json).system_name ?? '');
+  const [systemNamesSelected, setSystemNamesSelected] = useState<string[]>(
+    parseReportScopeSystems(parseReportScope(initial?.scope_json)),
+  );
   const [environmentTag, setEnvironmentTag] = useState<EnvironmentTag | ''>(
     parseReportScope(initial?.scope_json).environment_tag ?? '',
   );
-  const [systemNames, setSystemNames] = useState<string[]>([]);
+  const [sections, setSections] = useState<ReportSection[]>(initialDailySections(initial?.scope_json));
+  const [systemNameOptions, setSystemNameOptions] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    listDevices()
+    listDeviceSystemNames()
       .then((r) => {
-        if (!cancelled) setSystemNames(uniqueSystemNames(r.items ?? []));
+        if (!cancelled) setSystemNameOptions(r.items ?? []);
       })
       .catch(() => {
-        if (!cancelled) setSystemNames([]);
+        if (!cancelled) setSystemNameOptions([]);
       });
     return () => {
       cancelled = true;
@@ -303,7 +315,14 @@ function ScheduleForm({
       name,
       kind,
       timezone: tz,
-      scope_json: formatReportScope({ system_name: systemName, environment_tag: environmentTag }),
+      scope_json: formatReportScope(
+        {
+          system_names: systemNamesSelected,
+          environment_tag: environmentTag,
+          sections: kind === 'daily' ? sections : undefined,
+        },
+        kind,
+      ),
       channel_ids: chanIDs,
       prompt_override: promptOverride || undefined,
       // For custom kind the cron is required; for presets it's optional
@@ -319,7 +338,7 @@ function ScheduleForm({
     } finally {
       setSaving(false);
     }
-  }, [name, kind, tz, cron, chanIDs, promptOverride, systemName, environmentTag, initial, onSaved, tr]);
+  }, [name, kind, tz, cron, chanIDs, promptOverride, systemNamesSelected, environmentTag, sections, initial, onSaved, tr]);
 
   return (
     <Modal
@@ -393,17 +412,12 @@ function ScheduleForm({
         </Field>
 
         <Field label={tr('系统范围', 'System scope')}>
-          <select
-            value={systemName}
-            onChange={(e) => setSystemName(e.target.value)}
-            className={cn(inputCls, 'text-sm')}
-          >
-            <option value="">{tr('全部系统', 'All systems')}</option>
-            {systemNames.map((name) => (
-              <option key={name} value={name}>{name}</option>
-            ))}
-          </select>
-          {systemNames.length === 0 && (
+          <ReportSystemsPicker
+            options={systemNameOptions}
+            value={systemNamesSelected}
+            onChange={setSystemNamesSelected}
+          />
+          {systemNameOptions.length === 0 && (
             <p className="mt-1 text-[11px] text-zinc-600">
               {tr('未找到已填系统名称的设备。', 'No devices with a system name yet.')}
             </p>
@@ -424,6 +438,12 @@ function ScheduleForm({
             ))}
           </select>
         </Field>
+
+        {kind === 'daily' && (
+          <Field label={tr('报告内容', 'Report sections')}>
+            <ReportSectionsPicker value={sections} onChange={setSections} />
+          </Field>
+        )}
 
         <Field label={tr('投递渠道', 'Delivery channels')}>
           {channels.length === 0 ? (

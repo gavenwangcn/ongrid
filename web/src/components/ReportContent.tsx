@@ -9,8 +9,11 @@ import type {
   LogErrorSource,
   Paragraph,
   ReportContent as ReportContentT,
+  ReportSection,
   ResourceFacts,
+  SystemContentBlock,
 } from '@/api/reports';
+import { effectiveReportSections } from '@/api/reports';
 
 // ReportContent renders a ContentJSON report body as colour-coded
 // thematic rows: cluster posture, application logs, alerts & response —
@@ -253,17 +256,89 @@ function LogSourcesGrouped({ sources, tr }: { sources: LogErrorSource[]; tr: (zh
   );
 }
 
-export function ReportContentView({ content }: { content: ReportContentT }) {
+export function ReportContentView({
+  content,
+  sections: sectionsProp,
+}: {
+  content: ReportContentT;
+  sections?: ReportSection[];
+}) {
   const { tr } = useI18n();
-  const paras: Paragraph[] = content.narrative?.paragraphs ?? [];
-  const incidents = content.key_incidents ?? [];
-  const changes = content.changes ?? [];
-  const advice = content.advice ?? [];
-  const res = content.resource;
-  const fleet = content.fleet ?? { total: 0, online: 0 };
-  const a = content.actions_summary ?? { mutating_total: 0, mutating_approved: 0, safe_total: 0 };
-  const logs = content.logs ?? { available: false, total_errors: 0 };
+  const sections = sectionsProp?.length
+    ? sectionsProp
+    : effectiveReportSections({ sections: content.metadata?.sections });
 
+  if (content.systems && content.systems.length > 0) {
+    const changes = content.changes ?? [];
+    const a = content.actions_summary ?? { mutating_total: 0, mutating_approved: 0, safe_total: 0 };
+    return (
+      <div className="space-y-8">
+        {content.systems.map((sys) => (
+          <section key={sys.system_name} className="space-y-7">
+            <h2 className="border-b border-zinc-800 pb-2 text-lg font-semibold text-zinc-100">{sys.system_name}</h2>
+            <ReportSystemBody sys={sys} sections={sections} tr={tr} />
+          </section>
+        ))}
+        {sections.includes('alerts') && changes.length > 0 && (
+          <Row tone="cyan" title={tr('变更记录', 'Changes')}>
+            <div className="space-y-1">{changes.map((ch, i) => <ChangeRow key={i} c={ch} />)}</div>
+          </Row>
+        )}
+        {sections.includes('alerts') && a.mutating_total + a.safe_total > 0 && (
+          <Row tone="rose" title={tr('Agent 动作（全局）', 'Agent actions (global)')}>
+            <StatCard
+              tone="rose"
+              label={tr('Agent 动作', 'Agent actions')}
+              value={a.mutating_total + a.safe_total}
+              sub={tr(`变更 ${a.mutating_total} · 只读 ${a.safe_total}`, `mut ${a.mutating_total} · ro ${a.safe_total}`)}
+            />
+          </Row>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <ReportSystemBody
+      sys={{
+        system_name: '',
+        narrative: content.narrative,
+        resource: content.resource,
+        fleet: content.fleet,
+        logs: content.logs,
+        key_incidents: content.key_incidents,
+        actions_summary: content.actions_summary,
+        advice: content.advice,
+      }}
+      sections={sections}
+      tr={tr}
+      globalChanges={content.changes}
+    />
+  );
+}
+
+function ReportSystemBody({
+  sys,
+  sections,
+  tr,
+  globalChanges,
+}: {
+  sys: SystemContentBlock;
+  sections: ReportSection[];
+  tr: (zh: string, en: string) => string;
+  globalChanges?: ChangeFact[];
+}) {
+  const showCluster = sections.includes('cluster');
+  const showLogs = sections.includes('logs');
+  const showAlerts = sections.includes('alerts');
+  const paras: Paragraph[] = sys.narrative?.paragraphs ?? [];
+  const incidents = sys.key_incidents ?? [];
+  const changes = globalChanges ?? [];
+  const advice = sys.advice ?? [];
+  const res = sys.resource;
+  const fleet = sys.fleet ?? { total: 0, online: 0 };
+  const a = sys.actions_summary ?? { mutating_total: 0, mutating_approved: 0, safe_total: 0 };
+  const logs = sys.logs ?? { available: false, total_errors: 0 };
   const onlinePct = fleet.total > 0 ? Math.round((fleet.online / fleet.total) * 100) : 0;
   const resolved = incidents.filter((i) => i.status === 'resolved').length;
   const mttr = (() => {
@@ -275,6 +350,7 @@ export function ReportContentView({ content }: { content: ReportContentT }) {
   return (
     <div className="space-y-7">
       {/* ROW 1 — 集群态势 */}
+      {showCluster && (
       <Row tone="indigo" title={tr('集群态势', 'Cluster posture')} desc={tr('资源水位与监控覆盖', 'resource & coverage')}>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           {res?.available ? (
@@ -295,11 +371,12 @@ export function ReportContentView({ content }: { content: ReportContentT }) {
           )}
         </div>
       </Row>
+      )}
 
       {/* Narrative — the "中间说明" */}
-      {content.narrative?.headline && (
+      {showCluster && sys.narrative?.headline && (
         <section className="rounded-lg border border-zinc-800 bg-zinc-900/30 p-4">
-          <h2 className="mb-1.5 text-base font-semibold text-zinc-100">{content.narrative.headline}</h2>
+          <h2 className="mb-1.5 text-base font-semibold text-zinc-100">{sys.narrative.headline}</h2>
           {paras.length > 0 && (
             <div className="space-y-2 text-sm leading-relaxed text-zinc-300">
               {paras.map((p, i) => (
@@ -311,7 +388,7 @@ export function ReportContentView({ content }: { content: ReportContentT }) {
       )}
 
       {/* ROW — 应用日志（潜在错误） */}
-      {logs.available && (
+      {showLogs && logs.available && (
         <Row
           tone="rose"
           title={tr('应用日志', 'Application logs')}
@@ -347,6 +424,7 @@ export function ReportContentView({ content }: { content: ReportContentT }) {
       )}
 
       {/* ROW 2 — 告警与处理 */}
+      {showAlerts && (
       <Row tone="rose" title={tr('告警与处理', 'Alerts & response')} desc={tr('事件、处置与 agent 动作', 'incidents & agent actions')}>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <StatCard tone="rose" label={tr('告警', 'Incidents')} value={incidents.length} />
@@ -360,9 +438,10 @@ export function ReportContentView({ content }: { content: ReportContentT }) {
           </div>
         )}
       </Row>
+      )}
 
       {/* Changes */}
-      {changes.length > 0 && (
+      {showAlerts && changes.length > 0 && (
         <Row tone="cyan" title={tr('变更记录', 'Changes')}>
           <div className="space-y-1">{changes.map((ch, i) => <ChangeRow key={i} c={ch} />)}</div>
         </Row>

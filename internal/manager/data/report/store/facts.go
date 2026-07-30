@@ -58,21 +58,34 @@ var severityRank = map[string]int{"info": 0, "warning": 1, "critical": 2}
 
 func (c *FactsCollector) Collect(ctx context.Context, period, prev bizreport.Period, scope bizreport.Scope) (*bizreport.ReportFacts, error) {
 	start := time.Now()
+	scope = bizreport.NormalizeScope(scope)
 	c.log.Info("report facts collect start",
 		slog.Time("period_start", period.Start),
 		slog.Time("period_end", period.End),
-		slog.String("system_name", strings.TrimSpace(scope.SystemName)),
+		slog.Any("system_names", scope.SystemNames),
 		slog.Bool("prom_wired", c.prom != nil),
 		slog.Bool("loki_wired", c.loki != nil),
 	)
 
+	targets, err := c.resolveTargetSystems(ctx, scope)
+	if err != nil {
+		c.log.Error("report facts resolve target systems failed", slog.Any("err", err))
+		return nil, err
+	}
+	if len(targets) > 0 {
+		return c.collectPerSystem(ctx, period, prev, scope, targets, start)
+	}
+	return c.collectFlat(ctx, period, prev, scope, start)
+}
+
+func (c *FactsCollector) collectFlat(ctx context.Context, period, prev bizreport.Period, scope bizreport.Scope, start time.Time) (*bizreport.ReportFacts, error) {
 	scope, err := c.resolveScope(ctx, scope)
 	if err != nil {
 		c.log.Error("report facts scope resolve failed", slog.Any("err", err))
 		return nil, err
 	}
-	c.log.Info("report facts scope resolved",
-		slog.String("system_name", strings.TrimSpace(scope.SystemName)),
+	c.log.Info("report facts scope resolved (flat)",
+		slog.Any("system_names", scope.SystemNames),
 		slog.Any("device_ids", scopedDeviceIDs(scope)),
 		slog.Bool("scoped_empty", scopedEmpty(scope)),
 	)
@@ -83,36 +96,132 @@ func (c *FactsCollector) Collect(ctx context.Context, period, prev bizreport.Per
 		AlertCounts: map[string]int{},
 	}
 
-	incidents, err := c.collectIncidents(ctx, period, scope)
-	if err != nil {
-		c.log.Error("report facts incidents failed", slog.Any("err", err))
-		return nil, err
-	}
-	facts.Incidents = incidents
-	facts.Actions = c.collectActions(ctx, period)
-	facts.AlertCounts = c.collectAlertCounts(ctx, period, scope)
-	facts.Fleet = c.collectFleet(ctx, scope)
-	facts.Changes = c.collectChanges(ctx, period)
-	facts.Resource = c.collectResource(ctx, period, scope)
-	facts.Logs = c.collectLogs(ctx, period, prev, scope)
-	facts.Hero = c.buildHero(period, prev, scope, incidents, facts.Actions, facts.Fleet, facts.Resource, facts.Logs, c.countIncidents(ctx, prev, scope))
+	sections := bizreport.EffectiveSections(scope)
+	wantCluster := bizreport.SectionEnabled(sections, bizreport.SectionCluster)
+	wantLogs := bizreport.SectionEnabled(sections, bizreport.SectionLogs)
+	wantAlerts := bizreport.SectionEnabled(sections, bizreport.SectionAlerts)
 
-	c.log.Info("report facts collect done",
+	var incidents []bizreport.IncidentFact
+	var prevIncidents int
+	if wantAlerts {
+		var err error
+		incidents, err = c.collectIncidents(ctx, period, scope)
+		if err != nil {
+			c.log.Error("report facts incidents failed", slog.Any("err", err))
+			return nil, err
+		}
+		facts.Incidents = incidents
+		facts.Actions = c.collectActions(ctx, period)
+		facts.AlertCounts = c.collectAlertCounts(ctx, period, scope)
+		facts.Changes = c.collectChanges(ctx, period)
+		prevIncidents = c.countIncidents(ctx, prev, scope)
+	}
+	if wantCluster {
+		facts.Fleet = c.collectFleet(ctx, scope)
+		facts.Resource = c.collectResource(ctx, period, scope)
+	}
+	if wantLogs {
+		facts.Logs = c.collectLogs(ctx, period, prev, scope)
+	}
+	facts.Hero = c.buildHero(period, prev, scope, incidents, facts.Actions, facts.Fleet, facts.Resource, facts.Logs, prevIncidents)
+
+	c.log.Info("report facts collect done (flat)",
 		slog.Duration("duration", time.Since(start)),
 		slog.Int("incidents", len(facts.Incidents)),
 		slog.Int("fleet_total", facts.Fleet.Total),
 		slog.Int("fleet_online", facts.Fleet.Online),
 		slog.Bool("resource_available", facts.Resource.Available),
-		slog.Float64("cpu_avg", facts.Resource.CPUAvg),
-		slog.Float64("cpu_peak", facts.Resource.CPUPeak),
-		slog.Float64("mem_avg", facts.Resource.MemAvg),
-		slog.Float64("mem_peak", facts.Resource.MemPeak),
-		slog.Float64("disk_avg", facts.Resource.DiskAvg),
-		slog.Float64("disk_peak", facts.Resource.DiskPeak),
-		slog.Bool("logs_available", facts.Logs.Available),
-		slog.Int("log_errors", facts.Logs.TotalErrors),
 	)
 	return facts, nil
+}
+
+func (c *FactsCollector) collectPerSystem(
+	ctx context.Context,
+	period, prev bizreport.Period,
+	scope bizreport.Scope,
+	targets []string,
+	start time.Time,
+) (*bizreport.ReportFacts, error) {
+	sections := bizreport.EffectiveSections(scope)
+	wantCluster := bizreport.SectionEnabled(sections, bizreport.SectionCluster)
+	wantLogs := bizreport.SectionEnabled(sections, bizreport.SectionLogs)
+	wantAlerts := bizreport.SectionEnabled(sections, bizreport.SectionAlerts)
+
+	facts := &bizreport.ReportFacts{
+		Period:      period,
+		PrevPeriod:  prev,
+		AlertCounts: map[string]int{},
+		Systems:     make([]bizreport.SystemFactsBlock, 0, len(targets)),
+	}
+
+	for _, sysName := range targets {
+		sysScope, err := c.resolveScope(ctx, bizreport.ScopeForSystem(scope, sysName))
+		if err != nil {
+			return nil, err
+		}
+		block := bizreport.SystemFactsBlock{SystemName: sysName}
+		var incidents []bizreport.IncidentFact
+		var prevIncidents int
+		if wantAlerts {
+			incidents, err = c.collectIncidents(ctx, period, sysScope)
+			if err != nil {
+				return nil, err
+			}
+			block.Incidents = incidents
+			block.AlertCounts = c.collectAlertCounts(ctx, period, sysScope)
+			prevIncidents = c.countIncidents(ctx, prev, sysScope)
+		}
+		if wantCluster {
+			block.Fleet = c.collectFleet(ctx, sysScope)
+			block.Resource = c.collectResource(ctx, period, sysScope)
+		}
+		if wantLogs {
+			block.Logs = c.collectLogs(ctx, period, prev, sysScope)
+			block.Logs.SystemName = sysName
+		}
+		block.Hero = c.buildHero(period, prev, sysScope, incidents, bizreport.ActionsSummary{}, block.Fleet, block.Resource, block.Logs, prevIncidents)
+		facts.Systems = append(facts.Systems, block)
+	}
+
+	if wantAlerts {
+		facts.Actions = c.collectActions(ctx, period)
+		facts.Changes = c.collectChanges(ctx, period)
+	}
+
+	c.log.Info("report facts collect done (per-system)",
+		slog.Duration("duration", time.Since(start)),
+		slog.Int("systems", len(facts.Systems)),
+	)
+	return facts, nil
+}
+
+func (c *FactsCollector) resolveTargetSystems(ctx context.Context, scope bizreport.Scope) ([]string, error) {
+	if names := bizreport.ExplicitSystemNames(scope); len(names) > 0 {
+		return names, nil
+	}
+	if len(scope.EdgeIDs) > 0 {
+		return nil, nil
+	}
+	return c.listDistinctSystemNames(ctx, scope.EnvironmentTag)
+}
+
+func (c *FactsCollector) listDistinctSystemNames(ctx context.Context, envTag string) ([]string, error) {
+	q := c.db.WithContext(ctx).Table("devices").
+		Where("deleted_at IS NULL AND system_name <> ''")
+	if env := strings.TrimSpace(envTag); env != "" {
+		q = q.Where("environment_tag = ?", env)
+	}
+	var names []string
+	if err := q.Distinct("system_name").Order("system_name ASC").Pluck("system_name", &names).Error; err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		if s := strings.TrimSpace(n); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out, nil
 }
 
 // --- resource trends (Prometheus period avg/peak) ---
@@ -676,7 +785,8 @@ func (c *FactsCollector) resolveScope(ctx context.Context, scope bizreport.Scope
 }
 
 func scopeHasDeviceFilter(scope bizreport.Scope) bool {
-	return strings.TrimSpace(scope.SystemName) != "" || strings.TrimSpace(scope.EnvironmentTag) != ""
+	scope = bizreport.NormalizeScope(scope)
+	return len(scope.SystemNames) > 0 || strings.TrimSpace(scope.EnvironmentTag) != ""
 }
 
 func (c *FactsCollector) deviceIDsForScope(ctx context.Context, scope bizreport.Scope) ([]uint64, error) {
@@ -684,11 +794,14 @@ func (c *FactsCollector) deviceIDsForScope(ctx context.Context, scope bizreport.
 		ID uint64
 	}
 	var rows []idRow
+	scope = bizreport.NormalizeScope(scope)
 	q := c.db.WithContext(ctx).Table("devices").
 		Select("id").
 		Where("deleted_at IS NULL")
-	if name := strings.TrimSpace(scope.SystemName); name != "" {
-		q = q.Where("system_name = ?", name)
+	if len(scope.SystemNames) == 1 {
+		q = q.Where("system_name = ?", scope.SystemNames[0])
+	} else if len(scope.SystemNames) > 1 {
+		q = q.Where("system_name IN ?", scope.SystemNames)
 	}
 	if env := strings.TrimSpace(scope.EnvironmentTag); env != "" {
 		q = q.Where("environment_tag = ?", env)

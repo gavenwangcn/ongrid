@@ -50,6 +50,24 @@ type ReportFacts struct {
 	// matching the Logs UI shortcut: error|panic|fatal). Scoped to the
 	// same devices as the report (system_name / edge_ids).
 	Logs LogFacts `json:"logs"`
+
+	// Systems holds per-business-system facts when the report is scoped
+	// to one or more systems (or all systems discovered from devices).
+	// When populated, top-level Resource/Fleet/Logs are empty — render
+	// and narrate per block, not fleet-aggregated.
+	Systems []SystemFactsBlock `json:"systems,omitempty"`
+}
+
+// SystemFactsBlock is the deterministic input for one business system.
+type SystemFactsBlock struct {
+	SystemName  string         `json:"system_name"`
+	Hero        []HeroStat     `json:"hero,omitempty"`
+	Resource    ResourceFacts  `json:"resource"`
+	Fleet       FleetFacts     `json:"fleet"`
+	Incidents   []IncidentFact `json:"incidents,omitempty"`
+	Actions     ActionsSummary `json:"actions,omitempty"`
+	AlertCounts map[string]int `json:"alert_counts,omitempty"`
+	Logs        LogFacts       `json:"logs"`
 }
 
 // LogFacts aggregates potential application errors from Loki over the
@@ -142,8 +160,13 @@ type Scope struct {
 	FleetTags      []string `json:"fleet_tags,omitempty"`
 	EdgeIDs        []uint64 `json:"edge_ids,omitempty"`
 	SystemName     string   `json:"system_name,omitempty"`
+	SystemNames    []string `json:"system_names,omitempty"`
 	EnvironmentTag string   `json:"environment_tag,omitempty"`
 	SeverityMin    string   `json:"severity_min,omitempty"`
+	// Sections lists enabled report body modules (cluster/logs/alerts).
+	// Empty → all sections (legacy). Daily reports created from the SPA
+	// stamp an explicit list; default is cluster-only.
+	Sections []string `json:"sections,omitempty"`
 }
 
 // ParseScope reads a ScopeJSON blob. Empty / "{}" / invalid → zero
@@ -154,7 +177,7 @@ func ParseScope(raw string) Scope {
 		return s
 	}
 	_ = json.Unmarshal([]byte(raw), &s)
-	return s
+	return NormalizeScope(s)
 }
 
 // FactsCollector runs the pure-data collection. Implemented by

@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -305,8 +306,18 @@ func (r *Repo) List(ctx context.Context, f biz.ListFilter) ([]*model.Device, err
 	if f.Name != "" {
 		tx = tx.Where("name LIKE ?", "%"+f.Name+"%")
 	}
-	if f.SystemName != "" {
-		tx = tx.Where("system_name = ?", f.SystemName)
+	if sn := strings.TrimSpace(f.SystemName); sn != "" {
+		// Match operator metadata on the device row OR on any linked edge.
+		// Historical rows often have system_name only on edges (pre-split /
+		// before register copied meta onto devices).
+		tx = tx.Where(`system_name = ? OR id IN (
+			SELECT ed.device_id FROM edge_devices ed
+			INNER JOIN edges e ON e.id = ed.edge_id AND e.delete_marker = 0
+			WHERE ed.delete_marker = 0 AND e.system_name = ?
+		) OR id IN (
+			SELECT device_id FROM edges
+			WHERE delete_marker = 0 AND system_name = ? AND device_id IS NOT NULL
+		)`, sn, sn, sn)
 	}
 	if f.IPAddress != "" {
 		tx = tx.Where("ip_address LIKE ?", f.IPAddress+"%")
@@ -333,15 +344,49 @@ func (r *Repo) Count(ctx context.Context) (int64, error) {
 	return n, nil
 }
 
-// ListDistinctSystemNames returns sorted non-empty system_name values.
+// ListDistinctSystemNames returns sorted non-empty system_name values from
+// both devices and edges so sidebar navigation stays compatible with
+// historical rows that only populated edge metadata.
 func (r *Repo) ListDistinctSystemNames(ctx context.Context) ([]string, error) {
-	var names []string
-	err := r.db.WithContext(ctx).Model(&model.Device{}).
+	var deviceNames []string
+	if err := r.db.WithContext(ctx).Model(&model.Device{}).
 		Where("system_name <> ''").
 		Distinct("system_name").
-		Order("system_name ASC").
-		Pluck("system_name", &names).Error
-	return names, err
+		Pluck("system_name", &deviceNames).Error; err != nil {
+		return nil, err
+	}
+	var edgeNames []string
+	if err := r.db.WithContext(ctx).Model(&edgemodel.Edge{}).
+		Where("system_name <> ''").
+		Distinct("system_name").
+		Pluck("system_name", &edgeNames).Error; err != nil {
+		return nil, err
+	}
+	return mergeSortedDistinctSystemNames(deviceNames, edgeNames), nil
+}
+
+func mergeSortedDistinctSystemNames(deviceNames, edgeNames []string) []string {
+	seen := make(map[string]struct{}, len(deviceNames)+len(edgeNames))
+	out := make([]string, 0, len(deviceNames)+len(edgeNames))
+	add := func(raw string) {
+		s := strings.TrimSpace(raw)
+		if s == "" {
+			return
+		}
+		if _, ok := seen[s]; ok {
+			return
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	for _, n := range deviceNames {
+		add(n)
+	}
+	for _, n := range edgeNames {
+		add(n)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // ListSystemEnvironmentPairs returns distinct non-empty system_name +

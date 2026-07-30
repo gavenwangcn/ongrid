@@ -13,7 +13,7 @@ import { fullDateTime } from '@/lib/format';
 import { usePermissions } from '@/store/me';
 import { useI18n } from '@/i18n/locale';
 import { ApiError } from '@/api/client';
-import { listDevices } from '@/api/devices';
+import { listDeviceSystemNames } from '@/api/devices';
 import {
   ENVIRONMENT_TAGS,
   ENVIRONMENT_TAG_LABELS,
@@ -29,12 +29,17 @@ import {
   runScheduleNow,
   toggleSchedule,
   updateSchedule,
-  uniqueSystemNames,
+  DEFAULT_DAILY_SECTIONS,
+  parseReportScope,
+  parseReportScopeSystems,
   type ReportKind,
   type ReportSchedule,
+  type ReportSection,
   type ScheduleInput,
 } from '@/api/reports';
 import { createOneoffTask, deleteTask, getTask, listTasks, rerunTask, type UnifiedTask } from '@/api/tasks';
+import { ReportSectionsPicker, initialDailySections } from '@/components/ReportSectionsPicker';
+import { ReportSystemsPicker } from '@/components/ReportSystemsPicker';
 
 const KINDS: { key: ReportKind; zh: string; en: string }[] = [
   { key: 'daily', zh: '日报', en: 'Daily' },
@@ -419,20 +424,21 @@ function OneoffForm({ onClose, onCreated }: { onClose(): void; onCreated(task: U
   const { tr } = useI18n();
   const [kind, setKind] = useState<ReportKind>('weekly');
   const [title, setTitle] = useState('');
-  const [systemName, setSystemName] = useState('');
+  const [systemNamesSelected, setSystemNamesSelected] = useState<string[]>([]);
   const [environmentTag, setEnvironmentTag] = useState<EnvironmentTag | ''>('');
-  const [systemNames, setSystemNames] = useState<string[]>([]);
+  const [systemNameOptions, setSystemNameOptions] = useState<string[]>([]);
+  const [sections, setSections] = useState<ReportSection[]>([...DEFAULT_DAILY_SECTIONS]);
   const [creating, setCreating] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    listDevices()
+    listDeviceSystemNames()
       .then((r) => {
-        if (!cancelled) setSystemNames(uniqueSystemNames(r.items ?? []));
+        if (!cancelled) setSystemNameOptions(r.items ?? []);
       })
       .catch(() => {
-        if (!cancelled) setSystemNames([]);
+        if (!cancelled) setSystemNameOptions([]);
       });
     return () => {
       cancelled = true;
@@ -447,14 +453,21 @@ function OneoffForm({ onClose, onCreated }: { onClose(): void; onCreated(task: U
         kind,
         title: title.trim() || undefined,
         timezone: DEFAULT_TZ,
-        scope_json: formatReportScope({ system_name: systemName, environment_tag: environmentTag }),
+        scope_json: formatReportScope(
+          {
+            system_names: systemNamesSelected,
+            environment_tag: environmentTag,
+            sections: kind === 'daily' ? sections : undefined,
+          },
+          kind,
+        ),
       });
       onCreated(task);
     } catch (e) {
       setErr(reportActionError(e, tr));
       setCreating(false);
     }
-  }, [kind, title, systemName, environmentTag, onCreated, tr]);
+  }, [kind, title, systemNamesSelected, environmentTag, sections, onCreated, tr]);
 
   return (
     <Modal
@@ -504,15 +517,14 @@ function OneoffForm({ onClose, onCreated }: { onClose(): void; onCreated(task: U
           <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder={tr('如：临时巡检报告', 'e.g. Ad-hoc inspection report')} className={inputCls} />
         </Field>
         <Field label={tr('系统范围', 'System scope')}>
-          <select value={systemName} onChange={(e) => setSystemName(e.target.value)} className={cn(inputCls, 'text-sm')}>
-            <option value="">{tr('全部系统', 'All systems')}</option>
-            {systemNames.map((name) => (
-              <option key={name} value={name}>{name}</option>
-            ))}
-          </select>
-          {systemNames.length === 0 && (
+          <ReportSystemsPicker
+            options={systemNameOptions}
+            value={systemNamesSelected}
+            onChange={setSystemNamesSelected}
+          />
+          {systemNameOptions.length === 0 && (
             <p className="mt-1 text-[11px] text-zinc-600">
-              {tr('未找到已填系统名称的设备；将统计全部设备。', 'No devices with a system name yet — report will cover all devices.')}
+              {tr('未找到已填系统名称的设备；将按已发现的业务系统分段统计。', 'No devices with a system name yet — report will split by discovered business systems.')}
             </p>
           )}
         </Field>
@@ -530,6 +542,11 @@ function OneoffForm({ onClose, onCreated }: { onClose(): void; onCreated(task: U
             ))}
           </select>
         </Field>
+        {kind === 'daily' && (
+          <Field label={tr('报告内容', 'Report sections')}>
+            <ReportSectionsPicker value={sections} onChange={setSections} />
+          </Field>
+        )}
         {err && <div className="rounded border border-red-700/40 bg-red-900/20 px-2 py-1 text-[11px] text-red-200">{err}</div>}
       </div>
     </Modal>
@@ -568,8 +585,30 @@ function ScheduleForm({
   const [tz, setTz] = useState(initial?.timezone ?? DEFAULT_TZ);
   const [chanIDs, setChanIDs] = useState<number[]>(initial?.channel_ids ?? []);
   const [promptOverride, setPromptOverride] = useState(initial?.prompt_override ?? '');
+  const [systemNamesSelected, setSystemNamesSelected] = useState<string[]>(
+    parseReportScopeSystems(parseReportScope(initial?.scope_json)),
+  );
+  const [environmentTag, setEnvironmentTag] = useState<EnvironmentTag | ''>(
+    parseReportScope(initial?.scope_json).environment_tag ?? '',
+  );
+  const [sections, setSections] = useState<ReportSection[]>(initialDailySections(initial?.scope_json));
+  const [systemNameOptions, setSystemNameOptions] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    listDeviceSystemNames()
+      .then((r) => {
+        if (!cancelled) setSystemNameOptions(r.items ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setSystemNameOptions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const save = useCallback(async () => {
     setSaving(true);
@@ -578,6 +617,14 @@ function ScheduleForm({
       name,
       kind,
       timezone: tz,
+      scope_json: formatReportScope(
+        {
+          system_names: systemNamesSelected,
+          environment_tag: environmentTag,
+          sections: kind === 'daily' ? sections : undefined,
+        },
+        kind,
+      ),
       channel_ids: chanIDs,
       prompt_override: promptOverride || undefined,
       cron_spec: kind === 'custom' ? cron : cron || undefined,
@@ -591,7 +638,7 @@ function ScheduleForm({
     } finally {
       setSaving(false);
     }
-  }, [name, kind, tz, cron, chanIDs, promptOverride, initial, onSaved, tr]);
+  }, [name, kind, tz, cron, chanIDs, promptOverride, systemNamesSelected, environmentTag, sections, initial, onSaved, tr]);
 
   return (
     <Modal
@@ -647,6 +694,35 @@ function ScheduleForm({
         <Field label={tr('时区', 'Timezone')}>
           <input value={tz} onChange={(e) => setTz(e.target.value)} className={cn(inputCls, 'font-mono')} />
         </Field>
+
+        <Field label={tr('系统范围', 'System scope')}>
+          <ReportSystemsPicker
+            options={systemNameOptions}
+            value={systemNamesSelected}
+            onChange={setSystemNamesSelected}
+          />
+        </Field>
+
+        <Field label={tr('环境标签', 'Environment tag')}>
+          <select
+            value={environmentTag}
+            onChange={(e) => setEnvironmentTag(e.target.value as EnvironmentTag | '')}
+            className={cn(inputCls, 'text-sm')}
+          >
+            <option value="">{tr('全部环境', 'All environments')}</option>
+            {ENVIRONMENT_TAGS.map((tag) => (
+              <option key={tag} value={tag}>
+                {tr(ENVIRONMENT_TAG_LABELS[tag], ENVIRONMENT_TAG_LABELS_EN[tag])}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        {kind === 'daily' && (
+          <Field label={tr('报告内容', 'Report sections')}>
+            <ReportSectionsPicker value={sections} onChange={setSections} />
+          </Field>
+        )}
 
         <Field label={tr('投递渠道', 'Delivery channels')}>
           {channels.length === 0 ? (

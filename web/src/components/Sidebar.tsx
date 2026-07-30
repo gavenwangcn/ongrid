@@ -44,6 +44,7 @@ import { useIncidentBadge } from '@/store/incidentBadge';
 import { useMe, usePermissions } from '@/store/me';
 import { useChatSessions, invalidateChatSessions } from '@/store/chatSessions';
 import { deleteSession, renameSession, type ChatSession } from '@/api/chat';
+import { DeviceSystemNav } from '@/components/DeviceSystemNav';
 
 export function Sidebar() {
   const { sidebarCollapsed, toggleSidebar } = useUi();
@@ -400,7 +401,9 @@ export function Sidebar() {
         </NavSection>
 
         <CollapsibleSection storageKey="resources" title={tr('基础设施', 'Infrastructure')} defaultOpen>
-          <SidebarNavItem to="/devices" icon={HardDrive} label={tr('设备', 'Devices')} />
+          <CollapsibleSection storageKey="devices-nav" title={tr('设备', 'Devices')} defaultOpen>
+            <DeviceSystemNav />
+          </CollapsibleSection>
           <SidebarNavItem to="/kubernetes" icon={ShipWheel} label="Kubernetes" />
           <SidebarNavItem to="/topology" icon={Share2} label={tr('拓扑', 'Topology')} />
         </CollapsibleSection>

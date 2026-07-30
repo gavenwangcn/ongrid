@@ -8,7 +8,7 @@ import { usePoll } from '@/lib/usePoll';
 import { usePermissions } from '@/store/me';
 import { useI18n } from '@/i18n/locale';
 import { ApiError } from '@/api/client';
-import { listDevices } from '@/api/devices';
+import { listDeviceSystemNames } from '@/api/devices';
 import {
   ENVIRONMENT_TAGS,
   ENVIRONMENT_TAG_LABELS,
@@ -16,14 +16,17 @@ import {
   type EnvironmentTag,
 } from '@/api/environment';
 import {
+  DEFAULT_DAILY_SECTIONS,
   formatReportScope,
   generateNow,
   listReports,
-  uniqueSystemNames,
   type ReportKind,
   type ReportListItem,
+  type ReportSection,
   type ReportStatus,
 } from '@/api/reports';
+import { ReportSectionsPicker } from '@/components/ReportSectionsPicker';
+import { ReportSystemsPicker } from '@/components/ReportSystemsPicker';
 
 const POLL_MS = 20_000;
 const PAGE_SIZE = 20;
@@ -136,9 +139,9 @@ export default function ReportsPage() {
   useEffect(() => {
     if (!generateOpen) return;
     let cancelled = false;
-    listDevices()
+    listDeviceSystemNames()
       .then((r) => {
-        if (!cancelled) setSystemNames(uniqueSystemNames(r.items ?? []));
+        if (!cancelled) setSystemNames(r.items ?? []);
       })
       .catch(() => {
         if (!cancelled) setSystemNames([]);
@@ -149,16 +152,20 @@ export default function ReportsPage() {
   }, [generateOpen]);
 
   const onGenerate = useCallback(
-    async (kind: ReportKind, systemName: string, environmentTag: EnvironmentTag | '') => {
+    async (kind: ReportKind, systemNames: string[], environmentTag: EnvironmentTag | '', sections: ReportSection[]) => {
       setGenerating(true);
       setErr(null);
       try {
         const rpt = await generateNow({
           kind,
-          scope_json: formatReportScope({
-            system_name: systemName,
-            environment_tag: environmentTag,
-          }),
+          scope_json: formatReportScope(
+            {
+              system_names: systemNames,
+              environment_tag: environmentTag,
+              sections: kind === 'daily' ? sections : undefined,
+            },
+            kind,
+          ),
         });
         setGenerateOpen(false);
         await load();
@@ -327,7 +334,7 @@ export default function ReportsPage() {
           systemNames={systemNames}
           generating={generating}
           onClose={() => setGenerateOpen(false)}
-          onGenerate={(kind, systemName, environmentTag) => void onGenerate(kind, systemName, environmentTag)}
+          onGenerate={(kind, systemNames, environmentTag, sections) => void onGenerate(kind, systemNames, environmentTag, sections)}
           tr={tr}
         />
       )}
@@ -345,12 +352,13 @@ function GenerateReportModal({
   systemNames: string[];
   generating: boolean;
   onClose(): void;
-  onGenerate(kind: ReportKind, systemName: string, environmentTag: EnvironmentTag | ''): void;
+  onGenerate(kind: ReportKind, systemNames: string[], environmentTag: EnvironmentTag | '', sections: ReportSection[]): void;
   tr: (zh: string, en: string) => string;
 }) {
   const [kind, setKind] = useState<ReportKind>('weekly');
-  const [systemName, setSystemName] = useState('');
+  const [systemNamesSelected, setSystemNamesSelected] = useState<string[]>([]);
   const [environmentTag, setEnvironmentTag] = useState<EnvironmentTag | ''>('');
+  const [sections, setSections] = useState<ReportSection[]>([...DEFAULT_DAILY_SECTIONS]);
   const hint = GENERATE_KIND_HINT[kind];
   const action = GENERATE_KIND_ACTION[kind];
 
@@ -371,7 +379,7 @@ function GenerateReportModal({
           </button>
           <button
             type="button"
-            onClick={() => onGenerate(kind, systemName, environmentTag)}
+            onClick={() => onGenerate(kind, systemNamesSelected, environmentTag, sections)}
             disabled={generating}
             className="rounded-md border border-indigo-600 bg-indigo-600/20 px-3 py-1.5 text-xs text-indigo-200 hover:bg-indigo-600/30 disabled:opacity-50"
           >
@@ -405,19 +413,16 @@ function GenerateReportModal({
           {tr(hint.zh, hint.en)}
           {tr(' 可选择系统与环境标签，仅统计匹配的设备。', ' Optionally narrow by system and environment tag.')}
         </p>
-        <label className="block text-xs text-zinc-400">
-          {tr('系统范围', 'System scope')}
-          <select
-            value={systemName}
-            onChange={(e) => setSystemName(e.target.value)}
-            className="mt-1.5 w-full rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-2 text-sm text-zinc-100"
-          >
-            <option value="">{tr('全部系统', 'All systems')}</option>
-            {systemNames.map((name) => (
-              <option key={name} value={name}>{name}</option>
-            ))}
-          </select>
-        </label>
+        <div>
+          <span className="text-xs text-zinc-400">{tr('系统范围', 'System scope')}</span>
+          <div className="mt-1.5">
+            <ReportSystemsPicker
+              options={systemNames}
+              value={systemNamesSelected}
+              onChange={setSystemNamesSelected}
+            />
+          </div>
+        </div>
         <label className="block text-xs text-zinc-400">
           {tr('环境标签', 'Environment tag')}
           <select
@@ -433,6 +438,14 @@ function GenerateReportModal({
             ))}
           </select>
         </label>
+        {kind === 'daily' && (
+          <div>
+            <span className="text-xs text-zinc-400">{tr('报告内容', 'Report sections')}</span>
+            <div className="mt-1.5">
+              <ReportSectionsPicker value={sections} onChange={setSections} />
+            </div>
+          </div>
+        )}
         {systemNames.length === 0 && (
           <p className="text-[11px] text-zinc-600">
             {tr('未找到已填系统名称的设备；将统计全部设备。可在设备元数据中填写系统名称。', 'No devices with a system name yet — report will cover all devices. Set system name on device metadata.')}

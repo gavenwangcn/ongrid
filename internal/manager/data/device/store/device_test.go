@@ -12,6 +12,7 @@ import (
 	model "github.com/ongridio/ongrid/internal/manager/model/device"
 	edgemodel "github.com/ongridio/ongrid/internal/manager/model/edge"
 	k8smodel "github.com/ongridio/ongrid/internal/manager/model/k8s"
+	biz "github.com/ongridio/ongrid/internal/manager/biz/device"
 	"github.com/ongridio/ongrid/internal/pkg/errs"
 )
 
@@ -499,5 +500,67 @@ func TestDeleteOfflineWithLinkedEdgesCleansEdgeLinkedByDeviceIDPointer(t *testin
 	var gotEdge edgemodel.Edge
 	if err := db.Unscoped().First(&gotEdge, edge.ID).Error; !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatalf("edge linked only via device_id pointer should be hard-deleted, err = %v", err)
+	}
+}
+
+func TestListDistinctSystemNamesIncludesEdgeOnlyMetadata(t *testing.T) {
+	db := newDeviceTestDB(t)
+	if err := db.AutoMigrate(&edgemodel.Edge{}); err != nil {
+		t.Fatalf("AutoMigrate edges: %v", err)
+	}
+	repo := NewRepo(db)
+	ctx := context.Background()
+
+	devWithName, err := repo.FindOrCreateByFingerprint(ctx, sampleDevice("dev-with-system"))
+	if err != nil {
+		t.Fatalf("create device with system: %v", err)
+	}
+	devWithName.SystemName = "人力资源 EHR系统"
+	if err := db.Save(devWithName).Error; err != nil {
+		t.Fatalf("save device system_name: %v", err)
+	}
+
+	devLegacy, err := repo.FindOrCreateByFingerprint(ctx, sampleDevice("dev-legacy-edge-meta"))
+	if err != nil {
+		t.Fatalf("create legacy device: %v", err)
+	}
+	edge := &edgemodel.Edge{
+		AccessKeyID: "ak-legacy-system",
+		SecretKeyHash: "hash",
+		Name:          "legacy-host",
+		SystemName:    "物流执行",
+		DeviceID:      &devLegacy.ID,
+	}
+	if err := db.Create(edge).Error; err != nil {
+		t.Fatalf("create edge: %v", err)
+	}
+	if err := db.Create(&model.EdgeDevice{
+		EdgeID:   edge.ID,
+		DeviceID: devLegacy.ID,
+		Type:     model.EdgeDeviceRelationHost,
+	}).Error; err != nil {
+		t.Fatalf("link edge device: %v", err)
+	}
+
+	names, err := repo.ListDistinctSystemNames(ctx)
+	if err != nil {
+		t.Fatalf("ListDistinctSystemNames: %v", err)
+	}
+	want := []string{"人力资源 EHR系统", "物流执行"}
+	if len(names) != len(want) {
+		t.Fatalf("names = %v, want %v", names, want)
+	}
+	for i, n := range want {
+		if names[i] != n {
+			t.Fatalf("names[%d] = %q, want %q (full=%v)", i, names[i], n, names)
+		}
+	}
+
+	rows, err := repo.List(ctx, biz.ListFilter{SystemName: "物流执行"})
+	if err != nil {
+		t.Fatalf("List by edge-only system_name: %v", err)
+	}
+	if len(rows) != 1 || rows[0].ID != devLegacy.ID {
+		t.Fatalf("List filter = %+v, want device %d", rows, devLegacy.ID)
 	}
 }
