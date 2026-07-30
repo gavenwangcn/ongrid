@@ -16,6 +16,15 @@ export function ReportSystemsPicker({ options, value, onChange }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const selected = new Set(value);
 
+  const optionRowCls = (on: boolean) =>
+    cn(
+      'flex w-full items-center justify-between px-2.5 py-1.5 text-left text-xs transition-colors',
+      // hover:bg-zinc-900/50 has html.light override; avoid zinc-800/80 (renders as dark bar in light)
+      on
+        ? 'bg-indigo-500/10 text-indigo-200 hover:bg-indigo-500/15'
+        : 'text-zinc-300 hover:bg-zinc-900/50',
+    );
+
   useEffect(() => {
     if (!open) return;
     const onDoc = (e: MouseEvent) => {
@@ -83,10 +92,7 @@ export function ReportSystemsPicker({ options, value, onChange }: Props) {
         <div className="absolute z-50 mt-1 max-h-52 w-full overflow-y-auto rounded-md border border-zinc-700 bg-zinc-900 py-1 shadow-lg">
           <button
             type="button"
-            className={cn(
-              'flex w-full items-center justify-between px-2.5 py-1.5 text-left text-xs hover:bg-zinc-800/80',
-              value.length === 0 ? 'text-indigo-200' : 'text-zinc-300',
-            )}
+            className={optionRowCls(value.length === 0)}
             onClick={() => {
               onChange([]);
             }}
@@ -105,10 +111,7 @@ export function ReportSystemsPicker({ options, value, onChange }: Props) {
                 <button
                   key={name}
                   type="button"
-                  className={cn(
-                    'flex w-full items-center justify-between px-2.5 py-1.5 text-left text-xs hover:bg-zinc-800/80',
-                    on ? 'text-indigo-200' : 'text-zinc-300',
-                  )}
+                  className={optionRowCls(on)}
                   onClick={() => toggle(name)}
                 >
                   <span className="truncate">{name}</span>
