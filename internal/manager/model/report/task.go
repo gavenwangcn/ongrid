@@ -35,8 +35,9 @@ type Task struct {
 	ScopeJSON  string `gorm:"column:scope_json;type:text;not null"`
 
 	// ChannelIDsJSON mirrors report_schedules.channel_ids_json — optional IM
-	// delivery targets for one-shot runs and re-runs.
-	ChannelIDsJSON string `gorm:"column:channel_ids_json;type:text;not null;default:'[]'"`
+	// delivery targets for one-shot runs and re-runs. No DEFAULT: MySQL Error
+	// 1101 forbids defaults on TEXT; biz layer always writes "[]" or "[…]".
+	ChannelIDsJSON string `gorm:"column:channel_ids_json;type:text;not null"`
 
 	// Status: active | done | failed — mirrors the latest run's outcome for the
 	// task list badge.
