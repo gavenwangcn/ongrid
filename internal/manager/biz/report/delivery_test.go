@@ -21,11 +21,11 @@ func TestMarkdownSummary(t *testing.T) {
 		DeepLink: "https://ongrid.example/reports/abc",
 	}
 	md := s.MarkdownSummary()
-	if !strings.Contains(md, "**周报 · 2026 W23**") {
-		t.Errorf("title missing:\n%s", md)
+	if strings.Contains(md, "**周报") {
+		t.Errorf("title should not repeat in body (subject carries it):\n%s", md)
 	}
 	if !strings.Contains(md, "Incidents 23 ↓12%") {
-		t.Errorf("hero line wrong:\n%s", md)
+		t.Errorf("hero fallback line wrong:\n%s", md)
 	}
 	if !strings.Contains(md, "MTTR 47min") {
 		t.Errorf("mttr missing:\n%s", md)
@@ -41,6 +41,77 @@ func TestMarkdownSummary(t *testing.T) {
 		t.Errorf("deep link missing:\n%s", md)
 	}
 }
+
+func TestMarkdownSummaryClusterPosture(t *testing.T) {
+	s := DeliverySummary{
+		Headline: "采购管理平台本日资源整体处于中等负载水位。",
+		Sections: allReportSections,
+		Resource: ResourceFacts{
+			Available:    true,
+			CPUAvg:       6.1,
+			CPUPeak:      79.7,
+			MemAvg:       31.4,
+			MemPeak:      49.6,
+			DiskAvg:      20.8,
+			DiskPeak:     24.1,
+			NetRxAvgBps:  115.2 * 1024,
+			NetTxAvgBps:  277.2 * 1024,
+			NetRxPeakBps: 600 * 1024,
+			NetTxPeakBps: 900 * 1024,
+		},
+		Fleet: FleetFacts{Total: 5, Online: 5},
+		Logs: LogFacts{
+			Available:       true,
+			TotalErrors:     42,
+			PrevTotalErrors: 30,
+			DeltaPct:        ptrFloat64(40),
+		},
+		Incidents: []KeyIncident{
+			{ID: 1, Status: "resolved", DurationMin: 30},
+			{ID: 2, Status: "open", DurationMin: 10},
+		},
+		Actions: ActionsSummary{MutatingTotal: 2, SafeTotal: 3},
+		DeepLink: "http://10.1.1.41:30088/r/tok",
+	}
+	md := s.MarkdownSummary()
+	for _, want := range []string{
+		"采购管理平台本日资源整体处于中等负载水位",
+		"**集群态势**",
+		"CPU · 均 6.1% / 峰 79.7%",
+		"在线设备 · 5 / 共 5 台",
+		"**应用日志**",
+		"潜在错误 · 42",
+		"较上周期 +40%",
+		"**告警与处理**",
+		"告警 · 2 · 已解决 1 · MTTR 30 min",
+		"Agent 动作 5",
+		"查看完整报告",
+	} {
+		if !strings.Contains(md, want) {
+			t.Errorf("missing %q in:\n%s", want, md)
+		}
+	}
+}
+
+func TestMarkdownSummaryRespectsSections(t *testing.T) {
+	s := DeliverySummary{
+		Headline: "仅集群",
+		Sections: []string{SectionCluster},
+		Resource: ResourceFacts{Available: true, CPUAvg: 1, CPUPeak: 2},
+		Fleet:    FleetFacts{Total: 1, Online: 1},
+		Logs:     LogFacts{Available: true, TotalErrors: 99},
+		Incidents: []KeyIncident{{ID: 1}},
+	}
+	md := s.MarkdownSummary()
+	if !strings.Contains(md, "集群态势") {
+		t.Fatalf("expected cluster block:\n%s", md)
+	}
+	if strings.Contains(md, "应用日志") || strings.Contains(md, "告警与处理") {
+		t.Fatalf("logs/alerts should be omitted when not in sections:\n%s", md)
+	}
+}
+
+func ptrFloat64(v float64) *float64 { return &v }
 
 // recordingDeliverer captures what it was asked to deliver.
 type recordingDeliverer struct {
@@ -62,14 +133,26 @@ func (d *recordingDeliverer) Deliver(_ context.Context, s DeliverySummary, ids [
 
 func TestDeliverySummaryExcludesDeviceDetail(t *testing.T) {
 	s := DeliverySummary{
-		Title:    "周报",
-		Headline: "本周资源平稳",
-		Hero:     []HeroStat{{Key: "cpu_avg", Label: "CPU 均值", Value: 12, Unit: "%"}},
-		DeepLink: "https://h/r/tok",
+		Title:     "周报",
+		Headline:  "本周资源平稳",
+		Sections:  allReportSections,
+		Resource:  ResourceFacts{Available: true, CPUAvg: 12, CPUPeak: 20},
+		Fleet:     FleetFacts{Total: 3, Online: 3},
+		Logs:      LogFacts{Available: true, TotalErrors: 5},
+		Incidents: []KeyIncident{{ID: 1, Status: "open", DurationMin: 5}},
+		DeepLink:  "https://h/r/tok",
 	}
 	md := s.MarkdownSummary()
 	if strings.Contains(md, "device_resources") || strings.Contains(md, "设备资源明细") {
 		t.Errorf("IM summary must not include per-device detail:\n%s", md)
+	}
+	if strings.Contains(md, "Top error") || strings.Contains(md, "错误来源") {
+		t.Errorf("IM summary must not include log source detail:\n%s", md)
+	}
+	for _, want := range []string{"集群态势", "应用日志", "告警与处理"} {
+		if !strings.Contains(md, want) {
+			t.Errorf("expected section %q in:\n%s", want, md)
+		}
 	}
 }
 
