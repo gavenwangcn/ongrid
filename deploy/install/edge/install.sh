@@ -195,9 +195,13 @@ curl_fetch_file() {
     local tmp attempt
     tmp=$(mktemp "${dest}.XXXXXX")
     for attempt in 1 2 3 4 5; do
-        if curl "${CURL_TLS_FLAGS[@]}" -fL \
+        if curl \
+            ${CURL_TLS_FLAGS[@]+"${CURL_TLS_FLAGS[@]}"} \
+            -fL \
             --connect-timeout 30 --max-time 900 \
-            --retry 2 "${CURL_RETRY_ALL_ERRORS[@]}" --retry-delay 2 \
+            --retry 2 \
+            ${CURL_RETRY_ALL_ERRORS[@]+"${CURL_RETRY_ALL_ERRORS[@]}"} \
+            --retry-delay 2 \
             -C - -o "$tmp" "$url" && [[ -s "$tmp" ]]; then
             install -m 0755 -o root -g root "$tmp" "$dest"
             rm -f "$tmp"
