@@ -126,9 +126,15 @@ if [[ -z "${ONGRID_CLOUD_ADDR:-}" || -z "${EDGE_ACCESS_KEY:-}" || -z "${EDGE_SEC
 fi
 
 # ---------- system user ----------
+if ! getent group "$SERVICE_GROUP" >/dev/null 2>&1; then
+    log_info "creating system group $SERVICE_GROUP"
+    groupadd --system "$SERVICE_GROUP" 2>/dev/null || groupadd -r "$SERVICE_GROUP"
+fi
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
     log_info "creating system user $SERVICE_USER"
-    useradd --system --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER" || true
+    useradd --system --no-create-home --shell /usr/sbin/nologin -g "$SERVICE_GROUP" "$SERVICE_USER" || true
+elif ! id -Gn "$SERVICE_USER" 2>/dev/null | tr ' ' '\n' | grep -qx "$SERVICE_GROUP"; then
+    usermod -g "$SERVICE_GROUP" "$SERVICE_USER" 2>/dev/null || true
 fi
 # Grant read access to standard log dirs so promtail (logs plugin) can
 # tail /var/log/syslog, auth.log, etc. These files are typically
